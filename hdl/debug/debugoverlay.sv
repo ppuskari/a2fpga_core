@@ -2,6 +2,7 @@ module DebugOverlay #(
     parameter [8*14-1:0] VERSION = "00000000000000", // 14 ASCII characters
     parameter bit ENABLE = 1'b1,
     parameter NUM_HEX_BYTES = 8,        // Number of hex bytes to display
+    parameter NUM_BITS_FIELDS = 2,      // Bit fields displayed on each row
     parameter X_OFFSET = 16,
     parameter Y_OFFSET = 24
 )(
@@ -14,11 +15,37 @@ module DebugOverlay #(
     input  wire [9:0]  screen_y_i,
 
     // 8 hex bytes to display
-    input wire [7:0] hex_values[NUM_HEX_BYTES],
+//    input wire [7:0] hex_values[NUM_HEX_BYTES],
 
     // 2 bit fields to display
-    input  wire [7:0]  debug_bits_0_i,
-    input  wire [7:0]  debug_bits_1_i,
+//    input  wire [7:0]  debug_bits_0_i,
+//    input  wire [7:0]  debug_bits_1_i,
+
+
+
+    // 8 hex bytes to display on row 0
+       input wire [7:0] hex_values[NUM_HEX_BYTES],
+
+    // 8 hex bytes to display on row 1
+        input wire [7:0] hex_values_2[NUM_HEX_BYTES],
+
+    // Up to 4 bit fields to display on row 0
+        input  wire [7:0]  debug_bits_0_i,
+        input  wire [7:0]  debug_bits_1_i,
+        input  wire [7:0]  debug_bits_4_i,
+        input  wire [7:0]  debug_bits_5_i,
+
+    // Up to 4 bit fields to display on row 1
+        input  wire [7:0]  debug_bits_2_i,
+        input  wire [7:0]  debug_bits_3_i,
+        input  wire [7:0]  debug_bits_6_i,
+        input  wire [7:0]  debug_bits_7_i,
+
+
+
+
+
+
 
     // RGB input and output
     input  wire [7:0]  r_i,
@@ -34,7 +61,6 @@ module DebugOverlay #(
     localparam CHAR_WIDTH  = 8;
     localparam CHAR_HEIGHT = 8;
     localparam NUM_CHARS   = 14;          // Number of characters in VERSION string
-    localparam NUM_BITS_FIELDS = 2;       // Number of bit fields
     localparam NUM_BITS_PER_FIELD = 8;    // Number of bits per field
     localparam DEBUG_SPACE = 8;           // Space between debug values
 
@@ -100,6 +126,10 @@ module DebugOverlay #(
     wire [3:0]  char_pos = rel_x[6:3];
     wire [2:0]  y_bit = rel_y[2:0];
 
+    wire row_1_w = (rel_y >= CHAR_HEIGHT);
+    wire [9:0] rel_y_row_w = rel_y - CHAR_HEIGHT;
+    wire [2:0] y_bit_row_w = row_1_w ? rel_y_row_w[2:0] : rel_y[2:0];
+
     // Version string region
     localparam [10:0] VERSION_END = 11'(NUM_CHARS * CHAR_WIDTH);
     wire x_version_in_range = (screen_x_i >= X_OFFSET) && (rel_x < VERSION_END);
@@ -136,12 +166,14 @@ module DebugOverlay #(
     localparam [10:0] DEBUG_END = 11'(BITS_START + NUM_BITS_FIELDS * BITS_REGION_WIDTH);
 
     wire debug_region = (rel_x >= DEBUG_START);
-    wire y_in_range = (screen_y_i >= Y_OFFSET) && (rel_y < CHAR_HEIGHT);
+
+//    wire y_in_range = (screen_y_i >= Y_OFFSET) && (rel_y < CHAR_HEIGHT);
+    wire y_in_range = (screen_y_i >= Y_OFFSET) && (rel_y < (CHAR_HEIGHT * 2));
 
     // Region detection (combinational)
     reg signed [4:0] comb_hex_byte;
     reg comb_is_hex;
-    reg [0:0] comb_bit_field;
+    reg [1:0] comb_bit_field;
     reg comb_is_bits;
     reg comb_in_space;
     reg [10:0] comb_rel_hex_pos;
@@ -179,10 +211,35 @@ module DebugOverlay #(
 
     // Pre-compute intermediate values to avoid local reg inside always_comb
     wire [2:0] bits_bp = 3'(comb_rel_bits_pos / 11'(CHAR_WIDTH));
-    wire bits_bv = (comb_bit_field == 1'b0) ? debug_bits_0_i[7-bits_bp] : debug_bits_1_i[7-bits_bp];
+
+//    wire bits_bv = (comb_bit_field == 1'b0) ? debug_bits_0_i[7-bits_bp] : debug_bits_1_i[7-bits_bp];
+    wire [7:0] debug_bits_row_0_w [0:3];
+    wire [7:0] debug_bits_row_1_w [0:3];
+
+    assign debug_bits_row_0_w[0] = debug_bits_0_i;
+    assign debug_bits_row_0_w[1] = debug_bits_1_i;
+    assign debug_bits_row_0_w[2] = debug_bits_4_i;
+    assign debug_bits_row_0_w[3] = debug_bits_5_i;
+
+    assign debug_bits_row_1_w[0] = debug_bits_2_i;
+    assign debug_bits_row_1_w[1] = debug_bits_3_i;
+    assign debug_bits_row_1_w[2] = debug_bits_6_i;
+    assign debug_bits_row_1_w[3] = debug_bits_7_i;
+
+    wire [7:0] selected_debug_bits_w = row_1_w ?
+        debug_bits_row_1_w[comb_bit_field] :
+        debug_bits_row_0_w[comb_bit_field];
+
+    wire bits_bv = selected_debug_bits_w[7-bits_bp];
 
     wire hex_nibble_sel = comb_rel_hex_pos >= 11'(CHAR_WIDTH);
-    wire [7:0] hex_hval = comb_is_hex ? hex_values[comb_hex_byte] : 8'h00;
+
+//    wire [7:0] hex_hval = comb_is_hex ? hex_values[comb_hex_byte] : 8'h00;
+    wire [7:0] hex_hval =
+    comb_is_hex ?
+        (row_1_w ? hex_values_2[comb_hex_byte] : hex_values[comb_hex_byte]) :
+        8'h00;
+
     wire [3:0] hex_nibble = hex_nibble_sel ? hex_hval[3:0] : hex_hval[7:4];
 
     wire [7:0] ver_ch = VERSION[(NUM_CHARS-1-char_pos)*8 +: 8];
@@ -209,26 +266,63 @@ module DebugOverlay #(
                 end else if (comb_is_bits && rel_x < DEBUG_END) begin
                     comb_in_bounds = 1'b1;
                     comb_x_bit = comb_rel_bits_pos[2:0];
-                    comb_rom_addr = {4'(bits_bv ? 4'd1 : 4'd0), y_bit};
+
+//                    comb_rom_addr = {4'(bits_bv ? 4'd1 : 4'd0), y_bit};
+                    comb_rom_addr = {4'(bits_bv ? 4'd1 : 4'd0), y_bit_row_w};
+
                 end else if (comb_is_hex && rel_x < DEBUG_END) begin
                     comb_in_bounds = 1'b1;
                     comb_x_bit = comb_rel_hex_pos[2:0];
-                    comb_rom_addr = {hex_nibble, y_bit};
+
+//                    comb_rom_addr = {hex_nibble, y_bit};
+                    comb_rom_addr = {hex_nibble, y_bit_row_w};
+
                 end
+//            end else begin
+//                if (x_version_in_range) begin
+//                    comb_in_bounds = 1'b1;
+//                    comb_x_bit = rel_x[2:0];
+//                    if (ver_ch >= 8'h30 && ver_ch <= 8'h39)
+//                        comb_rom_addr = {ver_ch[3:0], y_bit_row_w};
+//                    else if (ver_ch >= 8'h41 && ver_ch <= 8'h46)
+//                        comb_rom_addr = {4'd10 + (ver_ch[3:0] - 4'd1), y_bit_row_w};
+//                    else if (ver_ch >= 8'h61 && ver_ch <= 8'h66)
+//                        comb_rom_addr = {4'd10 + (ver_ch[3:0] - 4'd1), y_bit_row_w};
+//                    else
+//                        comb_is_solid = 1'b1;
+//                end
+//            end
+
             end else begin
-                if (x_version_in_range) begin
+                // Show the build/version text only on the first row.
+                // The left side of row 2 remains blank.
+                if (x_version_in_range && !row_1_w) begin
                     comb_in_bounds = 1'b1;
                     comb_x_bit = rel_x[2:0];
+
                     if (ver_ch >= 8'h30 && ver_ch <= 8'h39)
-                        comb_rom_addr = {ver_ch[3:0], y_bit};
-                    else if (ver_ch >= 8'h41 && ver_ch <= 8'h46)
-                        comb_rom_addr = {4'd10 + (ver_ch[3:0] - 4'd1), y_bit};
-                    else if (ver_ch >= 8'h61 && ver_ch <= 8'h66)
-                        comb_rom_addr = {4'd10 + (ver_ch[3:0] - 4'd1), y_bit};
+                        comb_rom_addr = {
+                            ver_ch[3:0],
+                            y_bit_row_w
+                        };
+                    else if (ver_ch >= 8'h41 &&
+                            ver_ch <= 8'h46)
+                        comb_rom_addr = {
+                            4'd10 + (ver_ch[3:0] - 4'd1),
+                            y_bit_row_w
+                        };
+                    else if (ver_ch >= 8'h61 &&
+                            ver_ch <= 8'h66)
+                        comb_rom_addr = {
+                            4'd10 + (ver_ch[3:0] - 4'd1),
+                            y_bit_row_w
+                        };
                     else
                         comb_is_solid = 1'b1;
                 end
             end
+
+
         end
     end
 

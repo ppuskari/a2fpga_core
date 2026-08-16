@@ -33,24 +33,24 @@ module top #(
     parameter bit SCANLINES_ENABLE = 0,
     parameter bit APPLE_SPEAKER_ENABLE = 0,
 
-    parameter bit SUPERSPRITE_ENABLE = 1,
+    parameter bit SUPERSPRITE_ENABLE = 0,
     parameter bit [7:0] SUPERSPRITE_ID = 1,
     parameter bit SUPERSPRITE_FORCE_VDP_OVERLAY = 0,
 
-    parameter bit MOCKINGBOARD_ENABLE = 1,
+    parameter bit MOCKINGBOARD_ENABLE = 0,
     parameter bit [7:0] MOCKINGBOARD_ID = 2,
 
-    parameter bit SUPERSERIAL_ENABLE = 1,
+    parameter bit SUPERSERIAL_ENABLE = 0,
     parameter bit SUPERSERIAL_IRQ_ENABLE = 1,
     parameter bit [7:0] SUPERSERIAL_ID = 3,
 
-    parameter bit DISK_II_ENABLE = 1,
+    parameter bit DISK_II_ENABLE = 0,
     parameter bit [7:0] DISK_II_ID = 4,
 
-    parameter bit UTHERNET2_ENABLE = 1,
+    parameter bit UTHERNET2_ENABLE = 0,
     parameter bit [7:0] UTHERNET2_ID = 5,
 
-    parameter bit HDD_ENABLE = 1,
+    parameter bit HDD_ENABLE = 0,
     parameter bit [7:0] HDD_ID = 6,
 
     parameter bit ENSONIQ_ENABLE = 1,
@@ -966,13 +966,64 @@ module top #(
 `ifdef ENSONIQ
     wire [7:0] sg_d_w;
     wire sg_rd_w;
-    wire [7:0] doc_osc_en_w;   // Debug signal for DOC oscillator enable register
-    wire [1:0] doc_osc_mode_w[8];
-    wire [7:0]  doc_osc_halt_w;
+wire [7:0] doc_osc_en_w;
+wire [1:0] doc_osc_mode_w[8];
+
+// Existing oscillator 0-7 HALT state.
+wire [7:0] doc_osc_halt_w;
+
+// Complete oscillator 0-31 HALT state.
+wire [31:0] doc_osc_halt_all_w;
+
+wire [7:0] doc_halt_event_w;
+    wire [7:0] doc_halt_wtp_w;
+    wire [7:0] doc_halt_rts_w;
+    wire [7:0] doc_swap_ca_w;
+wire [7:0] doc_host_ctrl_osc_w;
+wire [7:0] doc_host_ctrl_data_w;
+wire [7:0] doc_internal_ctrl_event_w;
+wire [7:0] doc_internal_ctrl_data_w;
+
+// Completed DOC mixer saturation diagnostic.
+wire [7:0] doc_mix_clip_w;
+
+// One-second DOC clipping histories, newest 125 ms slice in bit 0.
+wire [7:0] doc_mix_clip_history_left_w;
+wire [7:0] doc_mix_clip_history_right_w;
+wire [7:0] doc_mix_clip_history_mono_w;
+
+// Oscillator-to-mixer activity from the last completed 125 ms slice.
+// The oscillator masks use the same left-to-right numbering as the
+// existing HALT display: oscillator 0 through oscillator 31.
+wire [31:0] doc_nonzero_osc_activity_w;
+wire [31:0] doc_mixer_osc_activity_w;
+wire [15:0] doc_channel_activity_w;
+
+// One-second completed-mix activity histories, newest slice in bit 0.
+wire [7:0] doc_left_nonzero_history_w;
+wire [7:0] doc_right_nonzero_history_w;
+
+// Live DOC waveform-read diagnostics. Each byte reports the saturating
+// event count from the last completed 125 ms interval.
+wire [7:0] doc_mem_overlap_count_w;
+wire [7:0] doc_fetch_timeout_count_w;
+wire [7:0] doc_mem_late_count_w;
+
+// Current Sound GLU $C03C register.
+// Low hexadecimal digit = global volume.
+wire [7:0] glu_sound_control_w;
+
+// A2FPGA DOC 128K protocol version/lock/load status.
+wire [7:0] doc_128k_status_w;
 
     sound_glu #(
         .ENABLE(ENSONIQ_ENABLE),
-        .MONO_MIX(ENSONIQ_MONO_MIX) // If true, mono mix is used instead of stereo
+        .MONO_MIX(ENSONIQ_MONO_MIX), // If true, mono mix is used instead of stereo
+
+        // Locked after reset. Only the explicit A2FP protocol enables
+        // $C03C bit 4 and oscillator RTS bit 6 as bank selectors.
+        .ENABLE_128K_EXTENSION(1'b1)
+       // .MONO_MIX(1'b1) // If true, mono mix is used instead of stereo
     ) sg (
         .a2bus_if(a2bus_if),
         .data_o(sg_d_w),                 
@@ -981,9 +1032,100 @@ module top #(
         .audio_l_o(sg_audio_l),               
         .audio_r_o(sg_audio_r),
 
-        .debug_osc_en_o(doc_osc_en_w),   // Capture oscillator enable register value
-        .debug_osc_mode_o(doc_osc_mode_w), // Capture oscillator mode register values
-        .debug_osc_halt_o(doc_osc_halt_w), // Capture oscillator halt register value
+.debug_osc_en_o(
+    doc_osc_en_w
+),
+
+.debug_osc_mode_o(
+    doc_osc_mode_w
+),
+
+.debug_osc_halt_o(
+    doc_osc_halt_w
+),
+
+.debug_osc_halt_all_o(
+    doc_osc_halt_all_w
+),
+
+.debug_halt_event_o(
+    doc_halt_event_w
+),
+        .debug_halt_wtp_o(doc_halt_wtp_w),
+        .debug_halt_rts_o(doc_halt_rts_w),
+        .debug_swap_ca_o(doc_swap_ca_w),
+
+.debug_host_ctrl_osc_o(
+    doc_host_ctrl_osc_w
+),
+
+.debug_host_ctrl_data_o(
+    doc_host_ctrl_data_w
+),
+
+.debug_internal_ctrl_event_o(
+    doc_internal_ctrl_event_w
+),
+
+.debug_internal_ctrl_data_o(
+    doc_internal_ctrl_data_w
+),
+
+.debug_mix_clip_o(
+    doc_mix_clip_w
+),
+
+.debug_mix_clip_history_left_o(
+    doc_mix_clip_history_left_w
+),
+
+.debug_mix_clip_history_right_o(
+    doc_mix_clip_history_right_w
+),
+
+.debug_mix_clip_history_mono_o(
+    doc_mix_clip_history_mono_w
+),
+
+.debug_nonzero_osc_activity_o(
+    doc_nonzero_osc_activity_w
+),
+
+.debug_mixer_osc_activity_o(
+    doc_mixer_osc_activity_w
+),
+
+.debug_channel_activity_o(
+    doc_channel_activity_w
+),
+
+.debug_left_nonzero_history_o(
+    doc_left_nonzero_history_w
+),
+
+.debug_right_nonzero_history_o(
+    doc_right_nonzero_history_w
+),
+
+.debug_mem_overlap_count_o(
+    doc_mem_overlap_count_w
+),
+
+.debug_mem_timeout_count_o(
+    doc_fetch_timeout_count_w
+),
+
+.debug_mem_late_count_o(
+    doc_mem_late_count_w
+),
+
+.debug_sound_control_o(
+    glu_sound_control_w
+),
+
+.debug_128k_status_o(
+    doc_128k_status_w
+),
     
         .glu_mem_if(mem_ports[GLU_MEM_PORT]),
         .doc_mem_if(mem_ports[DOC_MEM_PORT])
@@ -1170,10 +1312,21 @@ module top #(
 
     wire signed [15:0] core_audio_l_w;
     wire signed [15:0] core_audio_r_w;
+
     // Combine all the audio sources into a single 16-bit signed audio signal
     // This could theoretically overflow by 1 bit and clip, but unlikely
-    assign core_audio_l_w = sg_audio_l + ssp_audio_ext_w + mb_audio_l_ext_w + speaker_audio_ext_w;
-    assign core_audio_r_w = sg_audio_r + ssp_audio_ext_w + mb_audio_r_ext_w + speaker_audio_ext_w;
+   // assign core_audio_l_w = sg_audio_l + ssp_audio_ext_w + mb_audio_l_ext_w + speaker_audio_ext_w;
+   // assign core_audio_r_w = sg_audio_r + ssp_audio_ext_w + mb_audio_r_ext_w + speaker_audio_ext_w;
+
+    assign core_audio_l_w = sg_audio_l;
+    assign core_audio_r_w = sg_audio_r;
+
+//    wire signed [15:0] sg_mono_w = (sg_audio_l >>> 1) + (sg_audio_r >>> 1);
+
+//    assign core_audio_l_w = sg_mono_w;
+//    assign core_audio_r_w = sg_mono_w;
+
+
 
     // CDC FIFO to shift audio to the pixel clock domain from the logic clock domain
 
@@ -1225,7 +1378,12 @@ module top #(
         .i2s_data_load_strobe()
     );
 
-    wire [15:0] audio_sample_word[1:0];
+    // Raw 16-bit signed PCM produced by audio_out.
+wire [15:0] audio_sample_word_raw[1:0];
+
+// Final level-adjusted PCM sent only to HDMI.
+wire [15:0] audio_sample_word[1:0];
+
     audio_out #(
         .CLK_RATE(CLOCK_SPEED_HZ / 2),
         .AUDIO_RATE(AUDIO_RATE)
@@ -1248,9 +1406,136 @@ module top #(
         .core_r(cdc_audio_r),
 
         .audio_clk(clk_audio_w),
-        .audio_l(audio_sample_word[0]),
-        .audio_r(audio_sample_word[1])
+.audio_l(audio_sample_word_raw[0]),
+.audio_r(audio_sample_word_raw[1])
     );
+
+    // -------------------------------------------------------------
+    // HDMI-only +3 dB output gain with signed saturation.
+    //
+    // DOC5503, Sound GLU, and audio_out remain unchanged.
+    // Gain = 45 / 32 = 1.40625 = +2.96125 dB.
+    // Two identical DOC oscillators per PCM channel provide
+    // the other x2, so paired PCM retains the previous total
+    // gain of 45 / 16 while dense native mixes gain 6.02 dB
+    // of final HDMI headroom.
+    // -------------------------------------------------------------
+
+    function automatic signed [15:0] hdmi_gain_plus_3db;
+        input signed [15:0] sample;
+        logic signed [21:0] sample_ext;
+        logic signed [21:0] product;
+        logic signed [21:0] scaled;
+    begin
+        sample_ext = {{6{sample[15]}}, sample};
+
+        // product = sample * 45
+        product = (sample_ext <<< 5)
+                + (sample_ext <<< 3)
+                + (sample_ext <<< 2)
+                +  sample_ext;
+
+        // Divide by 32 with symmetric rounding.
+        if (product >= 22'sd0)
+            scaled = (product + 22'sd16) >>> 5;
+        else
+            scaled = -(((-product) + 22'sd16) >>> 5);
+
+        // Saturate instead of allowing signed wraparound.
+        if (scaled > 22'sd32767)
+            hdmi_gain_plus_3db = 16'sh7FFF;
+        else if (scaled < -22'sd32768)
+            hdmi_gain_plus_3db = 16'sh8000;
+        else
+            hdmi_gain_plus_3db = scaled[15:0];
+    end
+    endfunction
+
+    // Report whether the unchanged +2.961 dB calculation would require
+    // its final signed clamp. This duplicates only the diagnostic decision;
+    // the audio samples still pass through hdmi_gain_plus_3db above.
+    function automatic hdmi_gain_would_saturate;
+        input signed [15:0] sample;
+        logic signed [21:0] sample_ext;
+        logic signed [21:0] product;
+        logic signed [21:0] scaled;
+    begin
+        sample_ext = {{6{sample[15]}}, sample};
+
+        product = (sample_ext <<< 5)
+                + (sample_ext <<< 3)
+                + (sample_ext <<< 2)
+                +  sample_ext;
+
+        if (product >= 22'sd0)
+            scaled = (product + 22'sd16) >>> 5;
+        else
+            scaled = -(((-product) + 22'sd16) >>> 5);
+
+        hdmi_gain_would_saturate =
+            (scaled > 22'sd32767) ||
+            (scaled < -22'sd32768);
+    end
+    endfunction
+
+    wire hdmi_gain_clip_w =
+        hdmi_gain_would_saturate(
+            $signed(audio_sample_word_raw[0])
+        ) ||
+        hdmi_gain_would_saturate(
+            $signed(audio_sample_word_raw[1])
+        );
+
+    // One-second HDMI post-gain clipping history. Capture clipping only on
+    // the 44.1 kHz audio sample strobe, then collapse each 125 ms slice to
+    // one activity bit. Bit 0 is newest and bit 7 is oldest.
+    localparam int HDMI_CLIP_HISTORY_SLICE_CYCLES =
+        (CLOCK_SPEED_HZ / 2) / 8;
+    localparam int HDMI_CLIP_HISTORY_COUNTER_WIDTH =
+        $clog2(HDMI_CLIP_HISTORY_SLICE_CYCLES);
+
+    logic [HDMI_CLIP_HISTORY_COUNTER_WIDTH-1:0]
+        hdmi_clip_history_counter_r;
+    logic hdmi_clip_history_pending_r;
+    logic [7:0] hdmi_clip_history_r;
+
+    wire hdmi_clip_sample_event_w =
+        clk_audio_w && hdmi_gain_clip_w;
+
+    always_ff @(posedge clk_pixel_w) begin
+        if (!device_reset_n_w) begin
+            hdmi_clip_history_counter_r <= '0;
+            hdmi_clip_history_pending_r <= 1'b0;
+            hdmi_clip_history_r <= 8'h00;
+        end else if (hdmi_clip_history_counter_r ==
+                     HDMI_CLIP_HISTORY_SLICE_CYCLES - 1) begin
+            hdmi_clip_history_counter_r <= '0;
+            hdmi_clip_history_r <= {
+                hdmi_clip_history_r[6:0],
+                hdmi_clip_history_pending_r ||
+                    hdmi_clip_sample_event_w
+            };
+            hdmi_clip_history_pending_r <= 1'b0;
+        end else begin
+            hdmi_clip_history_counter_r <=
+                hdmi_clip_history_counter_r + 1'b1;
+
+            if (hdmi_clip_sample_event_w)
+                hdmi_clip_history_pending_r <= 1'b1;
+        end
+    end
+
+    assign audio_sample_word[0] =
+        hdmi_gain_plus_3db(
+            $signed(audio_sample_word_raw[0])
+        );
+
+    assign audio_sample_word[1] =
+        hdmi_gain_plus_3db(
+            $signed(audio_sample_word_raw[1])
+        );
+
+
 
     // HDMI
 
@@ -1261,9 +1546,13 @@ module top #(
     wire [7:0] debug_r_w;
     wire [7:0] debug_g_w;
     wire [7:0] debug_b_w;
+
     DebugOverlay #(
         .VERSION(`BUILD_DATETIME),  // 14-digit timestamp version
-        .ENABLE(1'b1)
+        .ENABLE(1'b1),
+        .NUM_BITS_FIELDS(4),
+        .X_OFFSET(24),
+        .Y_OFFSET(19)
     ) debug_overlay (
         .clk_i          (clk_pixel_w),
         .reset_n (device_reset_n_w),
@@ -1273,23 +1562,90 @@ module top #(
         // firmware writes over SPI. hex[0]=stage, [1]=btn-lo, [2]=btn-hi,
         // [3]=event counter (heartbeat), [4]=status flags.
         .hex_values ({
-            mcu_scratch_w[7:0],     // scratch0: firmware stage code
-            mcu_scratch_w[15:8],    // scratch1: XInput button low byte
-            mcu_scratch_w[23:16],   // scratch2: XInput button high byte
-            mcu_scratch_w[31:24],   // scratch3: event/heartbeat counter
-            mcu_scratch_w[39:32],   // scratch4: status flag bits
-            8'h0,
-            8'h0,
-            8'h0
+           // mcu_scratch_w[7:0],     // scratch0: firmware stage code
+           // mcu_scratch_w[15:8],    // scratch1: XInput button low byte
+           // mcu_scratch_w[23:16],   // scratch2: XInput button high byte
+           // mcu_scratch_w[31:24],   // scratch3: event/heartbeat counter
+           // mcu_scratch_w[39:32],   // scratch4: status flag bits
+            {2'b0, doc_osc_mode_w[0], 2'b0, doc_osc_mode_w[1]},
+            {2'b0, doc_osc_mode_w[2], 2'b0, doc_osc_mode_w[3]},
+            {2'b0, doc_osc_mode_w[4], 2'b0, doc_osc_mode_w[5]}, 
+            {2'b0, doc_osc_mode_w[6], 2'b0, doc_osc_mode_w[7]},
+            doc_osc_en_w,
+            doc_mix_clip_w,
+            glu_sound_control_w,
+            // 128K protocol status: $10 locked, $11 unlocked,
+            // $13 unlocked with bank 1 populated.
+            doc_128k_status_w
         }),
+
+        .hex_values_2 ({
+            // DOC channel-address mask from the last 125 ms slice.
+            doc_channel_activity_w[15:8],
+            doc_channel_activity_w[7:0],
+
+            // One-second nonzero completed-mix histories.
+            doc_left_nonzero_history_w,
+            doc_right_nonzero_history_w,
+
+            // Retain the most recent host control-write trace.
+            doc_host_ctrl_osc_w,
+            doc_host_ctrl_data_w,
+
+            // Retain the two read-path diagnostics that ruled out
+            // waveform timeout and late-response ownership loss.
+            doc_fetch_timeout_count_w,
+            doc_mem_late_count_w
+        }),
+
+
 
         // Bit row 0 = what the FPGA + firmware think the MCU is doing:
         //   bit0 = mcu_ready (FPGA saw MCU read STATUS 0x06), bit1 = standalone
         //   (watchdog fired, no MCU), bits2-7 = firmware status flags (scratch4).
-        .debug_bits_0_i ({mcu_scratch_w[37:32], standalone_w, mcu_ready_w}),
+       // .debug_bits_0_i ({mcu_scratch_w[37:32], standalone_w, mcu_ready_w}),
         // Bit row 1 = live XInput button low byte (each press lights a block).
-        .debug_bits_1_i (mcu_scratch_w[15:8]),
+       // .debug_bits_1_i (mcu_scratch_w[15:8]),
+// Oscillator-output and mixer-entry activity from the last completed
+// 125 ms slice. Oscillator 0 is the leftmost bit and oscillator 31 is
+// the rightmost bit.
+//
+// Row 1 fields 0-3: oscillator produced a nonzero sample*volume result.
+// Row 2 fields 0-3: oscillator executed OSC_MIX.
+//
+// Comparing the rows distinguishes a silent oscillator from one that is
+// suppressed before the mixer, including an odd SYNC/AM control oscillator.
+.debug_bits_0_i(
+    doc_nonzero_osc_activity_w[31:24]
+),
 
+.debug_bits_1_i(
+    doc_nonzero_osc_activity_w[23:16]
+),
+
+.debug_bits_2_i(
+    doc_mixer_osc_activity_w[31:24]
+),
+
+.debug_bits_3_i(
+    doc_mixer_osc_activity_w[23:16]
+),
+
+.debug_bits_4_i(
+    doc_nonzero_osc_activity_w[15:8]
+),
+
+.debug_bits_5_i(
+    doc_nonzero_osc_activity_w[7:0]
+),
+
+.debug_bits_6_i(
+    doc_mixer_osc_activity_w[15:8]
+),
+
+.debug_bits_7_i(
+    doc_mixer_osc_activity_w[7:0]
+),
         .screen_x_i     (hdmi_x),
         .screen_y_i     (hdmi_y),
 

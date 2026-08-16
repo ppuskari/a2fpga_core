@@ -419,5 +419,10 @@ present there); ROM 03 models work in any slot.
 - [Uthernet II emulation](docs/UTHERNET2.md) ·
   [protocol](docs/UTHERNET2_PROTOCOL.md)
 - [Disk image serving design](docs/disk_image_serving_design.md)
+- [DOC and HDMI clipping history overlay](docs/DOC_CLIP_HISTORY.md)
+- [DOC read-path diagnostics](docs/DOC_READ_PATH_DIAGNOSTICS.md)
+- [DOC oscillator-to-mixer diagnostics](docs/DOC_OSCILLATOR_MIX_DIAGNOSTICS.md)
+- [DOC 128K extension protocol](docs/DOC_128K_EXTENSION_PROTOCOL.md)
+- [DOC forced-legacy-64K A/B test history](docs/DOC_FORCED_LEGACY_64K_AB_TEST.md)
 - [Board tasks & status](TODO.md)
 - [Agent & contributor guide](../../AGENTS.md)

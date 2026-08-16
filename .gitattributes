@@ -11,3 +11,6 @@ boards/*/impl/**   linguist-generated
 *.fs               linguist-generated
 *.gprj             linguist-vendored
 releases/**        linguist-vendored
+
+# Preserve FPGA bitstreams byte-for-byte
+*.fs -text linguist-generated

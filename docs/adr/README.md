@@ -22,5 +22,6 @@ Don't write one for routine code — that's what the code and PR history are for
 | ADR | Title | Status |
 |---|---|---|
 | [0001](0001-agents-md-as-router.md) | AGENTS.md as the single router; docs/ as the wiki | Accepted |
+| [0002](0002-doc-128k-explicit-unlock.md) | Require an explicit unlock for the DOC 128K extension | Accepted |
 
 > Add a row here for each new ADR.
