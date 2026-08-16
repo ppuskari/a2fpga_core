@@ -1,0 +1,14 @@
+-d C:\AppleIIgsDev\Petars-Ensoniq-Kit\fpga\a2fpga\boards\a2n20v2-Enhanced\impl\gwsynthesis\a2n20v2_enhanced.vg
+-p GW2AR-18C-QFN88-8
+-pn GW2AR-LV18QN88C8/I7
+-cst C:\AppleIIgsDev\Petars-Ensoniq-Kit\fpga\a2fpga\boards\a2n20v2-Enhanced\hdl\a2n20v2_enhanced.cst
+-cfg C:\AppleIIgsDev\Petars-Ensoniq-Kit\fpga\a2fpga\boards\a2n20v2-Enhanced\impl\pnr\device.cfg
+-sdc C:\AppleIIgsDev\Petars-Ensoniq-Kit\fpga\a2fpga\boards\a2n20v2-Enhanced\hdl\a2n20v2_enhanced.sdc
+-bit
+-tr
+-ph
+-timing
+-cst_error
+-route_option 1
+-correct_hold 1
+-route_maxfan 23

@@ -67,8 +67,9 @@ erased, but a later unlock requires a new bank-1 write before playback bank
 selection becomes active.
 
 Software using the extension should unlock immediately before its 128K load
-and relock after stopping its oscillators. Tool225 P0.8 is a 64K-only client and
-issues the relock command defensively during initialization/reset.
+and relock after stopping its oscillators. The program that unlocks the
+extension owns the matching relock. Antoine follows that rule. Tool225 P0.7 is
+a legacy 64K client and does not send protocol-v1 lock commands.
 
 ## Debug status
 

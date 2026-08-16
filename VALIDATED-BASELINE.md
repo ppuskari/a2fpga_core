@@ -1,48 +1,44 @@
-# Validated a2fpga Baseline
+# Validated a2fpga P0.x Baseline
 
 ## Purpose
 
-This commit preserves the exact a2fpga source and FPGA image used for the validated Apple IIgs Ensoniq DOC work.
+This commit preserves the later P0.x validated a2n20v2-Enhanced FPGA build used by the Petars-Ensoniq-Kit integration.
 
-## Upstream ancestry
+## Ancestry
 
-Repository: a2fpga/a2fpga_core
-
-Upstream base commit:
+Official upstream base:
 2735f128ab6019a5ea61825e09f5886915540521
 
-Upstream base description:
-a2n20v2-GS/Enhanced: share one apple_bus and SDRAM apple_memory
+Previous preservation snapshot:
+f692c09acf570c4cb6ddc6167c6030c660448ab7
 
-Upstream base date:
-2026-07-05
+The previous snapshot and its tag remain immutable.
 
-## Validated target
+## Source validation
 
-Board:
-boards/a2n20v2-Enhanced
+The critical Enhanced HDL and support source in GainStripped and Petars-Ensoniq-Kit were SHA256-identical, including:
 
-FPGA image:
+- hdl/sound/doc5503.sv
+- hdl/sound/sound_glu.sv
+- hdl/debug/debugoverlay.sv
+- boards/a2n20v2-Enhanced/hdl/top.sv
+- tools/verify_doc_128k_protocol.py
+- docs/adr/0002-doc-128k-explicit-unlock.md
+
+The Petars-Ensoniq-Kit copy contained a later DOC_128K_EXTENSION_PROTOCOL.md clarification and a later complete Enhanced place-and-route build.
+
+## Validated FPGA image
+
+File:
 boards/a2n20v2-Enhanced/impl/pnr/a2n20v2_enhanced.fs
 
-Image size:
+Size:
 7264150 bytes
 
 SHA-256:
-0E9BC43E58A7D8F70A755F05943DB181B01067BAC27380EFE5FF3F8F5FF4F9C4
+7C011DCCFD3955478307C568AA70BEBF305FAC11770B1289229B1FF593AA9169
 
-Observed file timestamp:
-2026-08-03 00:34:12
+Original observed timestamp:
+2026-08-03 03:35:47
 
-## Source scope
-
-This baseline includes the corresponding Ensoniq DOC5503, Sound GLU, Enhanced top-level, debug, documentation, protocol verification, and related source changes present in the validated working tree.
-
-The FPGA .fs artifact is explicitly marked -text in .gitattributes so Git preserves it byte-for-byte.
-
-Generated a2n20v2-GS PnR differences that were present in the local archive are not part of this validated Enhanced baseline.
-
-## Reproducibility
-
-The Git commit identifies the complete preserved source tree.
-GOLDEN-SHA256.txt identifies the hardware-validated FPGA artifact.
+The complete differing PnR artifact set is recorded in P0X-PNR-SHA256.txt.

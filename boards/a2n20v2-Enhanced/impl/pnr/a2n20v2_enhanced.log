@@ -1,0 +1,31 @@
+Reading netlist file: "C:\AppleIIgsDev\Petars-Ensoniq-Kit\fpga\a2fpga\boards\a2n20v2-Enhanced\impl\gwsynthesis\a2n20v2_enhanced.vg"
+Parsing netlist file "C:\AppleIIgsDev\Petars-Ensoniq-Kit\fpga\a2fpga\boards\a2n20v2-Enhanced\impl\gwsynthesis\a2n20v2_enhanced.vg" completed
+Processing netlist completed
+Reading constraint file: "C:\AppleIIgsDev\Petars-Ensoniq-Kit\fpga\a2fpga\boards\a2n20v2-Enhanced\hdl\a2n20v2_enhanced.cst"
+Physical Constraint parsed completed
+Running placement......
+[10%] Placement Phase 0 completed
+[20%] Placement Phase 1 completed
+[30%] Placement Phase 2 completed
+[50%] Placement Phase 3 completed
+Running routing......
+[60%] Routing Phase 0 completed
+[70%] Routing Phase 1 completed
+[80%] Routing Phase 2 completed
+WARN  (PR1014) : Generic routing resource will be used to clock signal 'clk_d' by the specified constraint. And then it may lead to the excessive delay or skew
+WARN  (PR1014) : Generic routing resource will be used to clock signal 'spi_sclk_d' by the specified constraint. And then it may lead to the excessive delay or skew
+[90%] Routing Phase 3 completed
+Running timing analysis......
+[95%] Timing analysis completed
+Placement and routing completed
+Bitstream generation in progress......
+Bitstream generation completed
+Running power analysis......
+[100%] Power analysis completed
+Generate file "C:\AppleIIgsDev\Petars-Ensoniq-Kit\fpga\a2fpga\boards\a2n20v2-Enhanced\impl\pnr\a2n20v2_enhanced.power.html" completed
+Generate file "C:\AppleIIgsDev\Petars-Ensoniq-Kit\fpga\a2fpga\boards\a2n20v2-Enhanced\impl\pnr\a2n20v2_enhanced.pin.html" completed
+Generate file "C:\AppleIIgsDev\Petars-Ensoniq-Kit\fpga\a2fpga\boards\a2n20v2-Enhanced\impl\pnr\a2n20v2_enhanced.rpt.html" completed
+Generate file "C:\AppleIIgsDev\Petars-Ensoniq-Kit\fpga\a2fpga\boards\a2n20v2-Enhanced\impl\pnr\a2n20v2_enhanced.rpt.txt" completed
+Generate file "C:\AppleIIgsDev\Petars-Ensoniq-Kit\fpga\a2fpga\boards\a2n20v2-Enhanced\impl\pnr\a2n20v2_enhanced.tr.html" completed
+Mon Aug 03 03:35:48 2026
+

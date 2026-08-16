@@ -5,27 +5,27 @@
 1. PnR Messages
 
   <Report Title>: PnR Report
-  <Design File>: C:\Users\ppusk\Downloads\a2corefpga_archive\WIP\GainStripped\a2fpga_core-main\boards\a2n20v2-Enhanced\impl\gwsynthesis\a2n20v2_enhanced.vg
-  <Physical Constraints File>: C:\Users\ppusk\Downloads\a2corefpga_archive\WIP\GainStripped\a2fpga_core-main\boards\a2n20v2-Enhanced\hdl\a2n20v2_enhanced.cst
-  <Timing Constraints File>: C:\Users\ppusk\Downloads\a2corefpga_archive\WIP\GainStripped\a2fpga_core-main\boards\a2n20v2-Enhanced\hdl\a2n20v2_enhanced.sdc
+  <Design File>: C:\AppleIIgsDev\Petars-Ensoniq-Kit\fpga\a2fpga\boards\a2n20v2-Enhanced\impl\gwsynthesis\a2n20v2_enhanced.vg
+  <Physical Constraints File>: C:\AppleIIgsDev\Petars-Ensoniq-Kit\fpga\a2fpga\boards\a2n20v2-Enhanced\hdl\a2n20v2_enhanced.cst
+  <Timing Constraints File>: C:\AppleIIgsDev\Petars-Ensoniq-Kit\fpga\a2fpga\boards\a2n20v2-Enhanced\hdl\a2n20v2_enhanced.sdc
   <PnR Version>: V1.9.9 Beta-4 Education
   <Part Number>: GW2AR-LV18QN88C8/I7
   <Device>: GW2AR-18
   <Device Version>: C
-  <Created Time>:Mon Aug 03 00:34:12 2026
+  <Created Time>:Mon Aug 03 03:35:47 2026
 
 
 2. PnR Details
 
   Running placement:
     Placement Phase 0: CPU time = 0h 0m 4s, Elapsed time = 0h 0m 4s
-    Placement Phase 1: CPU time = 0h 0m 0.751s, Elapsed time = 0h 0m 0.752s
+    Placement Phase 1: CPU time = 0h 0m 0.793s, Elapsed time = 0h 0m 0.793s
     Placement Phase 2: CPU time = 0h 0m 8s, Elapsed time = 0h 0m 8s
     Placement Phase 3: CPU time = 0h 0m 6s, Elapsed time = 0h 0m 6s
     Total Placement: CPU time = 0h 0m 19s, Elapsed time = 0h 0m 19s
  Running routing:
-    Routing Phase 0: CPU time = 0h 0m 0.004s, Elapsed time = 0h 0m 0.005s
-    Routing Phase 1: CPU time = 0h 0m 0.823s, Elapsed time = 0h 0m 0.823s
+    Routing Phase 0: CPU time = 0h 0m 0.006s, Elapsed time = 0h 0m 0.005s
+    Routing Phase 1: CPU time = 0h 0m 0.807s, Elapsed time = 0h 0m 0.807s
     Routing Phase 2: CPU time = 0h 0m 14s, Elapsed time = 0h 0m 14s
     Routing Phase 3: CPU time = 0h 0m 0s, Elapsed time = 0h 0m 0s
     Total Routing: CPU time = 0h 0m 15s, Elapsed time = 0h 0m 15s

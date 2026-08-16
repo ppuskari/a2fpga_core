@@ -1,4 +1,5 @@
-# a2fpga validated FPGA artifact
+# a2fpga validated P0.x FPGA artifact
 # Upstream base: 2735f128ab6019a5ea61825e09f5886915540521
+# Previous preservation snapshot: f692c09acf570c4cb6ddc6167c6030c660448ab7
 # Format: SHA256 BYTES FILE
-0E9BC43E58A7D8F70A755F05943DB181B01067BAC27380EFE5FF3F8F5FF4F9C4 7264150 boards/a2n20v2-Enhanced/impl/pnr/a2n20v2_enhanced.fs
+7C011DCCFD3955478307C568AA70BEBF305FAC11770B1289229B1FF593AA9169 7264150 boards/a2n20v2-Enhanced/impl/pnr/a2n20v2_enhanced.fs
