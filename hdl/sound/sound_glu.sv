@@ -22,6 +22,9 @@
 
 module sound_glu #(
     parameter bit ENABLE = 1'b1,
+    // Exclusive DOC owner: 0 = original GS GLU; 1 = MB-DOC bridge.
+    // ENABLE remains asserted in MB mode for DOC waveform fetches.
+    parameter bit MB_DOC_MODE = 1'b0,
     parameter bit MONO_MIX = 1'b0, // If true, mono mix is used instead of stereo
     parameter bit USE_BSRAM = 1'b0, // If true, use on-chip BSRAM instead of DDR3 for sound RAM
 
@@ -30,6 +33,14 @@ module sound_glu #(
     parameter bit ENABLE_128K_EXTENSION = 1'b0
 ) (
     a2bus_if.slave a2bus_if,
+
+    // Mockingboard bridge host commands. Synchronous to clk_logic.
+    // Address/data must remain valid with the write strobe; the
+    // DOC core captures them on the asserted chip-select edge.
+    // Not yet driven by the bridge in P1 (tied low by top.sv).
+    input  logic       mb_doc_wr_i,
+    input  logic [7:0] mb_doc_addr_i,
+    input  logic [7:0] mb_doc_data_i,
 
     output [7:0] data_o,
     output rd_en_o,
@@ -118,7 +129,12 @@ output [7:0] debug_128k_status_o,
     localparam [15:0] SOUND_PTR_HI_ADDR = 16'hC03F;
 
     // address in GLU range, $C03C-$C03F, during phi0 and m2sel_n asserted
-    wire glu_sel_w = ENABLE & a2bus_if.phi0 & (a2bus_if.addr[15:2] == SOUND_CONTROL_ADDR[15:2]) & !a2bus_if.m2sel_n;
+    // Disable only *GS CPU access* when Mockingboard owns DOC.
+    // Do not gate DOC execution or SDRAM waveform fetches.
+    wire glu_sel_w = ENABLE & !MB_DOC_MODE &
+        a2bus_if.phi0 &
+        (a2bus_if.addr[15:2] == SOUND_CONTROL_ADDR[15:2]) &
+        !a2bus_if.m2sel_n;
     // sound control register is at $C03C
     wire sc_sel_w = glu_sel_w & (a2bus_if.addr[1:0] == 2'b00);
     // sound data register is at $C03D
@@ -654,15 +670,27 @@ assign debug_internal_ctrl_data_o =
     debug_internal_ctrl_data_w;
 
     
+    // Both personalities own this single DOC5503 exclusively.
+    // Preserve the original GS data path exactly for MODE=0:
+    // a2bus_if.data is intentionally used in the golden design.
+    // The bridge must present a synchronous one-shot write with
+    // its own stable address and data; it will be wired in P2.
+    wire doc_host_wr_w =
+        MB_DOC_MODE ? mb_doc_wr_i : doc_wr_r;
+    wire [7:0] doc_host_addr_w =
+        MB_DOC_MODE ? mb_doc_addr_i : doc_addr_r;
+    wire [7:0] doc_host_data_w =
+        MB_DOC_MODE ? mb_doc_data_i : a2bus_if.data;
+
     doc5503 #(
     ) doc5503 (
         .clk_i(a2bus_if.clk_logic),
         .reset_n_i(a2bus_if.system_reset_n),
         .clk_en_i(a2bus_if.clk_7M_posedge),
-        .cs_n_i(~doc_wr_r),
+        .cs_n_i(~doc_host_wr_w),
         .we_n_i(1'b0),
-        .addr_i(doc_addr_r),
-        .data_i(a2bus_if.data),
+        .addr_i(doc_host_addr_w),
+        .data_i(doc_host_data_w),
         .data_o(doc_data_o_w),
         .wave_address_o(wave_addr_w),
         .wave_bank_o(wave_bank_w),
