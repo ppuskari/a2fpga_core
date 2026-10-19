@@ -38,8 +38,14 @@ module top #(
     parameter bit SUPERSPRITE_FORCE_VDP_OVERLAY = 0,
 
     // 0 = golden native IIgs/GS sound; 1 = experimental MB-DOC.
-    // Synthesis-time only. Changing this requires reprogramming.
+    // Synthesis-time only; selecting mode requires reprogramming.
+    // Define MB_DOC_EXPERIMENT for a temporary MB firmware build,
+    // or override AUDIO_MODE_MB_DOC in the Gowin top parameters.
+`ifdef MB_DOC_EXPERIMENT
+    parameter bit AUDIO_MODE_MB_DOC = 1'b1,
+`else
     parameter bit AUDIO_MODE_MB_DOC = 1'b0,
+`endif
     parameter bit MOCKINGBOARD_ENABLE = 0,
     parameter bit [7:0] MOCKINGBOARD_ID = 2,
 
