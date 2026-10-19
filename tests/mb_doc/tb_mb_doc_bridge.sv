@@ -183,7 +183,36 @@ module tb_mb_doc_bridge;
                 doc_values[off+6] !== (v < 3 ? 8'h10 : 8'h00))
                 $fatal(1,"Voice %0d RUN/stereo bad",v);
         end
-        $display("PASS: 64 waveform writes, 6 voice FC/volume/stereo, 43 DOC commands");
+        // Update the leftmost channel while its oscillator is
+        // running. The second scan MUST NOT HALT and retrigger
+        // its phase; it only changes FC/volume/control.
+        ay_write(1'b0, 4'h8, 8'h00);
+        wait (doc_count >= 47);
+        @(negedge clk);
+        if (doc_addresses[43] !== 8'h00 ||
+            doc_addresses[44] !== 8'h20 ||
+            doc_addresses[45] !== 8'h40 ||
+            doc_addresses[46] !== 8'hA0 ||
+            doc_values[45] !== 8'h00 ||
+            doc_values[46] !== 8'h11)
+            $fatal(1, "Retrigger or volume-mute regression");
+
+        // A subsequent period-zero command saturates FC to
+        // $FFFF. This remains a pitch limit, not a divide-by-zero.
+        ay_write(1'b0, 4'h0, 8'h00);
+        ay_write(1'b0, 4'h1, 8'h00);
+        ay_write(1'b0, 4'h8, 8'h0F);
+        // The new value is visible on the next round of voice0.
+        wait (doc_count >= 71);
+        @(negedge clk);
+        if (doc_addresses[67] !== 8'h00 ||
+            doc_addresses[68] !== 8'h20 ||
+            doc_values[67] !== 8'hFF ||
+            doc_values[68] !== 8'hFF)
+            $fatal(1, "Period-zero frequency clamp incorrect");
+
+        $display("PASS: 64 waveform writes; 6 voice startup, stereo, ");
+        $display("      continued phase, mute, and period-zero pitch clamp");
         $finish;
     end
 
