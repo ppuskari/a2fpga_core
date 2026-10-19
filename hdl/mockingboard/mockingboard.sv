@@ -16,6 +16,7 @@
 // the best compatibility with the Mockingboard.
 //
 
+`ifndef MB_AY_CAPTURE_UNIT_TEST
 module Mockingboard #(
     parameter bit [7:0] ID = 2,
     parameter bit ENABLE = 1'b1
@@ -252,6 +253,7 @@ module Mockingboard #(
     );
 
 endmodule
+`endif // MB_AY_CAPTURE_UNIT_TEST
 
 // Capture the logical AY write transaction from the VIA-driven bus.
 // The existing YM2149 model remains responsible for readback and
