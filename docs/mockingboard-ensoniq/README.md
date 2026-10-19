@@ -1,80 +1,90 @@
-# Mockingboard-to-Ensoniq Wavetable Project
+# Mockingboard-driven Ensoniq DOC5503 for A2N20v2-Enhanced
 
-Status: P0 kickoff / architecture, **no gateware changes yet**.
+Status: architecture agreed, implementation pending. **Exclusive-mode design (2026-10-19).**
 
-## Purpose
+## Objective
 
-Run unmodified Apple II Mockingboard software on an A2N20v2-Enhanced and render its music/sound effects with sample-based Ensoniq-style timbres rather than using the two original AY/YM2149 synthesized audio outputs. Maintain Mockingboard register behavior, slot selection, timer/IRQ timing, and stereo placement. Keep the existing native IIgs Ensoniq DOC5503 audio path intact.
+Use the **existing single** FPGA Ensoniq DOC5503 as either:
 
-This is an *instrument reinterpretation*: Mockingboard register writes specify AY tone/noise/volume/envelope controls, **not** instrument names or PCM sample IDs. Any enhanced timbres require an explicit, deterministic patch-mapping policy and can intentionally sound different from a physical Mockingboard.
+1. **Native GS (default)**: The original Apple IIgs Sound GLU at $C03C-$C03F controls the DOC, preserving 32-oscillator operation, the native 64/128K sound RAM extension, Tool225 streaming, and the validated stereo HDMI audio chain.
+2. **Mockingboard → DOC (experiment)**: Unmodified Apple II Mockingboard software communicates with its dual 6522 VIA and AY/YM2149 control registers, and an AY-to-DOC bridge makes the **same DOC5503** play sampled/wavetable instruments.
 
-## Immutable ancestry
+There is no concurrent native GS and Mockingboard DOC activity, no second sampled-sound synthesizer and no YM2149 PCM audible in the enhanced mode. A GS computer can of course still execute Mockingboard-aware applications in the MB-DOC personality.
 
-- Upstream: `a2fpga/a2fpga_core`
-- Existing fork: `ppuskari/a2fpga_core`
-- Branch/tag: `petar/doc128k-p0x-golden`, `a2n20v2-enhanced-doc128k-p0x-golden-20260816`
-- Exact parent commit: `eb6d2726fd252a54fe84739cb767361adf11d657`
-- Golden bitstream SHA-256: `7C011DCCFD3955478307C568AA70BEBF305FAC11770B1289229B1FF593AA9169`
-- This experiment: `petar/mockingboard-ensoniq-p0`; NEVER commit experimental HDL changes to the golden branch.
+The initial selection will be compile-time via separate bitstreams, not an untested live switch. The native GS personality is default, with behavior maintained as in the golden build.
 
-## Confirmed current wiring
+**Accepted architecture / implementation contract:** [ADR-0001-EXCLUSIVE-DOC-OWNERSHIP.md](ADR-0001-EXCLUSIVE-DOC-OWNERSHIP.md).
 
-- `hdl/mockingboard/mockingboard.sv` implements 2 x 6522 VIA, 2 x YM2149, two 10-bit channel sums, and IRQ.
-- `boards/a2n20v2-Enhanced/hdl/top.sv` has `MOCKINGBOARD_ENABLE = 0` and `ENSONIQ_ENABLE = 1`.
-- `hdl/slots/slots.hex` already assigns card ID 2 to slot 4: `00 00 03 05 02 04 06 01`.
-- IRQ combination already includes `mb_irq_n`.
-- The current `core_audio_l_w/r_w` assignments pass **only** `sg_audio_l/r`; the old AY summing lines are commented out. Merely enabling the Mockingboard does not make it audible.
+## Release ancestry and preservation
 
-## Intended datapath
+- Public upstream: `a2fpga/a2fpga_core`
+- User's fork: `ppuskari/a2fpga_core`
+- Golden branch: `petar/doc128k-p0x-golden`
+- Golden release tag: `a2n20v2-enhanced-doc128k-p0x-golden-20260816`
+- Parent SHA: `eb6d2726fd252a54fe84739cb767361adf11d657`
+- Golden FPGA SHA256: `7C011DCCFD3955478307C568AA70BEBF305FAC11770B1289229B1FF593AA9169`
+- Experimental branch: `petar/mockingboard-ensoniq-p0`
+
+**Do not edit the golden branch.** Every experimental .fs must be distinguishable and reversible.
+
+## Verified source facts
+
+- `hdl/mockingboard/mockingboard.sv`: dual 6522 VIA, dual YM2149, IRQ and stereo 10-bit legacy PSG outputs.
+- `hdl/slots/slots.hex`: `00 00 03 05 02 04 06 01`; card ID 2 occupies slot 4 in the checked source. Confirm actual BL616/slotmaker configuration on hardware.
+- `boards/a2n20v2-Enhanced/hdl/top.sv`: `MOCKINGBOARD_ENABLE = 0`, `ENSONIQ_ENABLE = 1`. `core_audio_l_w/r_w` currently pass only `sg_audio_l/r`.
+- `hdl/sound/sound_glu.sv`: one `doc5503` instance. Native GLU host writes currently feed `doc_wr_r`, `doc_addr_r` and live `a2bus_if.data`. FPGA DOC oscillator timing still uses the existing 7 MHz enable.
+- **Do not just set `sound_glu.ENABLE=0` in MB mode:** that flag is also used to gate sound-memory fetches, and would disable DOC output. Instead gate native GS *host* control while retaining the engine's memory/clock/data path.
+- `hdl/support/YM2149.sv`: PSG register writes sample BDIR/BC/DI each rising logic clock; CE controls synthesis timing, not the register-write sampling.
+
+## Proposed logical path
 
 ```text
-Apple II software (slot 4, normally $C400-$C4FF)
-       |
-2 x 6522 VIA -- preserve readback/timers/IRQ
-       |
-AY bus (BDIR/BC/address/data), 2 chips
-       |
-AY register-write monitor + 2 x 16 register shadow banks
-       |
-Six-voice translator: tone periods, enable masks, noise,
-AY envelope shape/period, per-channel volume
-       |
-Sample-based waveform / patch renderer, stereo 3L + 3R
-       |
-Signed saturating mixer with native IIgs DOC GLU output
-       |
-Existing audio clock crossing -> audio_out -> HDMI gain
+           Static exclusive mode (GS default / MB-DOC experimental)
+                |                              |
+ GS Sound GLU $C03C-$C03F               Mockingboard slot 4
+                |                       2x VIA + 2x AY
+                |                              |
+                |                     AY register-write trace
+                |                              |
+                |                     AY tone/envelope/noise
+                |                        -> DOC commands
+                |                              |
+                +---------- exclusive host ----+
+                              mux
+                               |
+                       Single DOC5503
+                          32 oscillators
+                               ^
+                               |
+                 Mode-owned sample RAM preload
+                               |
+                    Existing SDRAM sound RAM
+                               |
+                       Existing DOC mixer
+                               |
+                 Existing 44.1 kHz HDMI audio
 ```
 
-Preserve existing YM2149 cores as a selectable *reference* for behavioral A/B tests and readback while developing; do not route their generated PCM to the **enhanced** audio output. The actual YM2149.sv registers sample BDIR/BC/DI on every rising edge of CLK (not on CE; CE clocks the synthesis dividers). Derive logical register events from VIA port-write transitions or explicitly verify bus-phase behavior. Avoid false/repeated events while BDIR/BC remain asserted, but preserve intentionally repeated writes (especially AY register 13 envelope restart).
+On Mockingboard commands, preserve all software-visible VIA/AY behavior and IRQs. Six logical AY voices (3L + 3R) can be implemented using **six or more** native DOC oscillators; this mode owns all 32, enabling later layering and sampled timbres. AY tone/noise gates, shared noise source and envelope behavior require explicit semantic translation, not just swapping sound samples.
 
-## Renderer decision
+MB-DOC requires a deterministic waveform/patch **preload** into the same existing DOC sound RAM before enabling voices. Source and timing of this upload (FPGA loader or BL616-assisted upload) must be validated; register writes alone cannot produce useful audio from uninitialized memory.
 
-**First functional target:** isolated six-voice PCM wavetable renderer, modeled on DOC-style 8-bit waveforms and 16-bit stereo output, fed by AY shadow registers. Use a private, small ROM/sample bank and private phase accumulators, so Mockingboard playback cannot overwrite the native DOC's 64/128-KB sound RAM, commandeer native oscillator registers, or disturb Tool225 streaming. The output then shares the verified HDMI audio chain.
+## Stages
 
-**Later integration candidate:** send translated events into the existing DOC5503 oscillator engine itself. This requires explicit register/voice ownership, arbitration, waveform-memory allocation and concurrent native IIgs audio behavior. It must not silently seize six of the 32 DOC oscillators or use the 128K extension bank, which would break native DOC programs and streaming. Decide after synthesis/timing-resource review and tests. An independent DOC-style renderer is the safer first milestone; it does not yet mean that the native DOC engine is driving those voices.
+- **P0: Architecture (done).** Preserve the gold release, establish this experimental branch and settle mutually exclusive single-DOC ownership.
+- **P1: Compatibility / mode skeleton (next).** Add build-time GS/MB mode selector defaulting to GS, bring up slot 4 dual VIA/AY, capture AY write events, ensure GS host cannot write to the DOC in MB mode **without disabling DOC memory reads**. Verify simulation and resource/timing costs.
+- **P2: DOC control bridge.** Design and test a serialized host-register writer with correct address/data capture and ACK cadence. Translate six logical AY tone/volume/mixer/envelope voices to DOC channel and register updates.
+- **P3: Waveform initialization and audible MB-DOC.** Load a small verified sample bank into DOC sound RAM; enable the DOC oscillators after load; test tones and left/right stereo, then noise/envelopes and optional patches.
+- **P4: Hardware and golden regression.** Synthesize/PnR, test MB recognition/IRQ/audio and all native GS audio/128K Tool225 behavior in the *GS personality*, keep separate build artifacts and measured stats.
+- **P5: Enhanced instrument patches and startup mode selection.** More sophisticated samples, optional layers, and later a safe reset-controlled configuration selection; no unsupported hot switching.
 
-A sampled waveform is not automatically a richer sound: for a meaningful improvement provide switchable instrument samples and envelopes, with faithful AY reference mode to check software compatibility.
+See [P1-CHECKLIST.md](P1-CHECKLIST.md) and [RESOURCE-BASELINE.md](RESOURCE-BASELINE.md).
 
-## Small, hardware-testable milestones
+## Initial acceptance
 
-- **P0: Baseline (this commit).** Branch directly from August 16 golden release and capture design/acceptance criteria. No source or .fs modifications.
-- **P1: Compatibility decode.** Add a build-time disabled-by-default Mockingboard bring-up option; validate slot 4 ID 2, VIA timer/IRQ behavior, AY address/data register reads and writes. Keep native Ensoniq HDMI audio unchanged.
-- **P2: Software reference tests.** Record/replay AY register traces and compute the six interpreted voice states. Verify tone period zero behavior, envelope and noise semantics and L/R routing.
-- **P3: Isolated sampled renderer.** Add a small FPGA sample bank, pitch conversion/phase accumulators, envelope/volume mapping, noise/percussion mapping, and signed saturating stereo summation. In enhanced mode, AY audio sums are not mixed.
-- **P4: Real hardware verification.** Synth/PnR/bitstream on Tang Nano 20K. Confirm space/timing headroom, real Mockingboard software playback, stable slot and IRQ behavior, correct stereo and clipping, preserved existing IIgs DOC audio.
-- **P5: Advanced patches and optional shared native DOC backend.** Only after proven concurrency rules and regression coverage.
-
-Do one change per hardware-testable stage. Keep an exact known-good bitstream, compile reports, evidence, and a rollback commit for every candidate build.
-
-## Acceptance / non-regressions
-
-1. Apple II and Apple IIgs Mockingboard applications recognize slot 4, use VIA interrupts normally and require **no software modification**.
-2. Six logical channels (3 left / 3 right) follow AY pitch, volume, mixer enables, envelopes and noise with deterministic, testable semantics.
-3. Enhanced sound is generated from PCM/wavetable samples; YM2149 PCM output is not mixed in that mode.
-4. Native DOC5503 register access, original Ensoniq sound and 128K waveform protocol work unmodified.
-5. Existing DOC/Tool225 PCM playback regression, including the stable long-running streamer, remains clean; no competing waveform RAM writes.
-6. Signed mixing saturates rather than wrapping; document loudness/HDMI gain and measured PnR utilization.
-7. Stock golden branch and bitstream remain untouched.
-
-Out of scope for initial milestones: Votrax voice support; automatic identification of a game's intended orchestral instruments; changes to BL616 firmware or GS/OS Tool225.
+- GS-mode .fs remains behaviorally consistent with golden native Ensoniq/Tool225 streaming.
+- MB-DOC software sees a real dual-VIA Mockingboard in the configured slot and all IRQ/timer and register read/write behaviors survive.
+- MB-DOC drives **the real existing DOC5503** using sampled waveforms and provides stereo via the current HDMI pipeline. The original YM2149 PCM is not audible.
+- The GS sound register path cannot alter DOC registers/sample bank while MB-DOC owns them.
+- No new clock PLL and no second large renderer; document BSRAM/DSP and timing after synthesis.
+- No simultaneous GS/MB DOC control, no uninitialized samples and no silent switching without a full reset.
