@@ -1,4 +1,4 @@
-name: Mockingboard AY capture
+name: Mockingboard to DOC six-voice RTL
 
 on:
   push:
@@ -6,6 +6,9 @@ on:
       - petar/mockingboard-ensoniq-p0
     paths:
       - "hdl/mockingboard/mockingboard.sv"
+      - "boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv"
+      - "boards/a2n20v2-Enhanced/hdl/top.sv"
+      - "hdl/sound/sound_glu.sv"
       - "tests/mb_doc/**"
       - ".github/workflows/mb-ay-capture.yml"
   workflow_dispatch:
@@ -14,11 +17,11 @@ permissions:
   contents: read
 
 jobs:
-  capture-unit-test:
+  mb-doc-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install Icarus Verilog
         run: sudo apt-get update && sudo apt-get install -y iverilog
-      - name: Simulate AY register capture
+      - name: Simulate AY capture and six-voice DOC bridge
         run: sh tests/mb_doc/run_capture_test.sh
