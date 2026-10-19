@@ -1,36 +1,47 @@
-# P1 checklist — Mockingboard compatibility front-end
+# P1 checklist — Exclusive DOC mode and Mockingboard compatibility
 
 Project branch: `petar/mockingboard-ensoniq-p0`.
 Golden parent: `eb6d2726fd252a54fe84739cb767361adf11d657`.
+Design agreement: [ADR-0001](ADR-0001-EXCLUSIVE-DOC-OWNERSHIP.md).
 
-## Goal
+## Outcome to prove
 
-Enable and validate the **software-visible** Mockingboard (dual 6522 VIA, dual AY/YM2149 register interface and IRQ) before changing any audio rendering. This stage is intentionally a silent bring-up for the new sampled renderer, not a release-quality sound build.
+One validated Ensoniq DOC instance, with exactly one register-owning frontend:
+- Default `GS`: *unchanged* native Sound GLU/Tool225.
+- Experimental `MB-DOC`: dual VIA/AY hardware interface; eventual bridge owns DOC and sample RAM.
 
-## Change boundaries
+P1 starts with register/IRQ emulation and host ownership plumbing; **no claim of audible sampled Mockingboard until P3**.
 
-- [ ] Add a separately named, disabled-by-default experimental build setting to `boards/a2n20v2-Enhanced/hdl/top.sv`.
-- [ ] Confirm slot 4 has card ID 2 in `hdl/slots/slots.hex` (currently `00 00 03 05 02 04 06 01`); avoid changing other slot mappings.
-- [ ] Verify 6522 register read/write, PB BDIR/BC and RESET, PA register addressing/data.
-- [ ] Preserve the left and right AY chip register paths and timer IRQ timing.
-- [ ] Capture per-chip AY-register-write intent from VIA port/control transitions. YM2149.sv samples BDIR/BC/DI each rising CLK edge, independently of CE, which only advances synthesis. Validate handling of held write phases and deliberate repeated register-13 writes (envelope restart).
-- [ ] Leave YM2149 cores present for readback/comparison while they are not connected to HDMI in enhanced mode.
-- [ ] Keep `sound_glu.sv`, `doc5503.sv`, waveform RAM protocol, Tool225, MCU/BL616 firmware, and native Ensoniq audio path unchanged.
-- [ ] Collect pre/post Gowin synthesis utilization and PnR timing.
-- [ ] Archive .fs SHA256, build commit SHA and deterministic test logs.
+## Stage 1: Static configuration and compatibility
 
-## Suggested hardware regression
+- [ ] Add `AUDIO_MODE_MB_DOC` top-level build parameter (conceptual, not yet in HDL), default 0. Pin GS/MB ownership to this choice at synthesis; no runtime switching.
+- [ ] Preserve all current golden parameters, native GS audio pipeline and 128K status behavior when mode 0.
+- [ ] In mode 1, enable the Mockingboard personality only, through card ID 2 in slot 4 as mapped by `hdl/slots/slots.hex`. Confirm effective slot mapping after MCU initialization.
+- [ ] Verify both 6522 VIA register read/write and PB BDIR/BC/RESET, PA AY register addressing/data.
+- [ ] Verify separate left and right AY readback/logic, timer IRQ and reset behavior.
+- [ ] Capture per-chip AY register **event** intents from VIA port/control writes. Existing `YM2149.sv` samples BDIR/BC/DI on *every* 54 MHz rising clock, not CE. Handle held write phases without spurious events, and repeated register 13 envelope retriggers.
+- [ ] Leave YM2149 emulation available for software compatibility/reference. Route **no** YM2149 PCM to enhanced HDMI output.
 
-- [ ] ROM 3 IIgs with A2N20v2-Enhanced, regular GS/OS audio still works.
-- [ ] Slot-4 Mockingboard software discovery and register readbacks succeed.
-- [ ] VIA timer IRQ vectors/timing survive repeated starts and stops.
-- [ ] Separate left/right AY commands can be decoded.
-- [ ] DOC 128K extension unlock/status and bank data unchanged.
-- [ ] Tool225 playback and STOP/replay still pass.
-- [ ] Existing golden bitstream can be reflashed as a recovery baseline.
+## Stage 2: True one-DOC host ownership
 
-## P2 handoff contract
+- [ ] Split native GS host write permission from `sound_glu.ENABLE` so DOC clock and SDRAM oscillator fetches remain operational in MB-DOC mode.
+- [ ] Provide **one** synchronous DOC `cs_n`, `addr`, `data` host interface, selected at synthesis between GS Sound GLU and MB-DOC translator. Explicitly latch address/data for the transaction; audit the current use of live `a2bus_if.data`.
+- [ ] GS writes to $C03C-$C03F must neither alter DOC registers nor overwrite the patch sound RAM in MB-DOC mode.
+- [ ] Preserve waveform fetch `DOC_MEM_PORT`, the sound RAM base, 7 MHz timing enable, `sg_audio_l/r`, CDC, audio_out and HDMI gain stage.
+- [ ] Do not set `sound_glu.ENABLE=0` in MB-DOC mode: it would also disable oscillator sound RAM reads.
+- [ ] Define a **separate** waveform preload and DOC register initialization sequence for MB-DOC mode (P3); no oscillator enable until the patch bank is loaded.
 
-The next module accepts a decoded event `(chip[0..1], ay_reg[0..15], value[7..0], tick)`, plus reset, and exports a six-channel voice-state snapshot. Each channel's tone period is a 12-bit combination of coarse/fine registers; mixer bits gate tone/noise separately; volume register bit 4 selects AY envelope control; channel allocation is 3L/3R. Establish precise clock ratios, held-bus write semantics and envelope semantics by comparing with the actual `hdl/support/YM2149.sv` source and traces, not an assumed generic AY implementation.
+## Stage 3: Verification gates
 
-**Do not** connect the two 10-bit `mb_audio_l/r` buses directly to the audio mixer and call it the Ensoniq renderer: that only reproduces the old PSG sound.
+- [ ] Simulate DOC host mux and prove never two owners; GS and MB test vectors both generated.
+- [ ] Simulate repeated AY pitch/volume/mixer/envelope transitions including register-13 retrigger.
+- [ ] Run Gowin synthesis and PnR for default GS and experimental MB-DOC selection; record resource/timing versus [golden report](RESOURCE-BASELINE.md).
+- [ ] In GS personality run native IIgs DOC and 128K status/bank/Tool225 streaming regression; do not expect Tool225 audio in MB-DOC mode.
+- [ ] On Apple II/IIgs in MB-DOC mode detect Mockingboard in slot 4, read/write AYs and verify VIA timer interrupts.
+- [ ] Archive .fs hash, tool version, commit SHA and logs; keep a recovery golden .fs.
+
+## P2 event contract
+
+Decode AY events with `chip[0..1]`, `register[0..15]`, `value[7..0]` and a timestamp/tick to drive a software-tested bridge. Tone period is 12 bits, pitch/period zero need validation, mixer bits separately control tone/noise, reg 13 retriggers the envelope, and there are six logical stereo voices. An arbitrary AY game contains no sampled instrument metadata; patch selection is an explicit policy.
+
+**Important:** This project does not implement a second wavetable audio renderer. The bridge writes the existing `doc5503` registers and uses preloaded native DOC waveform RAM.
