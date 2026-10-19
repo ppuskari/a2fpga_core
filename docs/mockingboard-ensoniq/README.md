@@ -15,6 +15,8 @@ The initial selection will be compile-time via separate bitstreams, not an untes
 
 **Accepted architecture / implementation contract:** [ADR-0001-EXCLUSIVE-DOC-OWNERSHIP.md](ADR-0001-EXCLUSIVE-DOC-OWNERSHIP.md).
 
+**Accepted progression:** [ADR-0002-PROGRESSIVE-SOUND-BACKENDS.md](ADR-0002-PROGRESSIVE-SOUND-BACKENDS.md). After validating the existing six-voice DOC bridge, add AY noise/envelopes and replacement sampled instruments, optionally layer DOC oscillators for depth, build an offline SoundFont-to-DOC bank converter, and finally allow the same AY event stream to drive an external FluidSynth SoundFont renderer. FluidSynth audio is external PCM, not DOC output; a future HDMI return path would require a separate buffered interface. Do not refactor the working six-voice bridge prematurely.
+
 ## Release ancestry and preservation
 
 - Public upstream: `a2fpga/a2fpga_core`
@@ -76,7 +78,10 @@ MB-DOC requires a deterministic waveform/patch **preload** into the same existin
 - **P2A: Six-voice DOC bridge (HDL committed; verification pending).** The bridge preloads a 256-byte nonzero triangle wave through the GLU SRAM port, selects eight DOC slots, and maps six AY tones/volumes (3L+3R) onto DOC oscillators 0-5. See [P2A-SIX-VOICE.md](P2A-SIX-VOICE.md). Envelopes/noise not yet implemented.
 - **P3: Hardware-verify audible MB-DOC.** Run committed AY capture and bridge simulations, complete Gowin synthesis/PnR, and verify actual sustained tones and stereo on hardware. Implement AY noise and programmable envelopes after confirming the six-voice tone path.
 - **P4: Hardware and golden regression.** Synthesize/PnR, test MB recognition/IRQ/audio and all native GS audio/128K Tool225 behavior in the *GS personality*, keep separate build artifacts and measured stats.
-- **P5: Enhanced instrument patches and startup mode selection.** More sophisticated samples, optional layers, and later a safe reset-controlled configuration selection; no unsupported hot switching.
+- **P5: Enhanced instrument patches.** Full AY noise/envelope semantics and selectable local DOC patches, with optional layering *after* six-voice hardware validation.
+- **P6: SoundFont-to-DOC bank conversion.** Host-side SF2 sample extraction and DOC-compatible waveform-banking for local FPGA playback.
+- **P7: External FluidSynth backend.** Backend-neutral AY musical events over a timed transport to a capable external host running FluidSynth; first render to companion audio, with HDMI PCM return only if a safe stream is later built.
+- **P8: Sound profiles and startup selection.** Reproducible per-game/per-channel patches and safe reset-controlled switching among sound backends; preserve native GS's exclusive DOC mode.
 
 See [P1-CHECKLIST.md](P1-CHECKLIST.md), [P1-IMPLEMENTATION.md](P1-IMPLEMENTATION.md) and [RESOURCE-BASELINE.md](RESOURCE-BASELINE.md). The committed [AY capture test](../../tests/mb_doc/tb_mb_ay_capture.sv) and [CI workflow](../../.github/workflows/mb-ay-capture.yml) require execution; no passing result has yet been verified.
 
