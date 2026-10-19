@@ -1025,12 +1025,19 @@ wire [7:0] glu_sound_control_w;
 // A2FPGA DOC 128K protocol version/lock/load status.
 wire [7:0] doc_128k_status_w;
 
-    // P1 safe bridge inputs. The actual AY-to-DOC sequencer
-    // and sample-loader will replace these constant ties in P2/P3.
-    // Never drive the original DOC with unscheduled AY writes.
-    wire       mb_doc_wr_w   = 1'b0;
-    wire [7:0] mb_doc_addr_w = 8'h00;
-    wire [7:0] mb_doc_data_w = 8'h00;
+    // P2: exclusive MB-DOC six-voice bridge drives the same
+    // physical DOC, and preloads its 256-byte PCM waveform.
+    // Mode=0 retains the original native GS DOC control path.
+    wire        mb_doc_wr_w;
+    wire [7:0]  mb_doc_addr_w;
+    wire [7:0]  mb_doc_data_w;
+    wire        mb_ram_wr_w;
+    wire [20:0] mb_ram_addr_w;
+    wire [31:0] mb_ram_data_w;
+    wire [3:0]  mb_ram_byte_en_w;
+    wire        mb_ram_ready_w;
+    wire        mb_bridge_ready_w;
+    wire [2:0]  mb_active_voice_w;
 
     sound_glu #(
         .ENABLE(ENSONIQ_ENABLE),
@@ -1047,6 +1054,12 @@ wire [7:0] doc_128k_status_w;
         .mb_doc_wr_i(mb_doc_wr_w),
         .mb_doc_addr_i(mb_doc_addr_w),
         .mb_doc_data_i(mb_doc_data_w),
+
+        .mb_ram_wr_i(mb_ram_wr_w),
+        .mb_ram_addr_i(mb_ram_addr_w),
+        .mb_ram_data_i(mb_ram_data_w),
+        .mb_ram_byte_en_i(mb_ram_byte_en_w),
+        .mb_ram_ready_o(mb_ram_ready_w),
 
         .data_o(sg_d_w),                 
         .rd_en_o(sg_rd_w),
@@ -1250,6 +1263,47 @@ wire [7:0] doc_128k_status_w;
         .ay_r_reg_o(mb_ay_r_reg_w),
         .ay_r_data_o(mb_ay_r_data_w)
     );
+
+    // Synthesize no bridge at all in normal GS mode.
+    // The document/golden IIgs Sound GLU remains in sole control.
+    generate
+        if (AUDIO_MODE_MB_DOC) begin : gen_mb_doc_audio
+            mb_doc_bridge bridge (
+                .clk_i(clk_logic_w),
+                .reset_n_i(system_reset_n_w),
+                .sdram_ready_i(sdram_init_complete),
+
+                .ay_l_wr_i(mb_ay_l_wr_w),
+                .ay_l_reg_i(mb_ay_l_reg_w),
+                .ay_l_data_i(mb_ay_l_data_w),
+                .ay_r_wr_i(mb_ay_r_wr_w),
+                .ay_r_reg_i(mb_ay_r_reg_w),
+                .ay_r_data_i(mb_ay_r_data_w),
+
+                .doc_wr_o(mb_doc_wr_w),
+                .doc_addr_o(mb_doc_addr_w),
+                .doc_data_o(mb_doc_data_w),
+
+                .ram_wr_o(mb_ram_wr_w),
+                .ram_addr_o(mb_ram_addr_w),
+                .ram_data_o(mb_ram_data_w),
+                .ram_byte_en_o(mb_ram_byte_en_w),
+                .ram_ready_i(mb_ram_ready_w),
+                .ready_o(mb_bridge_ready_w),
+                .active_voice_o(mb_active_voice_w)
+            );
+        end else begin : gen_gs_audio_only
+            assign mb_doc_wr_w = 1'b0;
+            assign mb_doc_addr_w = 8'h00;
+            assign mb_doc_data_w = 8'h00;
+            assign mb_ram_wr_w = 1'b0;
+            assign mb_ram_addr_w = 21'h000000;
+            assign mb_ram_data_w = 32'h00000000;
+            assign mb_ram_byte_en_w = 4'h0;
+            assign mb_bridge_ready_w = 1'b0;
+            assign mb_active_voice_w = 3'd0;
+        end
+    endgenerate
 
     // SuperSerial Card
 
