@@ -14,24 +14,26 @@ P1 starts with register/IRQ emulation and host ownership plumbing; **no claim of
 
 ## Stage 1: Static configuration and compatibility
 
-- [ ] Add `AUDIO_MODE_MB_DOC` top-level build parameter (conceptual, not yet in HDL), default 0. Pin GS/MB ownership to this choice at synthesis; no runtime switching.
+- [x] Add `AUDIO_MODE_MB_DOC` top-level build parameter, default 0, plus optional `MB_DOC_EXPERIMENT` compile define. Static-only selection; no runtime switching.
 - [ ] Preserve all current golden parameters, native GS audio pipeline and 128K status behavior when mode 0.
 - [ ] In mode 1, enable the Mockingboard personality only, through card ID 2 in slot 4 as mapped by `hdl/slots/slots.hex`. Confirm effective slot mapping after MCU initialization.
 - [ ] Verify both 6522 VIA register read/write and PB BDIR/BC/RESET, PA AY register addressing/data.
 - [ ] Verify separate left and right AY readback/logic, timer IRQ and reset behavior.
 - [ ] Capture per-chip AY register **event** intents from VIA port/control writes. Existing `YM2149.sv` samples BDIR/BC/DI on *every* 54 MHz rising clock, not CE. Handle held write phases without spurious events, and repeated register 13 envelope retriggers.
-- [ ] Leave YM2149 emulation available for software compatibility/reference. Route **no** YM2149 PCM to enhanced HDMI output.
+- [x] Leave YM2149 emulation available for software compatibility/reference. Route **no** YM2149 PCM to enhanced HDMI output.
 
 ## Stage 2: True one-DOC host ownership
 
-- [ ] Split native GS host write permission from `sound_glu.ENABLE` so DOC clock and SDRAM oscillator fetches remain operational in MB-DOC mode.
-- [ ] Provide **one** synchronous DOC `cs_n`, `addr`, `data` host interface, selected at synthesis between GS Sound GLU and MB-DOC translator. Explicitly latch address/data for the transaction; audit the current use of live `a2bus_if.data`.
+- [x] Split native GS host write permission from `sound_glu.ENABLE` by gating `glu_sel_w` with the static mode. DOC clock and SDRAM oscillator fetches remain wired (requires synthesis/hardware verification).
+- [x] Provide **one** DOC `cs_n`, `addr`, `data` mux selected at synthesis between GS Sound GLU and MB-DOC host pins. GS retains its golden live `a2bus_if.data`. MB host pins are currently tied inactive pending P2 synchronized and latched command sequencing.
 - [ ] GS writes to $C03C-$C03F must neither alter DOC registers nor overwrite the patch sound RAM in MB-DOC mode.
 - [ ] Preserve waveform fetch `DOC_MEM_PORT`, the sound RAM base, 7 MHz timing enable, `sg_audio_l/r`, CDC, audio_out and HDMI gain stage.
-- [ ] Do not set `sound_glu.ENABLE=0` in MB-DOC mode: it would also disable oscillator sound RAM reads.
+- [x] Do not set `sound_glu.ENABLE=0` in MB-DOC mode: it would also disable oscillator sound RAM reads.
 - [ ] Define a **separate** waveform preload and DOC register initialization sequence for MB-DOC mode (P3); no oscillator enable until the patch bank is loaded.
 
 ## Stage 3: Verification gates
+
+P1 code and [implementation notes](P1-IMPLEMENTATION.md) are committed. The [capture bench](../../tests/mb_doc/tb_mb_ay_capture.sv) and [GitHub Actions workflow](../../.github/workflows/mb-ay-capture.yml) are committed but no completed test or Gowin build is confirmed.
 
 - [ ] Simulate DOC host mux and prove never two owners; GS and MB test vectors both generated.
 - [ ] Simulate repeated AY pitch/volume/mixer/envelope transitions including register-13 retrigger.
