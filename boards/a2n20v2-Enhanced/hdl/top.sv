@@ -37,6 +37,9 @@ module top #(
     parameter bit [7:0] SUPERSPRITE_ID = 1,
     parameter bit SUPERSPRITE_FORCE_VDP_OVERLAY = 0,
 
+    // 0 = golden native IIgs/GS sound; 1 = experimental MB-DOC.
+    // Synthesis-time only. Changing this requires reprogramming.
+    parameter bit AUDIO_MODE_MB_DOC = 1'b0,
     parameter bit MOCKINGBOARD_ENABLE = 0,
     parameter bit [7:0] MOCKINGBOARD_ID = 2,
 
@@ -1016,8 +1019,16 @@ wire [7:0] glu_sound_control_w;
 // A2FPGA DOC 128K protocol version/lock/load status.
 wire [7:0] doc_128k_status_w;
 
+    // P1 safe bridge inputs. The actual AY-to-DOC sequencer
+    // and sample-loader will replace these constant ties in P2/P3.
+    // Never drive the original DOC with unscheduled AY writes.
+    wire       mb_doc_wr_w   = 1'b0;
+    wire [7:0] mb_doc_addr_w = 8'h00;
+    wire [7:0] mb_doc_data_w = 8'h00;
+
     sound_glu #(
         .ENABLE(ENSONIQ_ENABLE),
+        .MB_DOC_MODE(AUDIO_MODE_MB_DOC),
         .MONO_MIX(ENSONIQ_MONO_MIX), // If true, mono mix is used instead of stereo
 
         // Locked after reset. Only the explicit A2FP protocol enables
@@ -1026,6 +1037,11 @@ wire [7:0] doc_128k_status_w;
        // .MONO_MIX(1'b1) // If true, mono mix is used instead of stereo
     ) sg (
         .a2bus_if(a2bus_if),
+
+        .mb_doc_wr_i(mb_doc_wr_w),
+        .mb_doc_addr_i(mb_doc_addr_w),
+        .mb_doc_data_i(mb_doc_data_w),
+
         .data_o(sg_d_w),                 
         .rd_en_o(sg_rd_w),
 
@@ -1201,8 +1217,14 @@ wire [7:0] doc_128k_status_w;
     wire [9:0] mb_audio_l;
     wire [9:0] mb_audio_r;
 
+    // The two independent AY command streams feed the future
+    // single-DOC translator. They are never PCM audio sources.
+    wire mb_ay_l_wr_w, mb_ay_r_wr_w;
+    wire [3:0] mb_ay_l_reg_w, mb_ay_r_reg_w;
+    wire [7:0] mb_ay_l_data_w, mb_ay_r_data_w;
+
     Mockingboard #(
-        .ENABLE(MOCKINGBOARD_ENABLE),
+        .ENABLE(MOCKINGBOARD_ENABLE | AUDIO_MODE_MB_DOC),
         .ID(MOCKINGBOARD_ID)
     ) mockingboard (
         .a2bus_if(a2bus_if),  // use system_reset_n
@@ -1213,7 +1235,14 @@ wire [7:0] doc_128k_status_w;
         .irq_n_o(mb_irq_n),
 
         .audio_l_o(mb_audio_l),
-        .audio_r_o(mb_audio_r)
+        .audio_r_o(mb_audio_r),
+
+        .ay_l_wr_o(mb_ay_l_wr_w),
+        .ay_l_reg_o(mb_ay_l_reg_w),
+        .ay_l_data_o(mb_ay_l_data_w),
+        .ay_r_wr_o(mb_ay_r_wr_w),
+        .ay_r_reg_o(mb_ay_r_reg_w),
+        .ay_r_data_o(mb_ay_r_data_w)
     );
 
     // SuperSerial Card
