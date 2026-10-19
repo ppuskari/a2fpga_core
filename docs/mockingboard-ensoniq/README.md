@@ -1,6 +1,6 @@
 # Mockingboard-driven Ensoniq DOC5503 for A2N20v2-Enhanced
 
-Status: **P1 structural HDL committed, NOT yet simulated/synthesized or hardware-tested**. P2 DOC sequencer and P3 waveform loader/audio are pending. Exclusive-mode design (2026-10-19).
+Status: **P2A six-voice bridge HDL committed, but NOT simulated, Gowin-synthesized, or tested on hardware.** MB-DOC audio is designed but not verified; AY envelopes/noise and layering remain future work. Exclusive-mode design (2026-10-19).
 
 ## Objective
 
@@ -73,8 +73,8 @@ MB-DOC requires a deterministic waveform/patch **preload** into the same existin
 
 - **P0: Architecture (done).** Preserve the gold release, establish this experimental branch and settle mutually exclusive single-DOC ownership.
 - **P1: Compatibility / mode skeleton (HDL committed; verification pending).** Add build-time GS/MB mode selector defaulting to GS, bring up slot 4 dual VIA/AY, capture AY write events, ensure GS host cannot write to the DOC in MB mode **without disabling DOC memory reads**. Verify simulation and resource/timing costs.
-- **P2: DOC control bridge.** Design and test a serialized host-register writer with correct address/data capture and ACK cadence. Translate six logical AY tone/volume/mixer/envelope voices to DOC channel and register updates.
-- **P3: Waveform initialization and audible MB-DOC.** Load a small verified sample bank into DOC sound RAM; enable the DOC oscillators after load; test tones and left/right stereo, then noise/envelopes and optional patches.
+- **P2A: Six-voice DOC bridge (HDL committed; verification pending).** The bridge preloads a 256-byte nonzero triangle wave through the GLU SRAM port, selects eight DOC slots, and maps six AY tones/volumes (3L+3R) onto DOC oscillators 0-5. See [P2A-SIX-VOICE.md](P2A-SIX-VOICE.md). Envelopes/noise not yet implemented.
+- **P3: Hardware-verify audible MB-DOC.** Run committed AY capture and bridge simulations, complete Gowin synthesis/PnR, and verify actual sustained tones and stereo on hardware. Implement AY noise and programmable envelopes after confirming the six-voice tone path.
 - **P4: Hardware and golden regression.** Synthesize/PnR, test MB recognition/IRQ/audio and all native GS audio/128K Tool225 behavior in the *GS personality*, keep separate build artifacts and measured stats.
 - **P5: Enhanced instrument patches and startup mode selection.** More sophisticated samples, optional layers, and later a safe reset-controlled configuration selection; no unsupported hot switching.
 
