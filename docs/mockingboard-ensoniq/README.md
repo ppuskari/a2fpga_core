@@ -46,7 +46,7 @@ Signed saturating mixer with native IIgs DOC GLU output
 Existing audio clock crossing -> audio_out -> HDMI gain
 ```
 
-Preserve existing YM2149 cores as a selectable *reference* for behavioral A/B tests and readback while developing; do not route their generated PCM to the **enhanced** audio output. Capture register commands at the same timing as the YM2149 CE/BDIR/BC sampling; avoid repeated/false writes while control lines are held.
+Preserve existing YM2149 cores as a selectable *reference* for behavioral A/B tests and readback while developing; do not route their generated PCM to the **enhanced** audio output. The actual YM2149.sv registers sample BDIR/BC/DI on every rising edge of CLK (not on CE; CE clocks the synthesis dividers). Derive logical register events from VIA port-write transitions or explicitly verify bus-phase behavior. Avoid false/repeated events while BDIR/BC remain asserted, but preserve intentionally repeated writes (especially AY register 13 envelope restart).
 
 ## Renderer decision
 
