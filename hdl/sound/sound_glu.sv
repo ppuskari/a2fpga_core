@@ -42,6 +42,14 @@ module sound_glu #(
     input  logic [7:0] mb_doc_addr_i,
     input  logic [7:0] mb_doc_data_i,
 
+    // Exclusive MB-DOC waveform preload uses the existing GLU
+    // SDRAM write port; DOC oscillator fetch stays on DOC_MEM_PORT.
+    input  logic        mb_ram_wr_i,
+    input  logic [20:0] mb_ram_addr_i,
+    input  logic [31:0] mb_ram_data_i,
+    input  logic [3:0]  mb_ram_byte_en_i,
+    output logic        mb_ram_ready_o,
+
     output [7:0] data_o,
     output rd_en_o,
 
@@ -219,6 +227,9 @@ assign debug_128k_status_o =
          sound_128k_unlocked_r} :
         8'h00;
 
+    assign mb_ram_ready_o =
+        MB_DOC_MODE && !USE_BSRAM && glu_mem_if.ready;
+
     // GLU mem_if driven to DDR3 when USE_BSRAM=0, idle when USE_BSRAM=1
     generate
         if (USE_BSRAM) begin : gen_glu_idle
@@ -230,10 +241,18 @@ assign debug_128k_status_o =
             assign glu_mem_if.burst = 1'b0;
         end else begin : gen_glu_ddr3
             assign glu_mem_if.rd = '0;
-            assign glu_mem_if.addr = glu_mem_addr_r;
-            assign glu_mem_if.wr = glu_mem_wr_r;
-            assign glu_mem_if.byte_en = glu_mem_byte_en_r;
-            assign glu_mem_if.data = {a2bus_if.data, a2bus_if.data, a2bus_if.data, a2bus_if.data};
+            // GS and MB sample loader never own RAM together.
+            // Preserve the exact original GS path in mode 0.
+            assign glu_mem_if.addr = MB_DOC_MODE ?
+                mb_ram_addr_i : glu_mem_addr_r;
+            assign glu_mem_if.wr = MB_DOC_MODE ?
+                mb_ram_wr_i : glu_mem_wr_r;
+            assign glu_mem_if.byte_en = MB_DOC_MODE ?
+                mb_ram_byte_en_i : glu_mem_byte_en_r;
+            assign glu_mem_if.data = MB_DOC_MODE ?
+                mb_ram_data_i :
+                {a2bus_if.data, a2bus_if.data,
+                 a2bus_if.data, a2bus_if.data};
             assign glu_mem_if.burst = 1'b0;
         end
     endgenerate
