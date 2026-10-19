@@ -28,7 +28,17 @@ module Mockingboard #(
     output irq_n_o,
 
     output [9:0] audio_l_o,
-    output [9:0] audio_r_o
+    output [9:0] audio_r_o,
+
+    // Decoded AY writes for the exclusive MB-to-DOC bridge.
+    // One pulse per completed AY data-write phase; left/right
+    // chips have independent event outputs.
+    output logic       ay_l_wr_o,
+    output logic [3:0] ay_l_reg_o,
+    output logic [7:0] ay_l_data_o,
+    output logic       ay_r_wr_o,
+    output logic [3:0] ay_r_reg_o,
+    output logic [7:0] ay_r_data_o
 );
 
     reg card_enable;
@@ -150,6 +160,18 @@ module Mockingboard #(
     // maximum value is 10 bits (255 + 255 + 255)
     assign audio_l_o = psg_al_o + psg_bl_o + psg_cl_o;
 
+    mb_ay_capture ay_capture_left (
+        .clk_i(a2bus_if.clk_logic),
+        .reset_n_i(a2bus_if.system_reset_n & pb_l_o[2]),
+        .enable_i(card_enable),
+        .bdir_i(pb_l_o[1]),
+        .bc_i(pb_l_o[0]),
+        .data_i(psg_l_i),
+        .wr_o(ay_l_wr_o),
+        .reg_o(ay_l_reg_o),
+        .value_o(ay_l_data_o)
+    );
+
     // Right Channel
 
     via6522 m6522_right (
@@ -217,4 +239,74 @@ module Mockingboard #(
 
     assign audio_r_o = psg_ar_o + psg_br_o + psg_cr_o;
 
+    mb_ay_capture ay_capture_right (
+        .clk_i(a2bus_if.clk_logic),
+        .reset_n_i(a2bus_if.system_reset_n & pb_r_o[2]),
+        .enable_i(card_enable),
+        .bdir_i(pb_r_o[1]),
+        .bc_i(pb_r_o[0]),
+        .data_i(psg_r_i),
+        .wr_o(ay_r_wr_o),
+        .reg_o(ay_r_reg_o),
+        .value_o(ay_r_data_o)
+    );
+
+endmodule
+
+// Capture the logical AY write transaction from the VIA-driven bus.
+// The existing YM2149 model remains responsible for readback and
+// original PSG timing. AY register 13 must remain an *event* even
+// when two successive writes have the same value.
+//
+// A completed BDIR=1, BC=0 write phase emits one transaction.
+// This avoids false write pulses when VIA control lines remain
+// asserted across many 54 MHz clocks. The held-phase PA rewrite
+// edge case will be characterized against real MB drivers in P2.
+module mb_ay_capture (
+    input  logic       clk_i,
+    input  logic       reset_n_i,
+    input  logic       enable_i,
+    input  logic       bdir_i,
+    input  logic       bc_i,
+    input  logic [7:0] data_i,
+    output logic       wr_o,
+    output logic [3:0] reg_o,
+    output logic [7:0] value_o
+);
+    logic [3:0] ay_reg_r;
+    logic       ay_addr_valid_r;
+    logic [7:0] write_data_r;
+    logic       prev_write_phase_r;
+
+    wire addr_phase_w  = bdir_i & bc_i;
+    wire write_phase_w = bdir_i & !bc_i;
+
+    always_ff @(posedge clk_i) begin
+        if (!reset_n_i || !enable_i) begin
+            ay_reg_r           <= 4'b0;
+            ay_addr_valid_r    <= 1'b0;
+            write_data_r       <= 8'h00;
+            prev_write_phase_r <= 1'b0;
+            wr_o               <= 1'b0;
+            reg_o              <= 4'b0;
+            value_o            <= 8'h00;
+        end else begin
+            wr_o <= 1'b0;
+            if (addr_phase_w) begin
+                ay_reg_r        <= data_i[3:0];
+                ay_addr_valid_r <= (data_i[7:4] == 4'h0);
+            end
+            if (write_phase_w)
+                write_data_r <= data_i;
+
+            if (prev_write_phase_r && !write_phase_w &&
+                ay_addr_valid_r) begin
+                wr_o    <= 1'b1;
+                reg_o   <= ay_reg_r;
+                value_o <= write_data_r;
+            end
+
+            prev_write_phase_r <= write_phase_w;
+        end
+    end
 endmodule
