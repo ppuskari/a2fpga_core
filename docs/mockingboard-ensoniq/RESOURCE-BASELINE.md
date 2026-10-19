@@ -2,7 +2,7 @@
 
 Source: `boards/a2n20v2-Enhanced/impl/pnr/a2n20v2_enhanced.rpt.txt` in `petar/doc128k-p0x-golden`.
 
-Report is from **August 3, 2026** (Gowin PnR V1.9.9 Beta-4 Education, device GW2AR-LV18QN88C8/I7). It accompanies the preserved golden project; these numbers are **before** Mockingboard enablement or any new PCM renderer.
+Report is from **August 3, 2026** (Gowin PnR V1.9.9 Beta-4 Education, device GW2AR-LV18QN88C8/I7). It accompanies the preserved golden project; these numbers are **before** Mockingboard enablement or any new AY-to-DOC bridge.
 
 | Resource | Golden use |
 | --- | ---: |
@@ -13,13 +13,16 @@ Report is from **August 3, 2026** (Gowin PnR V1.9.9 Beta-4 Education, device GW2
 | DSP | 58% |
 | PLL | 2 / 2 (100%) |
 
-Implications:
+## Exclusive-mode implication (ADR-0001)
 
-- There is logic headroom for a small register decoder and renderer, but *no new PLL resource*. Use the existing logic / audio clocks and clock-enables.
-- BRAM/BSRAM is more limited than LUTs. Budget a compact PCM patch table (or explore a separately allocated SDRAM read port) rather than assuming large sampled instruments will fit on-chip.
-- DSP is already 58% used. Multipliers for six sampled voices should be time-shared, restricted in width, or measured after synthesis.
-- PnR percentage alone does not prove timing closure; explicitly inspect the next experimental timing reports and playtests.
-- Preserve existing ENSONIQ_WORD_BASE at word 0x010000 and 128K DOC waveform protocol. Never reuse either bank for Mockingboard patches without a designed arbiter and tests.
-- Final HDMI PCM is 44,100 Hz with existing audio_out and gain stages; avoid introducing a clock-domain race.
+The initial plan for a **second six-voice PCM renderer** has been superseded. This project reuses the **existing single DOC5503** rather than duplicating oscillators, interpolation, or mix hardware.
 
-For every P1-P4 candidate, append measured post-change logic, CLS, BSRAM, DSP, timing, bitstream hash and audio tests. Do not infer device capacity from this baseline alone.
+- The new hardware overhead should primarily be the AY-to-DOC event translator, patch selection, small microsequencer/host-register mux, and sample-memory preload control.
+- DOC waveforms live in **existing** 64/128K sound SDRAM, controlled by one owner per bitstream; do not assume spare BSRAM is available for large wavebanks.
+- Both PLLs are allocated, so keep logic in existing 54 MHz clock / 7 MHz DOC enable domains.
+- No second DSP-heavy renderer is needed. Instrument layering may still increase usage through added envelope or noise logic, so remeasure.
+- The existing DOC waveform read timing, SDRAM port priority, audio_out CDC and 44.1 kHz HDMI output must remain unchanged unless explicitly measured and justified.
+- Baseline utilization does *not* prove that the new design meets timing closure.
+- **Critical:** do not disable `sound_glu.ENABLE` to select MB-DOC ownership; that also gates the DOC's waveform fetches. Restrict GS host writes separately.
+
+For every candidate bitstream measure logic, CLS, BSRAM, DSP, max frequency/timing, bitstream hash and audio tests against this preserved baseline. Keep GS personality golden-compatible, and do not claim MB-DOC audio until sample loading and oscillator initialization are implemented and exercised on real hardware.
