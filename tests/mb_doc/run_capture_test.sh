@@ -19,3 +19,9 @@ iverilog -g2012 -Wall -DMB_AY_CAPTURE_UNIT_TEST \
   hdl/mockingboard/mockingboard.sv \
   tests/mb_doc/tb_mb_ay_capture.sv
 vvp "$tmpdir/mb_ay_capture.vvp"
+
+iverilog -g2012 -Wall -s tb_mb_doc_bridge \
+  -o "$tmpdir/mb_doc_bridge.vvp" \
+  boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv \
+  tests/mb_doc/tb_mb_doc_bridge.sv
+vvp "$tmpdir/mb_doc_bridge.vvp"
