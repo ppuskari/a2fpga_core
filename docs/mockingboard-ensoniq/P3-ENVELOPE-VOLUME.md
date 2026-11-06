@@ -2,7 +2,7 @@
 
 **Branch:** `petar/mb-doc-p3-envelope-gain`  
 **Base:** `petar/mockingboard-ensoniq-p0` (preserved as the hardware-proven P2 first-musical-playback baseline)  
-**Validation:** Icarus bridge/capture RTL suite passed in GitHub Actions [run 42302358360](https://github.com/ppuskari/a2fpga_core/actions/runs/42302358360). **Gowin synthesis, timing, and physical Apple IIe playback have NOT yet been validated for P3.**
+**Validation:** Icarus bridge/capture RTL suite **and** the native YM2149 Verilator envelope test passed in [GitHub Actions run 42303050639](https://github.com/ppuskari/a2fpga_core/actions/runs/42303050639). **Gowin synthesis, timing, and physical Apple IIe playback have NOT yet been validated for P3.**
 
 ## Motivation and measurements
 
@@ -46,7 +46,7 @@ The existing `tests/mb_doc/run_capture_test.sh` runs two Icarus test benches:
 
 Run `sh tests/mb_doc/run_capture_test.sh` with `iverilog` and `vvp` installed. The CI workflow also includes `petar/mb-doc-p3-envelope-gain`.
 
-The standalone bridge bench injects envelope **levels**; its PASS does not independently test the native `YM2149.sv` envelope timing/shape logic or the complete Gowin top-level synthesis. These need the FPGA compile and hardware A/B test.
+The standalone bridge bench injects envelope **levels**; the new [native YM2149 Verilator bench](../../tests/mb_doc/tb_ym2149_envelope.sv) independently verified period=1, shape 9 decay/hold, shape D rise/hold, register-13 retrigger and reset. A complete 16-shape hardware A/B test and Gowin top-level synthesis are still required.
 
 ## Safe Apple IIe hardware deployment
 
