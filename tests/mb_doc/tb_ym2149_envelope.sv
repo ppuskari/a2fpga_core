@@ -1,5 +1,5 @@
 // Validate the actual native YM2149 envelope source reused by MB-DOC.
-// Verilator timing test (the YM core uses unpacked-array reset patterns).
+// This timing test uses Verilator because the YM core has array reset patterns.
 `timescale 1ns/1ps
 module tb_ym2149_envelope;
     logic clk = 1'b0;
