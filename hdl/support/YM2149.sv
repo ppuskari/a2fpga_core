@@ -131,7 +131,12 @@ always @(posedge CLK) begin
 	reg [3:0]  cnt_div;
 	reg        noise_div;
 
-	if(CE) begin
+	if (RESET) begin
+		cnt_div <= 0;
+		noise_div <= 0;
+		ena_div <= 0;
+		ena_div_noise <= 0;
+	end else if(CE) begin
 		ena_div <= 0;
 		ena_div_noise <= 0;
 		if(!cnt_div) begin
@@ -212,7 +217,11 @@ wire [15:0] env_gen_comp = {ymreg[12], ymreg[11]} ? {ymreg[12], ymreg[11]} - 1'd
 always @(posedge CLK) begin
 	reg [15:0] env_gen_cnt;
 
-	if(CE) begin
+	// Deterministic reset for the native 32-step envelope timer.
+	if(RESET || env_reset) begin
+		env_gen_cnt <= 0;
+		env_ena <= 0;
+	end else if(CE) begin
 		env_ena <= 0;
 		if(ena_div) begin
 			if (env_gen_cnt >= env_gen_comp) begin
