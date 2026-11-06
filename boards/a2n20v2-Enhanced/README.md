@@ -399,6 +399,10 @@ present there); ROM 03 models work in any slot.
   USB-Ethernet adapter bridges the Apple II; the Apple II gets its own IP
   via the W5100 emulation — see [docs/UTHERNET2.md](docs/UTHERNET2.md)).
 
+## Windows BL616 MCU development (PowerShell 5.1 and VS Code)
+
+See the [hardware-validation and Windows installation guide](src/a2n20_bl616/docs/windows_build_setup.md) for exact SDK/toolchain setup, safe Stage 1+Stage 2 flashing, and the corrected HID-keyboard-compatible 15-second MCU timeout branch. The earlier timeout branch was based on MCU source without HID keyboard support, so use the corrected replacement for builds.
+
 ## Building from source
 
 - **FPGA bitstream**: open `a2n20v2_enhanced.gprj` in the Gowin IDE
