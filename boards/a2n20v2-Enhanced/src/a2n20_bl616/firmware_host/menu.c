@@ -43,6 +43,8 @@ typedef enum { VIEW_APPLE, VIEW_CONSOLE, VIEW_MENU } view_t;
 
 static view_t s_view       = VIEW_APPLE;
 static view_t s_mcu_view   = VIEW_MENU;    /* which MCU view SELECT returns to */
+#define MCU_SCREEN_TIMEOUT_US 15000000u
+static uint32_t s_last_mcu_input_us;
 
 /* ---- item model ---------------------------------------------------------- */
 typedef enum {
@@ -1033,6 +1035,8 @@ static const menu_screen_t SCR_ROOT = { "MAIN MENU", root_build };
 static void enter_view(view_t v)
 {
     s_view = v;
+    if (v != VIEW_APPLE)
+        s_last_mcu_input_us = (uint32_t)bflb_mtimer_get_time_us();
     switch (v) {
     case VIEW_APPLE:
         osd_console_set_lockout(false);
@@ -1154,6 +1158,20 @@ void menu_input(uint16_t buttons)
 
     uint16_t pressed = buttons & (uint16_t)~s_prev_buttons;
     s_prev_buttons = buttons;
+
+    /* Auto-return to Apple video after 15 s idle. The startup console can
+     * appear with s_view == VIEW_APPLE after a failed USB mount, so it has a
+     * separate log-idle timer. Firmware/FPGA installation is exempt because
+     * the s_fw_installing guard above returns before we reach this code. */
+    uint32_t now_us = (uint32_t)bflb_mtimer_get_time_us();
+    if (s_view == VIEW_APPLE) {
+        osd_console_hide_if_idle(MCU_SCREEN_TIMEOUT_US);
+    } else if (buttons != 0u) {
+        s_last_mcu_input_us = now_us;
+    } else if ((uint32_t)(now_us - s_last_mcu_input_us) >= MCU_SCREEN_TIMEOUT_US) {
+        enter_view(VIEW_APPLE);
+        s_held_dir = 0;
+    }
 
     /* one event per rising edge, in a stable priority order */
     static const uint16_t order[] = {
