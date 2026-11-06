@@ -399,6 +399,10 @@ present there); ROM 03 models work in any slot.
   USB-Ethernet adapter bridges the Apple II; the Apple II gets its own IP
   via the W5100 emulation — see [docs/UTHERNET2.md](docs/UTHERNET2.md)).
 
+## Windows 10/11 build and BL616 MCU recovery
+
+A complete, hardware-tested **PowerShell 5.1 and VS Code** cross-compilation and Stage 1/Stage 2 flashing procedure is available in the **[Windows BL616 build and installation guide](src/a2n20_bl616/docs/windows_build_setup.md)**. It also documents the 15-second MCU screen-idle timeout implementation and Apple IIe native Mockingboard verification. For routine MCU updates, flash Stage 2 only; do not overwrite the Stage 1 bootloader with the application binary.
+
 ## Building from source
 
 - **FPGA bitstream**: open `a2n20v2_enhanced.gprj` in the Gowin IDE
