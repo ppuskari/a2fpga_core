@@ -269,6 +269,10 @@ Regardless of board variant, entering boot mode (UPDATE button) lets you reflash
 2. **JTAGSEL_N recovery**: Pull FPGA JTAGSEL_N low before power-up to force JTAG active, overriding bitstream pin config.
 3. **S2 button JTAG recovery**: If openFPGALoader reports "no device found" after flashing firmware, disconnect the board, hold S2, reconnect while holding, release, then retry. (Reported in FPGA-Companion issue #79.)
 
+## Windows PowerShell 5.1 + VS Code cross-compilation
+
+The [Windows BL616 firmware setup and flashing guide](docs/windows_build_setup.md) covers the HID-keyboard-compatible 15-second screen timeout, SDK v2.3.27, legacy T-Head GCC, eFuse-aware Stage 1 recovery, and Stage 2-only updates. The earlier `petar/mcu-screen-idle-timeout-15s` branch is superseded because its older MCU source omitted USB HID keyboard support.
+
 ## Build Environment Setup (macOS)
 
 > **Full step-by-step (Homebrew prerequisites + building the T-Head toolchain
