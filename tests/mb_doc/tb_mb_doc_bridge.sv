@@ -12,6 +12,10 @@ module tb_mb_doc_bridge;
     logic l_wr = 0, r_wr = 0;
     logic [3:0] l_reg = 0, r_reg = 0;
     logic [7:0] l_data = 0, r_data = 0;
+    // The native YM cores provide real-time envelope levels, while
+    // the VIA PB2 outputs deliver each chip's independent reset.
+    logic [4:0] l_env_level = 0, r_env_level = 0;
+    logic l_reset_n = 1'b1, r_reset_n = 1'b1;
 
     wire doc_wr;
     wire [7:0] doc_addr, doc_data;
@@ -33,6 +37,10 @@ module tb_mb_doc_bridge;
         .ay_l_data_i(l_data),
         .ay_r_wr_i(r_wr), .ay_r_reg_i(r_reg),
         .ay_r_data_i(r_data),
+        .ay_l_env_level_i(l_env_level),
+        .ay_r_env_level_i(r_env_level),
+        .ay_l_reset_n_i(l_reset_n),
+        .ay_r_reset_n_i(r_reset_n),
         .doc_wr_o(doc_wr), .doc_addr_o(doc_addr),
         .doc_data_o(doc_data),
         .ram_wr_o(ram_wr), .ram_addr_o(ram_addr),
@@ -44,8 +52,8 @@ module tb_mb_doc_bridge;
     integer write_count = 0, doc_count = 0;
     integer ram_busy = 0, ram_delay = 0;
     logic prev_ram_wr = 0;
-    logic [7:0] doc_addresses [0:127];
-    logic [7:0] doc_values [0:127];
+    logic [7:0] doc_addresses [0:255];
+    logic [7:0] doc_values [0:255];
 
     function automatic [7:0] wave(input [7:0] phase);
         reg [7:0] ramp;
@@ -92,7 +100,7 @@ module tb_mb_doc_bridge;
             if (doc_wr) begin
                 if (write_count != 64)
                     $fatal(1, "DOC command before preload complete");
-                if (doc_count < 128) begin
+                if (doc_count < 256) begin
                     doc_addresses[doc_count] <= doc_addr;
                     doc_values[doc_count] <= doc_data;
                 end
@@ -211,6 +219,44 @@ module tb_mb_doc_bridge;
             doc_values[68] !== 8'hFF)
             $fatal(1, "Period-zero frequency clamp incorrect");
 
+        // P3: native envelope input replaces the former permanent
+        // maximum-volume preview. The DOC must follow changing envelopes,
+        // including a zero step that halts the oscillator.
+        l_env_level = 5'd31;
+        ay_write(1'b0, 4'h8, 8'h10);
+        wait (doc_count >= 95);
+        @(negedge clk);
+        if (doc_addresses[93] !== 8'h40 ||
+            doc_values[93] !== 8'd208 ||
+            doc_values[94] !== 8'h10)
+            $fatal(1, "P3 envelope maximum did not reach DOC left A");
+
+        l_env_level = 5'd0;
+        wait (doc_count >= 119);
+        @(negedge clk);
+        if (doc_addresses[117] !== 8'h40 ||
+            doc_values[117] !== 8'h00 ||
+            doc_values[118] !== 8'h11)
+            $fatal(1, "P3 envelope zero failed to HALT DOC left A");
+
+        // P3: the external per-chip PSG reset must clear the AY shadows
+        // even when the software omits an explicit register-8 note-off.
+        ay_write(1'b0, 4'h8, 8'h0F);
+        wait (doc_count >= 143);
+        @(negedge clk);
+        if (doc_values[141] !== 8'd208)
+            $fatal(1, "P3 fixed-volume recovery after envelope failed");
+        l_reset_n = 1'b0;
+        repeat (3) @(negedge clk);
+        l_reset_n = 1'b1;
+        wait (doc_count >= 167);
+        @(negedge clk);
+        if (doc_addresses[165] !== 8'h40 ||
+            doc_values[165] !== 8'h00 ||
+            doc_values[166] !== 8'h11)
+            $fatal(1, "P3 PSG RESET failed to clear stale DOC note");
+
+        $display("PASS: native AY envelope level, zero-vol note-off, PB2 reset");
         $display("PASS: 64 waveform writes; 6 voice startup, stereo, ");
         $display("      continued phase, mute, and period-zero pitch clamp");
         $finish;
