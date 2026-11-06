@@ -3,7 +3,8 @@
 // P2 first-tone implementation: six pitched voices, 3L + 3R.
 // The DOC is exclusively owned by this core in MB mode.
 // All signals are synchronous to the A2FPGA 54 MHz logic clock.
-// AY envelopes and noise are deliberately NOT supported yet.
+// Reuse the native YM2149 envelope generators (registers 11-13,
+// all sixteen shapes and restart-on-write). AY noise is not yet modeled.
 //
 // The loader populates the first 256 bytes of native sound SDRAM
 // with a nonzero, offset-binary triangle waveform. DOC sample $00
@@ -24,6 +25,11 @@ module mb_doc_bridge #(
     input  logic        ay_r_wr_i,
     input  logic [3:0]  ay_r_reg_i,
     input  logic [7:0]  ay_r_data_i,
+    // Native YM2149 envelope timing and VIA-controlled PSG reset.
+    input  logic [4:0]  ay_l_env_level_i,
+    input  logic [4:0]  ay_r_env_level_i,
+    input  logic        ay_l_reset_n_i,
+    input  logic        ay_r_reset_n_i,
 
     output logic        doc_wr_o,
     output logic [7:0]  doc_addr_o,
@@ -91,6 +97,10 @@ module mb_doc_bridge #(
     wire [7:0] selected_mixer_w =
         ay_regs[selected_chip_w][7];
     wire tone_allowed_w = !selected_mixer_w[selected_channel_w];
+    wire [4:0] selected_env_level_w =
+        selected_chip_w ? ay_r_env_level_i : ay_l_env_level_i;
+    wire selected_reset_n_w =
+        selected_chip_w ? ay_r_reset_n_i : ay_l_reset_n_i;
 
     // 5-bit upper range can occur when dividend=93623 and P=1.
     // Saturate to DOC's maximum 16-bit frequency.
@@ -118,24 +128,42 @@ module mb_doc_bridge #(
         end
     endfunction
 
-    function automatic logic [7:0] ay_level(input logic [3:0] amp);
+    // YM2149's native 32-step DAC law, scaled to P2's 208 DOC-volume ceiling.
+    function automatic logic [7:0] ym_level(input logic [4:0] amp);
         case (amp)
-            4'd0:  ay_level = 8'd0;
-            4'd1:  ay_level = 8'd1;
-            4'd2:  ay_level = 8'd1;
-            4'd3:  ay_level = 8'd2;
-            4'd4:  ay_level = 8'd3;
-            4'd5:  ay_level = 8'd5;
-            4'd6:  ay_level = 8'd7;
-            4'd7:  ay_level = 8'd11;
-            4'd8:  ay_level = 8'd16;
-            4'd9:  ay_level = 8'd24;
-            4'd10: ay_level = 8'd35;
-            4'd11: ay_level = 8'd50;
-            4'd12: ay_level = 8'd72;
-            4'd13: ay_level = 8'd102;
-            4'd14: ay_level = 8'd146;
-            default: ay_level = 8'd208;
+            5'd0: ym_level = 8'd0;
+            5'd1: ym_level = 8'd1;
+            5'd2: ym_level = 8'd1;
+            5'd3: ym_level = 8'd2;
+            5'd4: ym_level = 8'd2;
+            5'd5: ym_level = 8'd2;
+            5'd6: ym_level = 8'd2;
+            5'd7: ym_level = 8'd3;
+            5'd8: ym_level = 8'd5;
+            5'd9: ym_level = 8'd6;
+            5'd10: ym_level = 8'd7;
+            5'd11: ym_level = 8'd8;
+            5'd12: ym_level = 8'd10;
+            5'd13: ym_level = 8'd11;
+            5'd14: ym_level = 8'd14;
+            5'd15: ym_level = 8'd15;
+            5'd16: ym_level = 8'd19;
+            5'd17: ym_level = 8'd22;
+            5'd18: ym_level = 8'd26;
+            5'd19: ym_level = 8'd30;
+            5'd20: ym_level = 8'd36;
+            5'd21: ym_level = 8'd43;
+            5'd22: ym_level = 8'd51;
+            5'd23: ym_level = 8'd58;
+            5'd24: ym_level = 8'd69;
+            5'd25: ym_level = 8'd83;
+            5'd26: ym_level = 8'd97;
+            5'd27: ym_level = 8'd111;
+            5'd28: ym_level = 8'd131;
+            5'd29: ym_level = 8'd157;
+            5'd30: ym_level = 8'd183;
+            5'd31: ym_level = 8'd208;
+            default: ym_level = 8'd208;
         endcase
     endfunction
 
@@ -165,10 +193,21 @@ module mb_doc_bridge #(
                      reg_index = reg_index + 1)
                     ay_regs[chip][reg_index] <= 8'h00;
         end else begin
-            if (ay_l_wr_i)
+            // Mockingboard software may stop a song by pulling VIA PB2 low
+            // rather than zeroing AY amplitude registers. Clear per-chip
+            // shadows so stale DOC notes cannot return after PSG RESET.
+            if (!ay_l_reset_n_i) begin
+                for (reg_index = 0; reg_index < 16; reg_index = reg_index + 1)
+                    ay_regs[0][reg_index] <= 8'h00;
+            end else if (ay_l_wr_i) begin
                 ay_regs[0][ay_l_reg_i] <= ay_l_data_i;
-            if (ay_r_wr_i)
+            end
+            if (!ay_r_reset_n_i) begin
+                for (reg_index = 0; reg_index < 16; reg_index = reg_index + 1)
+                    ay_regs[1][reg_index] <= 8'h00;
+            end else if (ay_r_wr_i) begin
                 ay_regs[1][ay_r_reg_i] <= ay_r_data_i;
+            end
         end
     end
 
@@ -236,10 +275,14 @@ module mb_doc_bridge #(
                     // Live AY shadow captures take effect at the next
                     // voice scan, not asynchronously in the DOC.
                     voice_tone_r <= tone_allowed_w;
+                    // AY amplitude bit 4 selects the actual, clocked 32-step
+                    // envelope from the existing YM2149 core. Fixed levels
+                    // share the logarithmic law; RESET/tone-off force mute.
                     voice_volume_r <=
-                        tone_allowed_w ?
-                        ay_level(selected_amp_w[4] ?
-                                 4'hF : selected_amp_w[3:0]) : 8'd0;
+                        (selected_reset_n_w && tone_allowed_w) ?
+                        ym_level(selected_amp_w[4] ? selected_env_level_w :
+                                 {selected_amp_w[3:0],selected_amp_w[3]}) :
+                        8'd0;
                     divisor_r <= (selected_period_w == 12'd0) ?
                                   12'd1 : selected_period_w;
                     dividend_r <= 17'd93623;
