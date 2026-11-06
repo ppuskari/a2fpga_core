@@ -39,7 +39,13 @@ module Mockingboard #(
     output logic [7:0] ay_l_data_o,
     output logic       ay_r_wr_o,
     output logic [3:0] ay_r_reg_o,
-    output logic [7:0] ay_r_data_o
+    output logic [7:0] ay_r_data_o,
+    // Reuse the existing YM2149 clocked envelope generators verbatim.
+    output wire [4:0] ay_l_env_level_o,
+    output wire [4:0] ay_r_env_level_o,
+    // The VIA drives real PSG RESET via port B bit 2.
+    output wire ay_l_reset_n_o,
+    output wire ay_r_reset_n_o
 );
 
     reg card_enable;
@@ -62,6 +68,8 @@ module Mockingboard #(
 
     wire [7:0] pb_l_o;
     wire [7:0] pb_r_o;
+    assign ay_l_reset_n_o = pb_l_o[2];
+    assign ay_r_reset_n_o = pb_r_o[2];
 
     wire [7:0] psg_r_i;
     wire [7:0] psg_r_o;
@@ -145,6 +153,7 @@ module Mockingboard #(
         .CHANNEL_A(psg_al_o),
         .CHANNEL_B(psg_bl_o),
         .CHANNEL_C(psg_cl_o),
+        .ENV_LEVEL(ay_l_env_level_o),
 
         .SEL (1'b0),
         .MODE(1'b0),
@@ -225,6 +234,7 @@ module Mockingboard #(
         .CHANNEL_A(psg_ar_o),
         .CHANNEL_B(psg_br_o),
         .CHANNEL_C(psg_cr_o),
+        .ENV_LEVEL(ay_r_env_level_o),
 
         .SEL (1'b0),
         .MODE(1'b0),
