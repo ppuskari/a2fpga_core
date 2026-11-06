@@ -1241,6 +1241,8 @@ wire [7:0] doc_128k_status_w;
     wire mb_ay_l_wr_w, mb_ay_r_wr_w;
     wire [3:0] mb_ay_l_reg_w, mb_ay_r_reg_w;
     wire [7:0] mb_ay_l_data_w, mb_ay_r_data_w;
+    wire [4:0] mb_ay_l_env_level_w, mb_ay_r_env_level_w;
+    wire mb_ay_l_reset_n_w, mb_ay_r_reset_n_w;
 
     Mockingboard #(
         .ENABLE(MOCKINGBOARD_ENABLE | AUDIO_MODE_MB_DOC),
@@ -1261,7 +1263,11 @@ wire [7:0] doc_128k_status_w;
         .ay_l_data_o(mb_ay_l_data_w),
         .ay_r_wr_o(mb_ay_r_wr_w),
         .ay_r_reg_o(mb_ay_r_reg_w),
-        .ay_r_data_o(mb_ay_r_data_w)
+        .ay_r_data_o(mb_ay_r_data_w),
+        .ay_l_env_level_o(mb_ay_l_env_level_w),
+        .ay_r_env_level_o(mb_ay_r_env_level_w),
+        .ay_l_reset_n_o(mb_ay_l_reset_n_w),
+        .ay_r_reset_n_o(mb_ay_r_reset_n_w)
     );
 
     // Synthesize no bridge at all in normal GS mode.
@@ -1279,6 +1285,10 @@ wire [7:0] doc_128k_status_w;
                 .ay_r_wr_i(mb_ay_r_wr_w),
                 .ay_r_reg_i(mb_ay_r_reg_w),
                 .ay_r_data_i(mb_ay_r_data_w),
+                .ay_l_env_level_i(mb_ay_l_env_level_w),
+                .ay_r_env_level_i(mb_ay_r_env_level_w),
+                .ay_l_reset_n_i(mb_ay_l_reset_n_w),
+                .ay_r_reset_n_i(mb_ay_r_reset_n_w),
 
                 .doc_wr_o(mb_doc_wr_w),
                 .doc_addr_o(mb_doc_addr_w),
@@ -1567,13 +1577,41 @@ wire [15:0] audio_sample_word[1:0];
     end
     endfunction
 
-    wire hdmi_gain_clip_w =
-        hdmi_gain_would_saturate(
-            $signed(audio_sample_word_raw[0])
-        ) ||
-        hdmi_gain_would_saturate(
-            $signed(audio_sample_word_raw[1])
-        );
+    // The first Apple IIe/MB-DOC recording peaked at approximately -17.24
+    // dBFS with the normal 45/32 (+3 dB) HDMI gain. A gain of 8x directly
+    // on the raw PCM adds 15.05 dB relative to that baseline, making the
+    // recorded peak approximately -2.19 dBFS without distorting the native
+    // six-oscillator waveform. Clamp exceptional transients at -2 dBFS.
+    // The original +3 dB path remains unchanged for non-MB-DOC builds.
+    function automatic signed [15:0] mb_doc_gain_minus_2db;
+        input signed [15:0] sample;
+        logic signed [19:0] scaled;
+    begin
+        scaled = $signed({{4{sample[15]}},sample}) <<< 3;
+        if (scaled > 20'sd26028)
+            mb_doc_gain_minus_2db = 16'sd26028;
+        else if (scaled < -20'sd26028)
+            mb_doc_gain_minus_2db = -16'sd26028;
+        else
+            mb_doc_gain_minus_2db = scaled[15:0];
+    end
+    endfunction
+
+    function automatic mb_doc_gain_would_limit;
+        input signed [15:0] sample;
+        logic signed [19:0] scaled;
+    begin
+        scaled = $signed({{4{sample[15]}},sample}) <<< 3;
+        mb_doc_gain_would_limit =
+            (scaled > 20'sd26028) || (scaled < -20'sd26028);
+    end
+    endfunction
+
+    wire hdmi_gain_clip_w = AUDIO_MODE_MB_DOC ?
+        (mb_doc_gain_would_limit($signed(audio_sample_word_raw[0])) ||
+         mb_doc_gain_would_limit($signed(audio_sample_word_raw[1]))) :
+        (hdmi_gain_would_saturate($signed(audio_sample_word_raw[0])) ||
+         hdmi_gain_would_saturate($signed(audio_sample_word_raw[1])));
 
     // One-second HDMI post-gain clipping history. Capture clipping only on
     // the 44.1 kHz audio sample strobe, then collapse each 125 ms slice to
@@ -1614,15 +1652,13 @@ wire [15:0] audio_sample_word[1:0];
         end
     end
 
-    assign audio_sample_word[0] =
-        hdmi_gain_plus_3db(
-            $signed(audio_sample_word_raw[0])
-        );
+    assign audio_sample_word[0] = AUDIO_MODE_MB_DOC ?
+        mb_doc_gain_minus_2db($signed(audio_sample_word_raw[0])) :
+        hdmi_gain_plus_3db($signed(audio_sample_word_raw[0]));
 
-    assign audio_sample_word[1] =
-        hdmi_gain_plus_3db(
-            $signed(audio_sample_word_raw[1])
-        );
+    assign audio_sample_word[1] = AUDIO_MODE_MB_DOC ?
+        mb_doc_gain_minus_2db($signed(audio_sample_word_raw[1])) :
+        hdmi_gain_plus_3db($signed(audio_sample_word_raw[1]));
 
 
 
