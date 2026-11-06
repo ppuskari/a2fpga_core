@@ -268,6 +268,10 @@ Regardless of board variant, entering boot mode (UPDATE button) lets you reflash
 2. **JTAGSEL_N recovery**: Pull FPGA JTAGSEL_N low before power-up to force JTAG active, overriding bitstream pin config.
 3. **S2 button JTAG recovery**: If openFPGALoader reports "no device found" after flashing firmware, disconnect the board, hold S2, reconnect while holding, release, then retry. (Reported in FPGA-Companion issue #79.)
 
+## Windows 10/11 build, cross-compile and safe Stage 1/Stage 2 flashing
+
+For the hardware-validated **PowerShell 5.1 + VS Code** path (including the pinned SDK/toolchain, fused/unfused eFuse detection, factory Stage 1 recovery, host Stage 2 programming, flash readback, and the 15-second MCU display timeout), see **[Windows build and flashing guide](docs/windows_build_setup.md)**.
+
 ## Build Environment Setup (macOS)
 
 > **Full step-by-step (Homebrew prerequisites + building the T-Head toolchain
