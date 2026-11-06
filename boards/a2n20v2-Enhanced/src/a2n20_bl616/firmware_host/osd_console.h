@@ -17,10 +17,12 @@
 #define _OSD_CONSOLE_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 void osd_log(const char *fmt, ...);   /* append one status line (thread-safe) */
 void osd_console_show(void);          /* take over the screen, show the log */
 void osd_console_hide(void);          /* return the screen to the Apple II */
+void osd_console_hide_if_idle(uint32_t timeout_us); /* auto-dismiss boot console */
 
 /* While locked out (the menu owns the screen), show() requests from other
  * threads are ignored and osd_log() only buffers — the menu is never stomped. */
