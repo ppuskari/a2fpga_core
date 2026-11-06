@@ -51,6 +51,7 @@ module YM2149
 	output [7:0] CHANNEL_A, // PSG Output channel A
 	output [7:0] CHANNEL_B, // PSG Output channel B
 	output [7:0] CHANNEL_C, // PSG Output channel C
+	output [4:0] ENV_LEVEL, // Native 32-step envelope level for MB-DOC bridge
 
 	input        SEL,
 	input        MODE,
@@ -225,6 +226,7 @@ always @(posedge CLK) begin
 end
 
 reg [4:0] env_vol;
+assign ENV_LEVEL = env_vol; // observe the existing AY registers 11-13/shape timer
 
 wire is_bot    = (env_vol == 5'b00000);
 wire is_bot_p1 = (env_vol == 5'b00001);
