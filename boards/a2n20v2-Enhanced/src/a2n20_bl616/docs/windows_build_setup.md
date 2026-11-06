@@ -1,5 +1,8 @@
 # BL616 Enhanced firmware: Windows 10/11, PowerShell 5.1, VS Code, and safe two-stage flashing
 
+> **SUPERSEDED — DO NOT BUILD THIS BRANCH FOR A USB-KEYBOARD-CONTROLLED MCU.** This older branch lacks `usbh_hidinput.c`, the `CONFIG_CHERRYUSB_HOST_HID` setting, and keyboard polling in `main.c`; as a result, Tab does not work. Use the corrected [upstream HID + 15-second timeout guide](https://github.com/ppuskari/a2fpga_core/blob/petar/mcu-timeout-hid-upstream-20261106/boards/a2n20v2-Enhanced/src/a2n20_bl616/docs/windows_build_setup.md) and branch `petar/mcu-timeout-hid-upstream-20261106` instead. You can restore a working keyboard immediately by flashing the stock upstream Enhanced host Stage 2 firmware at `0x40000`. Keep Stage 1 unchanged.
+
+
 This is a **Windows-native** setup and deployment guide for the Tang Nano 20K / A2N20V2-Enhanced BL616 MCU. No WSL, Linux, or macOS is required. All PowerShell commands below occupy **one physical line** and work in PowerShell 5.1.
 
 **Hardware validation (6 November 2026):** Stage 1 and Stage 2 were programmed and verified by flash readback on an **AES-128 fused BL616**, using Windows COM13. The Enhanced FPGA/MCU subsequently operated on an **Apple IIe**, with virtual Mockingboard in slot 4 and native YM2149 audio over HDMI. The separate **15-second MCU console/menu idle-timeout** change on `petar/mcu-screen-idle-timeout-15s` was then compiled, deployed, and reported **working on hardware**. This is a field result for that setup, not a guarantee for other boards or toolchain versions.
