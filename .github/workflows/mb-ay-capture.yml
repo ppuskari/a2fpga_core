@@ -24,6 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Icarus Verilog
-        run: sudo apt-get update && sudo apt-get install -y iverilog
+        run: sudo apt-get update && sudo apt-get install -y iverilog verilator
       - name: Simulate AY capture and six-voice DOC bridge
         run: sh tests/mb_doc/run_capture_test.sh
+      - name: Simulate native 32-step YM2149 envelope and retrigger
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_ym2149_envelope hdl/support/YM2149.sv tests/mb_doc/tb_ym2149_envelope.sv
+          ./obj_dir/Vtb_ym2149_envelope
