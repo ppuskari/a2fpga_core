@@ -5,6 +5,7 @@ on:
     branches:
       - petar/mockingboard-ensoniq-p0
       - petar/mb-doc-p3-envelope-gain
+      - petar/mb-doc-piano-wavetable-20261106
     paths:
       - "hdl/mockingboard/mockingboard.sv"
       - "hdl/support/YM2149.sv"
