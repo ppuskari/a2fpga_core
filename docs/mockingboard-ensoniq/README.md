@@ -1,6 +1,6 @@
 # Mockingboard-driven Ensoniq DOC5503 for A2N20v2-Enhanced
 
-Status: **P2A six-voice bridge HDL committed, but NOT simulated, Gowin-synthesized, or tested on hardware.** MB-DOC audio is designed but not verified; AY envelopes/noise and layering remain future work. Exclusive-mode design (2026-10-19).
+Status (2026-11-06): **P2 hardware-proven on Apple IIe**: six-voice stereo DOC music driven by unmodified Mockingboard software was recorded over HDMI. The P2 signal still had held notes and lacked AY noise/envelope translation. **P3 envelope + -2 dBFS HDMI peak-gain RTL is implemented and Icarus/Verilator regression tests PASS; Gowin synthesis and P3 physical testing remain pending.** Exclusive single-DOC ownership is unchanged.
 
 ## Objective
 
@@ -25,7 +25,8 @@ The initial selection will be compile-time via separate bitstreams, not an untes
 - Golden release tag: `a2n20v2-enhanced-doc128k-p0x-golden-20260816`
 - Parent SHA: `eb6d2726fd252a54fe84739cb767361adf11d657`
 - Golden FPGA SHA256: `7C011DCCFD3955478307C568AA70BEBF305FAC11770B1289229B1FF593AA9169`
-- Experimental branch: `petar/mockingboard-ensoniq-p0`
+- Experimental P2 (hardware-proven) branch: `petar/mockingboard-ensoniq-p0`
+- Experimental P3 (simulated, awaiting Gowin/hardware) branch: `petar/mb-doc-p3-envelope-gain`
 
 **Do not edit the golden branch.** Every experimental .fs must be distinguishable and reversible.
 
@@ -76,14 +77,14 @@ MB-DOC requires a deterministic waveform/patch **preload** into the same existin
 - **P0: Architecture (done).** Preserve the gold release, establish this experimental branch and settle mutually exclusive single-DOC ownership.
 - **P1: Compatibility / mode skeleton (HDL committed; verification pending).** Add build-time GS/MB mode selector defaulting to GS, bring up slot 4 dual VIA/AY, capture AY write events, ensure GS host cannot write to the DOC in MB mode **without disabling DOC memory reads**. Verify simulation and resource/timing costs.
 - **P2A: Six-voice DOC bridge (HDL committed; verification pending).** The bridge preloads a 256-byte nonzero triangle wave through the GLU SRAM port, selects eight DOC slots, and maps six AY tones/volumes (3L+3R) onto DOC oscillators 0-5. See [P2A-SIX-VOICE.md](P2A-SIX-VOICE.md). Envelopes/noise not yet implemented.
-- **P3: Hardware-verify audible MB-DOC.** Run committed AY capture and bridge simulations, complete Gowin synthesis/PnR, and verify actual sustained tones and stereo on hardware. Implement AY noise and programmable envelopes after confirming the six-voice tone path.
+- **P3: Native envelopes, PSG-reset note-off, and calibrated HDMI gain (RTL and CI PASS; hardware pending).** Reuse the existing YM2149 envelope generator, scale MB-DOC PCM to an approximately -2 dBFS peak target, and retest the three musical selections on the Apple IIe. See [P3-ENVELOPE-VOLUME.md](P3-ENVELOPE-VOLUME.md). AY noise is still pending.
 - **P4: Hardware and golden regression.** Synthesize/PnR, test MB recognition/IRQ/audio and all native GS audio/128K Tool225 behavior in the *GS personality*, keep separate build artifacts and measured stats.
 - **P5: Enhanced instrument patches.** Full AY noise/envelope semantics and selectable local DOC patches, with optional layering *after* six-voice hardware validation.
 - **P6: SoundFont-to-DOC bank conversion.** Host-side SF2 sample extraction and DOC-compatible waveform-banking for local FPGA playback.
 - **P7: External FluidSynth backend.** Backend-neutral AY musical events over a timed transport to a capable external host running FluidSynth; first render to companion audio, with HDMI PCM return only if a safe stream is later built.
 - **P8: Sound profiles and startup selection.** Reproducible per-game/per-channel patches and safe reset-controlled switching among sound backends; preserve native GS's exclusive DOC mode.
 
-See [P1-CHECKLIST.md](P1-CHECKLIST.md), [P1-IMPLEMENTATION.md](P1-IMPLEMENTATION.md) and [RESOURCE-BASELINE.md](RESOURCE-BASELINE.md). The committed [AY capture test](../../tests/mb_doc/tb_mb_ay_capture.sv) and [CI workflow](../../.github/workflows/mb-ay-capture.yml) require execution; no passing result has yet been verified.
+See [P1-CHECKLIST.md](P1-CHECKLIST.md), [P1-IMPLEMENTATION.md](P1-IMPLEMENTATION.md), [RESOURCE-BASELINE.md](RESOURCE-BASELINE.md), and the [P3 deployment/verification guide](P3-ENVELOPE-VOLUME.md). Both the [AY/DOC Icarus tests](../../tests/mb_doc/run_capture_test.sh) and [native YM2149 Verilator test](../../tests/mb_doc/tb_ym2149_envelope.sv) passed in [GitHub Actions run 42303050639](https://github.com/ppuskari/a2fpga_core/actions/runs/42303050639).
 
 ## Initial acceptance
 
