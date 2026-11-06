@@ -7,8 +7,8 @@
 // all sixteen shapes and restart-on-write). AY noise is not yet modeled.
 //
 // The loader populates the first 256 bytes of native sound SDRAM
-// with a nonzero, offset-binary triangle waveform. DOC sample $00
-// means STOP (not zero amplitude), so every wavetable byte is nonzero.
+// with a nonzero, offset-binary piano-like looped PCM wavetable. DOC
+// sample $00 means STOP, so each of the 256 sample bytes is nonzero.
 //
 // No reconfiguration of the native IIgs/GS mode is performed here.
 module mb_doc_bridge #(
@@ -113,19 +113,82 @@ module mb_doc_bridge #(
     assign next_quotient_w =
         {quotient_r[15:0], subtract_valid_w};
 
-    function automatic logic [7:0] triangle_byte(
-        input logic [7:0] phase
-    );
-        logic [7:0] ramp;
-        begin
-            ramp = {phase[5:0], 1'b0};
-            case (phase[7:6])
-                2'b00: triangle_byte = 8'h81 + ramp;
-                2'b01: triangle_byte = 8'hFF - ramp;
-                2'b10: triangle_byte = 8'h7F - ramp;
-                default: triangle_byte = 8'h01 + ramp;
-            endcase
-        end
+    // PIANO-WAVETABLE EXPERIMENT: 256 bytes of original, modeled piano
+    // steady-state PCM (12 tuned partials). This is a compact *looped*
+    // timbre, NOT a multisample of a recorded acoustic piano and NOT an
+    // attack/sustain envelope. The native YM envelope still drives volume.
+    // Pack four consecutive unsigned offset-binary bytes in each little-
+    // endian SDRAM word. Do NOT store $00: the DOC interprets $00 as HALT.
+    // This case ROM is generated from a deterministic harmonic model.
+    // FNV-1a of 256 bytes, ascending address: 32'hB4D62B32.
+    function automatic logic [31:0] piano_word(input logic [5:0] index);
+        case (index)
+            6'd0: piano_word = 32'hA1968B7F;
+            6'd1: piano_word = 32'hC6BEB5AB;
+            6'd2: piano_word = 32'hDDD9D3CD;
+            6'd3: piano_word = 32'hE8E6E4E1;
+            6'd4: piano_word = 32'hEBEBEAE9;
+            6'd5: piano_word = 32'hEDECECEC;
+            6'd6: piano_word = 32'hEEEEEDED;
+            6'd7: piano_word = 32'hEDEEEEEE;
+            6'd8: piano_word = 32'hEBECECED;
+            6'd9: piano_word = 32'hE8E8E9EA;
+            6'd10: piano_word = 32'hE4E5E6E7;
+            6'd11: piano_word = 32'hE1E2E3E3;
+            6'd12: piano_word = 32'hDEDFDFE0;
+            6'd13: piano_word = 32'hD9DADBDC;
+            6'd14: piano_word = 32'hD4D5D7D8;
+            6'd15: piano_word = 32'hD1D1D2D3;
+            6'd16: piano_word = 32'hCECECFD0;
+            6'd17: piano_word = 32'hCBCCCCCD;
+            6'd18: piano_word = 32'hC6C7C8CA;
+            6'd19: piano_word = 32'hC0C2C3C5;
+            6'd20: piano_word = 32'hBABCBDBF;
+            6'd21: piano_word = 32'hB5B6B8B9;
+            6'd22: piano_word = 32'hB1B2B3B4;
+            6'd23: piano_word = 32'hACAEAFB0;
+            6'd24: piano_word = 32'hA7A9AAAB;
+            6'd25: piano_word = 32'hA2A3A5A6;
+            6'd26: piano_word = 32'h9C9E9FA1;
+            6'd27: piano_word = 32'h9597999B;
+            6'd28: piano_word = 32'h8C8F9193;
+            6'd29: piano_word = 32'h8184878A;
+            6'd30: piano_word = 32'h777A7C7F;
+            6'd31: piano_word = 32'h70717375;
+            6'd32: piano_word = 32'h6D6D6E6F;
+            6'd33: piano_word = 32'h6D6D6D6D;
+            6'd34: piano_word = 32'h6F6E6E6E;
+            6'd35: piano_word = 32'h6F6F6F6F;
+            6'd36: piano_word = 32'h6E6F6F6F;
+            6'd37: piano_word = 32'h6C6D6D6E;
+            6'd38: piano_word = 32'h67696A6B;
+            6'd39: piano_word = 32'h62636566;
+            6'd40: piano_word = 32'h5B5D5E60;
+            6'd41: piano_word = 32'h54565759;
+            6'd42: piano_word = 32'h4E505153;
+            6'd43: piano_word = 32'h494A4B4D;
+            6'd44: piano_word = 32'h44454647;
+            6'd45: piano_word = 32'h3E404142;
+            6'd46: piano_word = 32'h393A3C3D;
+            6'd47: piano_word = 32'h34353638;
+            6'd48: piano_word = 32'h2F303133;
+            6'd49: piano_word = 32'h2A2B2C2E;
+            6'd50: piano_word = 32'h25262729;
+            6'd51: piano_word = 32'h21222324;
+            6'd52: piano_word = 32'h1D1E1F20;
+            6'd53: piano_word = 32'h1A1B1C1C;
+            6'd54: piano_word = 32'h16171819;
+            6'd55: piano_word = 32'h13141415;
+            6'd56: piano_word = 32'h11111212;
+            6'd57: piano_word = 32'h10101010;
+            6'd58: piano_word = 32'h10101010;
+            6'd59: piano_word = 32'h12111111;
+            6'd60: piano_word = 32'h19171513;
+            6'd61: piano_word = 32'h2A25201C;
+            6'd62: piano_word = 32'h4A413831;
+            6'd63: piano_word = 32'h74695E53;
+            default: piano_word = 32'h80808080;
+        endcase
     endfunction
 
     // YM2149's native 32-step DAC law, scaled to P2's 208 DOC-volume ceiling.
@@ -171,12 +234,7 @@ module mb_doc_bridge #(
     // The SDRAM GLU port takes a 32-bit word address and byte lanes.
     assign ram_addr_o = {15'b0, wave_word_r};
     assign ram_byte_en_o = 4'hF;
-    assign ram_data_o = {
-        triangle_byte({wave_word_r, 2'b11}),
-        triangle_byte({wave_word_r, 2'b10}),
-        triangle_byte({wave_word_r, 2'b01}),
-        triangle_byte({wave_word_r, 2'b00})
-    };
+    assign ram_data_o = piano_word(wave_word_r);
     assign ram_wr_o = (state_r == RAM_ISSUE) ||
                        (state_r == RAM_WAIT);
 
