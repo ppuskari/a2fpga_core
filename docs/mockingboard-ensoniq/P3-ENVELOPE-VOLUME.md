@@ -4,6 +4,8 @@
 **Base:** `petar/mockingboard-ensoniq-p0` (preserved as the hardware-proven P2 first-musical-playback baseline)  
 **Validation:** Icarus bridge/capture RTL suite **and** the native YM2149 Verilator envelope test passed in [GitHub Actions run 42303050639](https://github.com/ppuskari/a2fpga_core/actions/runs/42303050639). **Gowin synthesis, timing, and physical Apple IIe playback have NOT yet been validated for P3.**
 
+> **FPGA branch only:** This P3 branch descends from the original P2 FPGA experiment and retains its **older BL616 MCU source**. **DO NOT rebuild or flash the BL616 MCU Stage 2 from this branch**, or USB HID Tab control may regress again. For the BL616 menu/keyboard and 15-second timeout, separately use the corrected `petar/mcu-timeout-hid-upstream-20261106` firmware branch. Stage 1 never needs to change for a P3 FPGA test.
+
 ## Motivation and measurements
 
 The original three-selection Apple IIe Mockingboard recording (`MockingboardTest1.wav`, 44.1 kHz stereo, 16-bit PCM) had an absolute maximum of **4,503 counts / 32,768 = -17.24 dBFS**. Its long sustained chords and absent noise explosion showed that P2 was making real polyphonic DOC music but lacked AY envelope-controlled note-off and noise synthesis.
