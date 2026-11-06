@@ -55,18 +55,9 @@ module tb_mb_doc_bridge;
     logic [7:0] doc_addresses [0:255];
     logic [7:0] doc_values [0:255];
 
-    function automatic [7:0] wave(input [7:0] phase);
-        reg [7:0] ramp;
-        begin
-            ramp = {phase[5:0],1'b0};
-            case (phase[7:6])
-                2'b00: wave = 8'h81 + ramp;
-                2'b01: wave = 8'hFF - ramp;
-                2'b10: wave = 8'h7F - ramp;
-                default: wave = 8'h01 + ramp;
-            endcase
-        end
-    endfunction
+    // Independent 256-byte image fingerprint. This detects a missing,
+    // truncated, lane-swapped or stale piano sample during SDRAM preload.
+    logic [31:0] sample_fnv = 32'h811C9DC5;
 
     // Pretend the SDRAM controller acknowledges exactly once.
     always @(posedge clk) begin
@@ -75,6 +66,7 @@ module tb_mb_doc_bridge;
             ram_busy <= 0;
             ram_delay <= 0;
             prev_ram_wr <= 0;
+            sample_fnv = 32'h811C9DC5;
         end else begin
             prev_ram_wr <= ram_wr;
             if (ram_wr && !prev_ram_wr) begin
@@ -82,11 +74,14 @@ module tb_mb_doc_bridge;
                     $fatal(1, "RAM double request");
                 if (ram_addr !== write_count || ram_byte_en !== 4'hF)
                     $fatal(1, "Bad RAM addr/lane %d %h", write_count, ram_addr);
-                for (integer lane=0; lane<4; lane=lane+1)
-                    if (ram_data[lane*8 +:8] !== wave(8'(write_count*4+lane))
-                        || ram_data[lane*8 +:8] == 8'h00)
-                        $fatal(1, "Bad triangle byte word=%d lane=%d data=%h",
-                               write_count, lane, ram_data[lane*8 +:8]);
+                for (integer lane=0; lane<4; lane=lane+1) begin
+                    if (ram_data[lane*8 +:8] == 8'h00)
+                        $fatal(1, "Piano PCM contains DOC stop marker word=%0d lane=%0d",
+                               write_count, lane);
+                    sample_fnv =
+                        (sample_fnv ^ {24'h0,ram_data[lane*8 +:8]}) *
+                        32'h01000193;
+                end
                 write_count <= write_count + 1;
                 ram_busy <= 1;
                 ram_delay <= 4;
@@ -100,6 +95,8 @@ module tb_mb_doc_bridge;
             if (doc_wr) begin
                 if (write_count != 64)
                     $fatal(1, "DOC command before preload complete");
+                if (sample_fnv !== 32'hB4D62B32)
+                    $fatal(1, "Piano PCM FNV32 mismatch: %h", sample_fnv);
                 if (doc_count < 256) begin
                     doc_addresses[doc_count] <= doc_addr;
                     doc_values[doc_count] <= doc_data;
@@ -257,7 +254,7 @@ module tb_mb_doc_bridge;
             $fatal(1, "P3 PSG RESET failed to clear stale DOC note");
 
         $display("PASS: native AY envelope level, zero-vol note-off, PB2 reset");
-        $display("PASS: 64 waveform writes; 6 voice startup, stereo, ");
+        $display("PASS: 256-byte piano PCM preload; 6 voice startup, stereo, ");
         $display("      continued phase, mute, and period-zero pitch clamp");
         $finish;
     end
