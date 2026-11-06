@@ -4,8 +4,10 @@ on:
   push:
     branches:
       - petar/mockingboard-ensoniq-p0
+      - petar/mb-doc-p3-envelope-gain
     paths:
       - "hdl/mockingboard/mockingboard.sv"
+      - "hdl/support/YM2149.sv"
       - "boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv"
       - "boards/a2n20v2-Enhanced/hdl/top.sv"
       - "hdl/sound/sound_glu.sv"
