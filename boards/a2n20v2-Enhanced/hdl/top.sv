@@ -1271,7 +1271,9 @@ wire [7:0] doc_128k_status_w;
     // The document/golden IIgs Sound GLU remains in sole control.
     generate
         if (AUDIO_MODE_MB_DOC) begin : gen_mb_doc_audio
-            mb_doc_bridge bridge (
+            // Diagnostic only: turn off the newly introduced PSG-reset gate
+            // and shadow clearing, retaining P3 envelope + HDMI gain logic.
+            mb_doc_bridge #(.DIAG_IGNORE_PSG_RESET(1'b1)) bridge (
                 .clk_i(clk_logic_w),
                 .reset_n_i(system_reset_n_w),
                 .sdram_ready_i(sdram_init_complete),
