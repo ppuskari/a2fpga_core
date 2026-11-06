@@ -13,7 +13,10 @@
 // No reconfiguration of the native IIgs/GS mode is performed here.
 module mb_doc_bridge #(
     parameter int HOST_SPACING_CYCLES = 160,
-    parameter int SCAN_PAUSE_CYCLES   = 4096
+    parameter int SCAN_PAUSE_CYCLES   = 4096,
+    // Diagnostic only: bypass P3 PSG reset mute/shadow clear.
+    // Keep default OFF so existing reset regression remains meaningful.
+    parameter bit DIAG_IGNORE_PSG_RESET = 1'b0
 ) (
     input  logic        clk_i,
     input  logic        reset_n_i,
@@ -196,13 +199,13 @@ module mb_doc_bridge #(
             // Mockingboard software may stop a song by pulling VIA PB2 low
             // rather than zeroing AY amplitude registers. Clear per-chip
             // shadows so stale DOC notes cannot return after PSG RESET.
-            if (!ay_l_reset_n_i) begin
+            if (!DIAG_IGNORE_PSG_RESET && !ay_l_reset_n_i) begin
                 for (reg_index = 0; reg_index < 16; reg_index = reg_index + 1)
                     ay_regs[0][reg_index] <= 8'h00;
             end else if (ay_l_wr_i) begin
                 ay_regs[0][ay_l_reg_i] <= ay_l_data_i;
             end
-            if (!ay_r_reset_n_i) begin
+            if (!DIAG_IGNORE_PSG_RESET && !ay_r_reset_n_i) begin
                 for (reg_index = 0; reg_index < 16; reg_index = reg_index + 1)
                     ay_regs[1][reg_index] <= 8'h00;
             end else if (ay_r_wr_i) begin
@@ -279,7 +282,7 @@ module mb_doc_bridge #(
                     // envelope from the existing YM2149 core. Fixed levels
                     // share the logarithmic law; RESET/tone-off force mute.
                     voice_volume_r <=
-                        (selected_reset_n_w && tone_allowed_w) ?
+                        ((DIAG_IGNORE_PSG_RESET || selected_reset_n_w) && tone_allowed_w) ?
                         ym_level(selected_amp_w[4] ? selected_env_level_w :
                                  {selected_amp_w[3:0],selected_amp_w[3]}) :
                         8'd0;
