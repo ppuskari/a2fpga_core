@@ -37,15 +37,12 @@ module top #(
     parameter bit [7:0] SUPERSPRITE_ID = 1,
     parameter bit SUPERSPRITE_FORCE_VDP_OVERLAY = 0,
 
-    // 0 = golden native IIgs/GS sound; 1 = experimental MB-DOC.
-    // Synthesis-time only; selecting mode requires reprogramming.
-    // Define MB_DOC_EXPERIMENT for a temporary MB firmware build,
-    // or override AUDIO_MODE_MB_DOC in the Gowin top parameters.
-`ifdef MB_DOC_EXPERIMENT
+    // P3 HARDWARE DIAGNOSTIC BUILD: MB-DOC mode defaults ON deliberately.
+    // This branch MUST NOT be used as the native Apple IIgs sound baseline.
+    // The original P3 branch is preserved separately with MB-DOC default OFF.
+    // Verify synthesis properties; an explicit Gowin top override to 0
+    // would still disable this parameter (remove such an override).
     parameter bit AUDIO_MODE_MB_DOC = 1'b1,
-`else
-    parameter bit AUDIO_MODE_MB_DOC = 1'b0,
-`endif
     parameter bit MOCKINGBOARD_ENABLE = 0,
     parameter bit [7:0] MOCKINGBOARD_ID = 2,
 
