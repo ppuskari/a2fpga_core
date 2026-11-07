@@ -55,7 +55,7 @@ module tb_mb_doc_bridge;
     logic [7:0] doc_addresses [0:255];
     logic [7:0] doc_values [0:255];
 
-    // Independent 256-byte image fingerprint. This detects a missing,
+    // Independent 8192-byte SynthLAB Piano C3 fingerprint. This detects a missing,
     // truncated, lane-swapped or stale piano sample during SDRAM preload.
     logic [31:0] sample_fnv = 32'h811C9DC5;
 
@@ -70,7 +70,7 @@ module tb_mb_doc_bridge;
         end else begin
             prev_ram_wr <= ram_wr;
             if (ram_wr && !prev_ram_wr) begin
-                if (ram_busy || write_count >= 64)
+                if (ram_busy || write_count >= 2048)
                     $fatal(1, "RAM double request");
                 if (ram_addr !== write_count || ram_byte_en !== 4'hF)
                     $fatal(1, "Bad RAM addr/lane %d %h", write_count, ram_addr);
@@ -93,9 +93,9 @@ module tb_mb_doc_bridge;
                 end else ram_delay <= ram_delay - 1;
             end
             if (doc_wr) begin
-                if (write_count != 64)
+                if (write_count != 2048)
                     $fatal(1, "DOC command before preload complete");
-                if (sample_fnv !== 32'hB4D62B32)
+                if (sample_fnv !== 32'hB4AF4568)
                     $fatal(1, "Piano PCM FNV32 mismatch: %h", sample_fnv);
                 if (doc_count < 256) begin
                     doc_addresses[doc_count] <= doc_addr;
@@ -157,14 +157,14 @@ module tb_mb_doc_bridge;
         wait (active && doc_count >= 43);
         @(negedge clk);
 
-        if (write_count != 64 || doc_count < 43)
+        if (write_count != 2048 || doc_count < 43)
             $fatal(1, "Startup incomplete %d / %d",write_count,doc_count);
         if (doc_addresses[0] !== 8'hE1 || doc_values[0] !== 8'h0E)
             $fatal(1, "Osc enable incorrect");
         for (integer v=0;v<6;v=v+1) begin
             integer off, expect_fc;
             off = 1 + v*7;
-            expect_fc = 93623 / period_for(v);
+            expect_fc = (93623 / period_for(v)) * 4;
             if (doc_addresses[off] !== 8'(8'hA0+v) ||
                 doc_values[off] !== (v < 3 ? 8'h11 : 8'h01))
                 $fatal(1, "Voice %0d initial HALT bad",v);
@@ -172,7 +172,7 @@ module tb_mb_doc_bridge;
                 doc_values[off+1] !== 8'h00)
                 $fatal(1, "Voice %0d WTP bad",v);
             if (doc_addresses[off+2] !== 8'(8'hC0+v) ||
-                doc_values[off+2] !== 8'h00)
+                doc_values[off+2] !== 8'h2F)
                 $fatal(1, "Voice %0d RTS bad",v);
             if (doc_addresses[off+3] !== 8'(v) ||
                 doc_values[off+3] !== 8'(expect_fc))
@@ -254,7 +254,7 @@ module tb_mb_doc_bridge;
             $fatal(1, "P3 PSG RESET failed to clear stale DOC note");
 
         $display("PASS: native AY envelope level, zero-vol note-off, PB2 reset");
-        $display("PASS: 256-byte piano PCM preload; 6 voice startup, stereo, ");
+        $display("PASS: authentic 8KB SynthLAB Piano C3 PCM; 6 voice startup, stereo, ");
         $display("      continued phase, mute, and period-zero pitch clamp");
         $finish;
     end
