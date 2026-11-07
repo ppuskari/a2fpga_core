@@ -83,6 +83,7 @@ module mb_doc_bridge #(
     logic [7:0] voice_volume_r;
     logic voice_tone_r;
     logic [11:0] prev_period_r [0:5];
+    logic [3:0] prev_amp_r [0:5];
     logic [2:0] prev_zone_r [0:5];
     logic prev_active_r [0:5];
     logic [7:0] piano_env_r [0:5];
@@ -170,8 +171,14 @@ module mb_doc_bridge #(
     // 1-count-per-IRQ pitch glides, whose sound must NOT be retriggered.
     wire note_step_w = old_period_w >= 12'd2 &&
         ({5'b0,period_delta_w} << 5) >= {5'b0,old_period_w};
+    // Music Construction Set can articulate successive SAME-PITCH notes by
+    // stepping its software volume upward, without ever writing AY R13.
+    // Re-strike only on a material upward amplitude step (>=3/15).
+    wire amp_attack_w = !selected_amp_w[4] &&
+        ({1'b0,selected_amp_w[3:0]} >=
+         ({1'b0,prev_amp_r[voice_r]} + 5'd3));
     wire note_restart_w = selected_note_active_w &&
-        (!prev_active_r[voice_r] || note_step_w ||
+        (!prev_active_r[voice_r] || note_step_w || amp_attack_w ||
          selected_zone_w != prev_zone_r[voice_r]);
 
     // Bypass the piano for genuinely noise-driven AY effects, the
@@ -314,6 +321,7 @@ module mb_doc_bridge #(
             note_restart_r    <= 1'b0;
             for (vi=0;vi<6;vi=vi+1) begin
                 prev_period_r[vi] <= 12'd0;
+                prev_amp_r[vi]    <= 4'd0;
                 prev_zone_r[vi]   <= 3'd3;
                 prev_active_r[vi] <= 1'b0;
                 piano_env_r[vi]   <= 8'd0;
@@ -375,6 +383,7 @@ module mb_doc_bridge #(
                     note_restart_r <= note_restart_w;
                     prev_active_r[voice_r] <= selected_note_active_w;
                     prev_period_r[voice_r] <= selected_period_w;
+                    prev_amp_r[voice_r] <= selected_amp_w[4] ? 4'd0 : selected_amp_w[3:0];
                     prev_zone_r[voice_r] <= selected_zone_w;
                     if (!selected_note_active_w) begin
                         piano_env_r[voice_r] <= 8'd0;
