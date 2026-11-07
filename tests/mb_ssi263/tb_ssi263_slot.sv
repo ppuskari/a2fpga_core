@@ -7,7 +7,7 @@
 module tb_ssi263_slot;
     reg clk=0;
     always #5 clk=~clk;
-    reg reset_n=0, en=1, sel=0, tick=0, rw_n=1;
+    reg reset_n=0, en=1, sel=0, tick=0, rw_n=1, data_strobe=0;
     reg [7:0] addr=0, data=0;
     wire speech_sel, speech_rd, ca1_n, powered;
     wire [7:0] speech_data;
@@ -19,6 +19,7 @@ module tb_ssi263_slot;
     ssi263_slot dut (
         .clk_i(clk), .reset_n_i(reset_n), .enabled_i(en),
         .card_io_sel_i(sel), .xck_tick_i(tick),
+        .data_in_strobe_i(data_strobe),
         .rw_n_i(rw_n), .card_addr_i(addr), .data_i(data),
         .speech_selected_o(speech_sel), .speech_read_o(speech_rd),
         .speech_data_o(speech_data), .via_ca1_o(ca1_n),
@@ -29,8 +30,11 @@ module tb_ssi263_slot;
     task automatic write_reg(input [7:0] addr_in, input [7:0] value);
         begin
             @(negedge clk);
-            sel=1; rw_n=0; addr=addr_in; data=value;
-            repeat(4) @(negedge clk); // one *bus cycle*, not four writes
+            sel=1; rw_n=0; addr=addr_in; data=8'hA5;
+            repeat(3) @(negedge clk); // early address phase has stale data
+            data=value; data_strobe=1;
+            @(negedge clk); data_strobe=0;
+            repeat(2) @(negedge clk);
             sel=0; rw_n=1;
             repeat(4) @(negedge clk);
         end
@@ -82,8 +86,11 @@ module tb_ssi263_slot;
             $fatal(1,"Expected falling-edge CA1 request at 8192 XCKs");
 
         sel=1; addr=8'h47; rw_n=1; #1;
-        if (!speech_rd || speech_data !== 8'h80)
-            $fatal(1,"SSI A/R D7 status missing at mirrored register");
+        if (!speech_rd || speech_data !== 8'h0F)
+            $fatal(1,"P3 SSI R3 diagnostic readback failed");
+        addr=8'h40; #1;
+        if (speech_data !== 8'h80)
+            $fatal(1,"SSI A/R D7 status missing at primary register");
         sel=0; @(negedge clk);
 
         // Writing R0 acknowledges request, starts a fresh phoneme.
