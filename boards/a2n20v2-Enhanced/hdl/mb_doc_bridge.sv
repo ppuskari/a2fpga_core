@@ -15,7 +15,11 @@
 // No reconfiguration of the native IIgs/GS mode is performed here.
 module mb_doc_bridge #(
     parameter int HOST_SPACING_CYCLES = 160,
-    parameter int SCAN_PAUSE_CYCLES   = 4096
+    parameter int SCAN_PAUSE_CYCLES   = 4096,
+    // Pitch A/B knob (same original 1024 bytes):
+    // 2 = old low sustain (RTS $12), 1 = +1 octave (RTS $11),
+    // 0 = +2 octaves (RTS $10). WTS stays 2 in all three cases.
+    parameter logic [2:0] SUSTAIN_RES = 3'd1
 ) (
     input  logic        clk_i,
     input  logic        reset_n_i,
@@ -76,9 +80,12 @@ module mb_doc_bridge #(
     // DOC frame = 7.15909 MHz / (8 * (8+2)).
     // FC ~= (1.022727 MHz / (16*P)) * 131072 / DOCframe
     //    ~= 93623/P for ONE period of the old 256-byte waveform.
-    // Sustain PCM is 1024 bytes and contains roughly four base cycles.
-    // WTS2/RES2 adjusts accumulator scale by 4 to match that length.
-    // FC = 93623/P as in the original 256-byte one-cycle version.
+    // Sustain PCM is 1024 bytes, but its non-identical cycles have strong
+    // subharmonics. The original RES2 setting produces a four-times lower
+    // table repetition rate than RES0. Expose RES as a hardware A/B
+    // tuning experiment rather than assuming that the 4th spectral
+    // partial is necessarily the perceptual fundamental.
+    // FC stays 93623/P; RTS/SUSTAIN_RES determines the octave shift.
     logic [16:0] dividend_r, quotient_r, remainder_r;
     logic [16:0] subtract_w, shifted_remainder_w;
     logic [4:0] division_count_r;
@@ -299,7 +306,7 @@ module mb_doc_bridge #(
                     quotient_r <= next_quotient_w;
                     division_count_r <= division_count_r - 1'b1;
                     if (division_count_r == 5'd1) begin
-                        // WTS2+RES2 restores the unscaled AY pitch conversion.
+                        // Keep FC unchanged; vary only the DOC resolution in RTS.
                         voice_freq_r <= next_quotient_w[16] ?
                                         16'hFFFF :
                                         next_quotient_w[15:0];
@@ -324,7 +331,7 @@ module mb_doc_bridge #(
                         end
                         3'd2: begin
                             cmd_addr_r <= 8'hC0 + {5'b0, voice_r};
-                            cmd_data_r <= 8'h12; // WTS2 = 1KB, RES2
+                            cmd_data_r <= {2'b00, 3'd2, SUSTAIN_RES}; // WTS2=1KB; RES0..2
                         end
                         3'd3: begin
                             cmd_addr_r <= 8'h00 + {5'b0, voice_r};
