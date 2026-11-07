@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract authentic 1024-byte SynthLAB ~Piano C3 sustain into a Gowin ROM .mem.
+"""Extract all seven authentic SynthLAB piano sustains into a Gowin ROM .mem.
 
 Requires the original Apple IIgs System 6.0.4 SynthLAB ProDOS-order disk image.
 --download fetches it from a public archive; --disk accepts a local image.
@@ -15,9 +15,20 @@ import urllib.request
 DISK_URL = ("https://raw.githubusercontent.com/gungwald/apple-ii-dev/main/"
             "var/apple2gs/Apple_IIGS_System_6.0.4/PO%20Disk%20Images/synthLAB.po")
 DISK_MD5 = "fa4f143dd899d0cc4c8ed9c9e41b7d37"
-SAMPLE_FNV = 0x430E4B0A
+SAMPLE_FNV = 0x170BB8B3  # FNV of the complete packed 5632-byte ROM
+# Original SynthLAB wave-definition indexes; packed into consecutive DOC pages.
+# These are SUSTAIN waves only. The 8KB hammer attacks are not looped.
+SUSTAIN_WAVES = [
+    (1, "~Piano C1", 0x1400, 2, 0x522BF29E),
+    (3, "~Piano G1", 0x1000, 2, 0x36D4FEED),
+    (5, "~Piano E2", 0x0400, 2, 0x258A0E23),
+    (7, "~Piano C3", 0x1800, 2, 0x430E4B0A),
+    (9, "~Piano B3", 0x1C00, 1, 0xA0AF32B8),
+    (11, "~Piano F4", 0x1E00, 1, 0xD8ED309B),
+    (13, "~Piano D5", 0x0800, 1, 0xA202699A),
+]
 DEFAULT_OUTPUT = (Path(__file__).resolve().parents[1]
-                  / "boards/a2n20v2-Enhanced/hdl/piano_c3_sustain.mem")
+                  / "boards/a2n20v2-Enhanced/hdl/piano_multisustain.mem")
 
 
 def u16(buf, off):
@@ -90,22 +101,26 @@ def extract(disk):
         raise ValueError("Not a version 1 Apple MIDI Synth Wave file")
     bank_offset = u16(wavefile, 6)
     valid_waves = u16(wavefile, 0x18)
-    if bank_offset != 0x900 or valid_waves < 8:
+    if bank_offset != 0x900 or valid_waves < 14:
         raise ValueError("Unexpected SynthLAB Wave header")
-    entry = wavefile[0x100 + 7 * 32:0x100 + 8 * 32]
-    name = entry[1:1 + entry[0]].decode("ascii")
-    address = u16(entry, 16)
-    size_code = entry[19]
-    if (name, address, size_code) != ("~Piano C3", 0x1800, 2):
-        raise ValueError(f"Unexpected wave definition {name}, address={address}, size={size_code}")
-    pcm = wavefile[bank_offset + address:bank_offset + address + 1024]
-    if len(pcm) != 1024 or 0 in pcm:
-        raise ValueError("Invalid sample length or forbidden DOC zero byte")
-    hash32 = fnv32(pcm)
-    if hash32 != SAMPLE_FNV:
-        raise ValueError(f"Unexpected Piano C3 PCM hash {hash32:08X}")
-    return pcm
-
+    packed = bytearray()
+    for index, expected_name, expected_addr, expected_size, expected_hash in SUSTAIN_WAVES:
+        entry = wavefile[0x100 + index * 32:0x100 + (index + 1) * 32]
+        name = entry[1:1 + entry[0]].decode("ascii")
+        address = u16(entry, 16)
+        size_code = entry[19]
+        if (name, address, size_code) != (expected_name, expected_addr, expected_size):
+            raise ValueError(f"Unexpected wave {index}: {name}, address={address:x}, size={size_code}")
+        length = 256 << size_code
+        pcm = wavefile[bank_offset + address:bank_offset + address + length]
+        if len(pcm) != length or 0 in pcm:
+            raise ValueError(f"Invalid DOC PCM for {name}")
+        if fnv32(pcm) != expected_hash:
+            raise ValueError(f"Wrong PCM checksum for {name}: {fnv32(pcm):08X}")
+        packed.extend(pcm)
+    if len(packed) != 5632 or fnv32(packed) != SAMPLE_FNV:
+        raise ValueError(f"Wrong packed sustain checksum {fnv32(packed):08X}")
+    return bytes(packed)
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
@@ -123,8 +138,8 @@ def main():
     opts.out.parent.mkdir(parents=True, exist_ok=True)
     opts.out.write_text("".join(f"{int.from_bytes(pcm[i:i+4], 'little'):08X}\n"
                                 for i in range(0, len(pcm), 4)), encoding="ascii")
-    print("Verified Apple SynthLAB Piano C3; 1024 bytes, 256 words, "
-          "DOC size=1K, FNV32=430E4B0A, no zero samples.")
+    print("Verified seven Apple SynthLAB sustain zones; 5632 bytes, 1408 words, "
+          "packed FNV32=170BB8B3, no DOC stop bytes.")
     print(f"Generated: {opts.out.resolve()}")
     print("Do not commit the generated Apple PCM waveform file.")
 
