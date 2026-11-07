@@ -1,0 +1,113 @@
+// A2FPGA SSI-263 / Votrax SC-02 CONTROL FRONT-END, experimental P0.
+// Implemented independently in SystemVerilog using published chip behavior.
+// References: kue-m/mockingboard-pico (MIT, Kitcat 2026) and its vendored
+// ssi263-speech engine (MIT, Tamas Geczy 2026).
+//
+// NOT YET AN AUDIBLE SPEECH SYNTHESIZER. This models five CPU registers,
+// CTL power-down/start, approximate phoneme-duration timing, and A/R -> CA1.
+// Do not call this SSI speech support complete until the formant DSP is added.
+//
+// Clock: clk_i = A2FPGA logic clock; xck_tick_i = 1 pulse per Apple II PHI1
+// cycle (~1.02 MHz). A/R pin is active-low and is normally high.
+// Register addresses 4..7 alias register 4, per the source SSI model.
+module ssi263_control #(
+    parameter integer FRAME_XCK_CYCLES = 4096
+) (
+    input  wire       clk_i,
+    input  wire       reset_n_i,
+    input  wire       xck_tick_i,
+    input  wire       wr_i,
+    input  wire [2:0] addr_i,
+    input  wire [7:0] data_i,
+    output wire       ar_n_o,
+    output wire       status_d7_o,
+    output wire       powered_o,
+    output wire [5:0] phoneme_o,
+    output wire [3:0] amplitude_o,
+    output wire [7:0] inflection_o,
+    output wire [7:0] rate_o
+);
+    logic [7:0] r0, r1, r2, r3, r4;
+    logic [1:0] active_mode_r;
+    logic       active_r;
+    logic       request_r;
+    logic [18:0] ticks_left_r;
+
+    // At rate=0 the SSI frame spans 65536 XCK cycles (~64 ms);
+    // at rate=15 it spans 4096 XCK cycles (~4 ms).
+    // Operating mode 1 uses one frame; other modes use
+    // (4 - duration field) frames. This matches the reference C
+    // core's *timer equation*, not its early A/R lookahead heuristics.
+    function automatic [18:0] phoneme_ticks;
+        input [7:0] phoneme_reg;
+        input [7:0] rate_reg;
+        input [1:0] mode;
+        reg [4:0] frame_factor;
+        reg [2:0] duration_factor;
+        reg [18:0] frame_count;
+        begin
+            frame_factor = 5'd16 - {1'b0, rate_reg[7:4]};
+            duration_factor = (mode == 2'd1) ? 3'd1 :
+                              (3'd4 - {1'b0, phoneme_reg[7:6]});
+            frame_count = FRAME_XCK_CYCLES * frame_factor;
+            phoneme_ticks = frame_count * duration_factor;
+        end
+    endfunction
+
+    assign ar_n_o = ~request_r;
+    assign status_d7_o = request_r;
+    assign powered_o = active_r && !r3[7];
+    assign phoneme_o = r0[5:0];
+    assign amplitude_o = r3[3:0];
+    assign inflection_o = r1;
+    assign rate_o = r2;
+
+    always @(posedge clk_i) begin
+        if (!reset_n_i) begin
+            r0 <= 8'h00;
+            r1 <= 8'h00;
+            r2 <= 8'h00;
+            r3 <= 8'h80;   // SSI starts powered down
+            r4 <= 8'h00;
+            active_r <= 1'b0;
+            active_mode_r <= 2'b00;
+            request_r <= 1'b0;
+            ticks_left_r <= 19'd0;
+        end else if (wr_i) begin
+            case (addr_i)
+                3'd0: begin
+                    r0 <= data_i;
+                    // Every write of R0 starts/restarts the current phoneme.
+                    if (active_r && !r3[7]) begin
+                        ticks_left_r <= phoneme_ticks(data_i, r2, active_mode_r);
+                        request_r <= 1'b0;
+                    end
+                end
+                3'd1: r1 <= data_i;
+                3'd2: r2 <= data_i;
+                3'd3: begin
+                    r3 <= data_i;
+                    if (data_i[7]) begin
+                        active_r <= 1'b0;
+                        request_r <= 1'b0;
+                        ticks_left_r <= 19'd0;
+                    end else if (r3[7]) begin
+                        // CTL falling edge latches the current duration mode.
+                        active_r <= 1'b1;
+                        active_mode_r <= r0[7:6];
+                        ticks_left_r <= phoneme_ticks(r0, r2, r0[7:6]);
+                        request_r <= 1'b0;
+                    end
+                end
+                default: r4 <= data_i; // R4 aliases at addresses 4..7
+            endcase
+        end else if (xck_tick_i && active_r && !r3[7]) begin
+            if (ticks_left_r > 19'd1) begin
+                ticks_left_r <= ticks_left_r - 19'd1;
+            end else if (ticks_left_r == 19'd1) begin
+                ticks_left_r <= 19'd0;
+                request_r <= (active_mode_r != 2'd0);
+            end
+        end
+    end
+endmodule
