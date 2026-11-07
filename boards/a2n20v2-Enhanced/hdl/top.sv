@@ -55,6 +55,9 @@ module top #(
     // SSI speech can coexist with exclusive AY-to-DOC music ownership.
     parameter bit MOCKINGBOARD_SSI263_ENABLE = 1'b1,
     parameter integer MOCKINGBOARD_SSI263_VOICE_PROFILE = 1,
+    // P6: speech-only output gain. 3/1 ~= +9.54dB in normal MB-DOC mode.
+    // Music's existing HDMI gain/limiter remains unchanged.
+    parameter integer MB_SPEECH_GAIN_NUM = 3,
     parameter bit [7:0] MOCKINGBOARD_ID = 2,
 
     parameter bit SUPERSERIAL_ENABLE = 0,
@@ -1468,8 +1471,18 @@ wire [7:0] doc_128k_status_w;
         (AUDIO_MODE_MB_DOC && mb_fx_ay_l_w) ? mb_fx_pcm_l : sg_audio_l;
     wire signed [15:0] mb_music_base_r_w =
         (AUDIO_MODE_MB_DOC && mb_fx_ay_r_w) ? mb_fx_pcm_r : sg_audio_r;
-    wire signed [15:0] mb_speech_mix_w = AUDIO_MODE_MB_DOC ?
-        (mb_speech_pcm_w >>> 3) : mb_speech_pcm_w;
+    // Widen before gain to avoid 16-bit wraparound; compensate for the
+    // downstream music HDMI 8x gain only in MB-DOC mode. A value of 3
+    // targets the measured ~9.3dB shortfall in voice2.wav relative to
+    // -2dBFS without touching piano/FX gain. Final HDMI limiter remains.
+    wire signed [31:0] mb_speech_gain_w =
+        $signed(mb_speech_pcm_w) * MB_SPEECH_GAIN_NUM;
+    wire signed [31:0] mb_speech_pre_mix_w = AUDIO_MODE_MB_DOC ?
+        (mb_speech_gain_w >>> 3) : mb_speech_gain_w;
+    wire signed [15:0] mb_speech_mix_w =
+        (mb_speech_pre_mix_w > 32'sd32767) ? 16'sh7FFF :
+        (mb_speech_pre_mix_w < -32'sd32768) ? 16'sh8000 :
+        mb_speech_pre_mix_w[15:0];
     wire signed [16:0] mb_speech_sum_l_w =
         $signed({mb_music_base_l_w[15], mb_music_base_l_w}) +
         $signed({mb_speech_mix_w[15], mb_speech_mix_w});
