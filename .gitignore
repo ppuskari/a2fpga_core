@@ -60,3 +60,6 @@ src/cardrom/cardrom
 *.m4a
 *.wav
 *.mov
+
+# Generated original SSI263 phoneme approximation, build locally
+/boards/a2n20v2-Enhanced/hdl/ssi263_voice.mem
