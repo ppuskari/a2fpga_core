@@ -1,4 +1,4 @@
-name: Mockingboard SSI263 P0 bus and A-R timing
+name: Mockingboard SSI263 speech playback and demo disk timing
 
 on:
   push:
@@ -24,9 +24,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Icarus Verilog
-        run: sudo apt-get update && sudo apt-get install -y iverilog
+        run: sudo apt-get update && sudo apt-get install -y iverilog verilator
       - name: Generate original phoneme PCM bank
-        run: python3 tools/generate_ssi263_voice.py
+        run: |
+          python3 tools/generate_ssi263_voice.py
+          python3 tools/generate_ssi263_voice.py --check
       - name: Verify SSI263 bus, timing, status, PCM and CA1
         run: |
           iverilog -g2012 -s tb_ssi263_slot -o /tmp/mb_ssi263.vvp \
@@ -35,3 +37,26 @@ jobs:
             hdl/mockingboard/ssi263_slot.sv \
             tests/mb_ssi263/tb_ssi263_slot.sv
           (cd boards/a2n20v2-Enhanced && vvp /tmp/mb_ssi263.vvp)
+      - name: Replay initial Mockingboard Demo Disk 1 speech records
+        run: |
+          iverilog -g2012 -s tb_ssi263_demo -o /tmp/mb_ssi263_demo.vvp \
+            hdl/mockingboard/ssi263_control.sv \
+            hdl/mockingboard/ssi263_voice.sv \
+            hdl/mockingboard/ssi263_slot.sv \
+            tests/mb_ssi263/tb_ssi263_demo.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/mb_ssi263_demo.vvp)
+      - name: Verilator lint and hardwired right VIA CA1 sanity
+        run: |
+          (cd boards/a2n20v2-Enhanced && verilator --lint-only --timing -Wno-fatal --top-module ssi263_slot \
+             ../../hdl/mockingboard/ssi263_control.sv \
+             ../../hdl/mockingboard/ssi263_voice.sv \
+             ../../hdl/mockingboard/ssi263_slot.sv)
+          python3 - <<'PY'
+          from pathlib import Path
+          text=Path("hdl/mockingboard/mockingboard.sv").read_text()
+          left,right=text.split("    // Right Channel",1)
+          assert ".ca1_i(1'b1)" in left, "left CA1 must be idle"
+          assert ".ca1_i(ssi_ca1_w)" in right, "disk driver IRQ is on RIGHT CA1"
+          assert ".speech_pcm_o(mb_speech_pcm_w)" in Path("boards/a2n20v2-Enhanced/hdl/top.sv").read_text()
+          print("PASS: SSI voice integrated, right VIA CA1 and stereo audio connected")
+          PY
