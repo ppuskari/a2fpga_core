@@ -46,6 +46,10 @@ module top #(
     // SynthLAB C3 sustain pitch experiment: 2=original, 1=+1 octave,
     // 0=+2 octaves. Defaults to 0 after the asdfghjk A440 sweep.
     parameter logic [2:0] MB_DOC_SUSTAIN_RES = 3'd0,
+    // P4: seven real SynthLAB sustain zones and AY-specific articulation.
+    parameter bit MB_DOC_MULTISAMPLE_ENABLE = 1'b1,
+    parameter bit MB_DOC_PIANO_ARTICULATION_ENABLE = 1'b1,
+    parameter bit MB_DOC_FX_AY_BYPASS_ENABLE = 1'b1,
     parameter bit MOCKINGBOARD_ENABLE = 0,
     parameter bit [7:0] MOCKINGBOARD_ID = 2,
 
@@ -1243,6 +1247,7 @@ wire [7:0] doc_128k_status_w;
     wire [7:0] mb_ay_l_data_w, mb_ay_r_data_w;
     wire [4:0] mb_ay_l_env_level_w, mb_ay_r_env_level_w;
     wire mb_ay_l_reset_n_w, mb_ay_r_reset_n_w;
+    wire mb_fx_ay_l_w, mb_fx_ay_r_w;
 
     Mockingboard #(
         .ENABLE(MOCKINGBOARD_ENABLE | AUDIO_MODE_MB_DOC),
@@ -1275,7 +1280,10 @@ wire [7:0] doc_128k_status_w;
     generate
         if (AUDIO_MODE_MB_DOC) begin : gen_mb_doc_audio
             mb_doc_bridge #(
-                .SUSTAIN_RES(MB_DOC_SUSTAIN_RES)
+                .SUSTAIN_RES(MB_DOC_SUSTAIN_RES),
+                .MULTISAMPLE_ENABLE(MB_DOC_MULTISAMPLE_ENABLE),
+                .PIANO_ENVELOPE_ENABLE(MB_DOC_PIANO_ARTICULATION_ENABLE),
+                .FX_AY_BYPASS_ENABLE(MB_DOC_FX_AY_BYPASS_ENABLE)
             ) bridge (
                 .clk_i(clk_logic_w),
                 .reset_n_i(system_reset_n_w),
@@ -1302,7 +1310,9 @@ wire [7:0] doc_128k_status_w;
                 .ram_byte_en_o(mb_ram_byte_en_w),
                 .ram_ready_i(mb_ram_ready_w),
                 .ready_o(mb_bridge_ready_w),
-                .active_voice_o(mb_active_voice_w)
+                .active_voice_o(mb_active_voice_w),
+                .fx_ay_l_o(mb_fx_ay_l_w),
+                .fx_ay_r_o(mb_fx_ay_r_w)
             );
         end else begin : gen_gs_audio_only
             assign mb_doc_wr_w = 1'b0;
@@ -1314,6 +1324,8 @@ wire [7:0] doc_128k_status_w;
             assign mb_ram_byte_en_w = 4'h0;
             assign mb_bridge_ready_w = 1'b0;
             assign mb_active_voice_w = 3'd0;
+            assign mb_fx_ay_l_w = 1'b0;
+            assign mb_fx_ay_r_w = 1'b0;
         end
     endgenerate
 
@@ -1419,8 +1431,30 @@ wire [7:0] doc_128k_status_w;
    // assign core_audio_l_w = sg_audio_l + ssp_audio_ext_w + mb_audio_l_ext_w + speaker_audio_ext_w;
    // assign core_audio_r_w = sg_audio_r + ssp_audio_ext_w + mb_audio_r_ext_w + speaker_audio_ext_w;
 
-    assign core_audio_l_w = sg_audio_l;
-    assign core_audio_r_w = sg_audio_r;
+    // AY sound-effect compatibility: use the already-active native YM2149
+    // cores for timer-driven noise and multi-tone sweeps rather than forcing
+    // sound effects through a pitched piano wavetable. Their DAC is unipolar;
+    // remove DC with a 27-bit fixed-point one-pole high-pass (~33Hz at 54MHz).
+    logic signed [26:0] ay_dc_l_q16, ay_dc_r_q16;
+    wire signed [26:0] ay_hp_l_q16 =
+        $signed({1'b0,mb_audio_l,16'h0000}) - ay_dc_l_q16;
+    wire signed [26:0] ay_hp_r_q16 =
+        $signed({1'b0,mb_audio_r,16'h0000}) - ay_dc_r_q16;
+    always_ff @(posedge clk_logic_w or negedge system_reset_n_w) begin
+        if (!system_reset_n_w) begin
+            ay_dc_l_q16 <= 27'sd0;
+            ay_dc_r_q16 <= 27'sd0;
+        end else begin
+            ay_dc_l_q16 <= ay_dc_l_q16 + (ay_hp_l_q16 >>> 18);
+            ay_dc_r_q16 <= ay_dc_r_q16 + (ay_hp_r_q16 >>> 18);
+        end
+    end
+    wire signed [15:0] mb_fx_pcm_l = 16'(ay_hp_l_q16 >>> 12);
+    wire signed [15:0] mb_fx_pcm_r = 16'(ay_hp_r_q16 >>> 12);
+    assign core_audio_l_w =
+        (AUDIO_MODE_MB_DOC && mb_fx_ay_l_w) ? mb_fx_pcm_l : sg_audio_l;
+    assign core_audio_r_w =
+        (AUDIO_MODE_MB_DOC && mb_fx_ay_r_w) ? mb_fx_pcm_r : sg_audio_r;
 
 //    wire signed [15:0] sg_mono_w = (sg_audio_l >>> 1) + (sg_audio_r >>> 1);
 
