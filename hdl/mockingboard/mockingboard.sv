@@ -19,7 +19,9 @@
 `ifndef MB_AY_CAPTURE_UNIT_TEST
 module Mockingboard #(
     parameter bit [7:0] ID = 2,
-    parameter bit ENABLE = 1'b1
+    parameter bit ENABLE = 1'b1,
+    parameter bit ENABLE_SSI263 = 1'b0,
+    parameter integer SSI263_VOICE_PROFILE = 1
 ) (
     a2bus_if.slave a2bus_if,
     slot_if.card slot_if,
@@ -30,6 +32,7 @@ module Mockingboard #(
 
     output [9:0] audio_l_o,
     output [9:0] audio_r_o,
+    output wire signed [15:0] speech_pcm_o,
 
     // Decoded AY writes for the exclusive MB-to-DOC bridge.
     // One pulse per completed AY data-write phase; left/right
@@ -66,6 +69,29 @@ module Mockingboard #(
     wire card_dev_sel = card_sel && !slot_if.dev_select_n;
     wire card_io_sel = card_sel && !slot_if.io_select_n;
 
+    // SSI263 speech: same slot 4, $Cn40-$Cn7F. Write data is sampled
+    // only when the Apple bus controller asserts data_in_strobe.
+    wire ssi_selected_w, ssi_read_w, ssi_ca1_w;
+    wire [7:0] ssi_data_w;
+    ssi263_slot #(.VOICE_PROFILE(SSI263_VOICE_PROFILE)) speech_socket (
+        .clk_i(a2bus_if.clk_logic),
+        .reset_n_i(a2bus_if.system_reset_n),
+        .enabled_i(card_enable && ENABLE_SSI263),
+        .card_io_sel_i(card_io_sel),
+        .xck_tick_i(a2bus_if.phi1_negedge),
+        .data_in_strobe_i(a2bus_if.data_in_strobe),
+        .rw_n_i(a2bus_if.rw_n),
+        .card_addr_i(a2bus_if.addr[7:0]),
+        .data_i(a2bus_if.data),
+        .speech_selected_o(ssi_selected_w),
+        .speech_read_o(ssi_read_w),
+        .speech_data_o(ssi_data_w),
+        .via_ca1_o(ssi_ca1_w),
+        .powered_o(),
+        .phoneme_o(),
+        .speech_pcm_o(speech_pcm_o)
+    );
+
     wire [7:0] pb_l_o;
     wire [7:0] pb_r_o;
     assign ay_l_reset_n_o = pb_l_o[2];
@@ -94,7 +120,8 @@ module Mockingboard #(
 
     assign rd_en_o = card_io_sel & a2bus_if.rw_n;
 
-    assign data_o  = (a2bus_if.addr[7] == 1'b0) ? data_l_o : data_r_o;
+    assign data_o = ssi_read_w ? ssi_data_w :
+        ((a2bus_if.addr[7] == 1'b0) ? data_l_o : data_r_o);
 
     // Contrary to some schematics, Mockingboards and Phasors only use IRQ, not NMI
     // Possibly some some versions of the Mockingboard used NMI, but inspected boards
@@ -110,8 +137,8 @@ module Mockingboard #(
         .reset  (~a2bus_if.system_reset_n),
 
         .addr(a2bus_if.addr[3:0]),
-        .wen(!a2bus_if.rw_n & !a2bus_if.addr[7] & card_io_sel & card_enable),
-        .ren(a2bus_if.rw_n & !a2bus_if.addr[7] & card_io_sel & card_enable),
+        .wen(!a2bus_if.rw_n & !a2bus_if.addr[7] & card_io_sel & card_enable & !ssi_selected_w),
+        .ren(a2bus_if.rw_n & !a2bus_if.addr[7] & card_io_sel & card_enable & !ssi_selected_w),
         .data_in(a2bus_if.data),
         .data_out(data_l_o),
 
@@ -206,7 +233,7 @@ module Mockingboard #(
         .port_b_t(),
         .port_b_i(8'hFF),
 
-        .ca1_i(1'b1),
+        .ca1_i(ssi_ca1_w),
         .ca2_o(),
         .ca2_i(1'b0),
         .ca2_t(),
