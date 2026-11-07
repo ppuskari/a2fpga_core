@@ -12,6 +12,9 @@ module tb_ssi263_slot;
     wire speech_sel, speech_rd, ca1_n, powered;
     wire [7:0] speech_data;
     wire [5:0] phoneme;
+    wire signed [15:0] speech_pcm;
+    logic nonzero_pcm = 1'b0;
+    always @(posedge clk) if (reset_n && speech_pcm != 16'sd0) nonzero_pcm <= 1'b1;
 
     ssi263_slot dut (
         .clk_i(clk), .reset_n_i(reset_n), .enabled_i(en),
@@ -19,7 +22,8 @@ module tb_ssi263_slot;
         .rw_n_i(rw_n), .card_addr_i(addr), .data_i(data),
         .speech_selected_o(speech_sel), .speech_read_o(speech_rd),
         .speech_data_o(speech_data), .via_ca1_o(ca1_n),
-        .powered_o(powered), .phoneme_o(phoneme)
+        .powered_o(powered), .phoneme_o(phoneme),
+        .speech_pcm_o(speech_pcm)
     );
 
     task automatic write_reg(input [7:0] addr_in, input [7:0] value);
@@ -70,6 +74,7 @@ module tb_ssi263_slot;
             $fatal(1,"A/R must remain inactive during phoneme");
 
         xcks(8191);
+        if (!nonzero_pcm) $fatal(1,"FPGA speech audio never became nonzero");
         if (ca1_n !== 1'b1 || speech_data !== 8'h00)
             $fatal(1,"Premature A/R request");
         xcks(1);
@@ -90,6 +95,8 @@ module tb_ssi263_slot;
         write_reg(8'h43,8'h80);
         if (powered || !ca1_n)
             $fatal(1,"CTL powerdown failed");
+        repeat(4) @(negedge clk);
+        if (speech_pcm !== 16'sd0) $fatal(1,"Speech PCM survived powerdown");
 
         // Mode 0 has no A/R interrupt even after its timer expires.
         write_reg(8'h40,8'h00);
@@ -102,7 +109,7 @@ module tb_ssi263_slot;
         repeat(3) @(negedge clk);
         if (ca1_n !== 1'b1 || powered)
             $fatal(1,"Disabling card did not isolate SSI/CA1");
-        $display("PASS: SSI263 $Cn40 decode, status D7, 8192-XCK A/R to CA1, R0 retrigger, CTL powerdown and disabled isolation");
+        $display("PASS: SSI263 $Cn40 decode, D7, 8192-XCK CA1, nonzero phoneme PCM, powerdown");
         $finish;
     end
 
