@@ -34,6 +34,9 @@ module ssi263_slot (
     wire ar_n_w, ar_status_w, phoneme_start_w;
     wire [3:0] amplitude_w;
     wire [7:0] inflection_w, rate_w;
+    wire [7:0] debug_r3_w;
+    logic [7:0] debug_powerup_count_r;
+    logic powered_prev_r;
 
     // P2 hardware-only diagnostics: non-destructive read overlays at
     // $Cn41-$Cn44. CPU writes retain their original SSI-263 semantics.
@@ -44,11 +47,16 @@ module ssi263_slot (
         if (!reset_n_i || !enabled_i) begin
             diag_wr_count_r <= 8'd0;
             diag_xck_count_r <= 8'd0;
+            debug_powerup_count_r <= 8'd0;
+            powered_prev_r <= 1'b0;
         end else begin
             if (wr_pulse_r && diag_wr_count_r != 8'hFF)
                 diag_wr_count_r <= diag_wr_count_r + 8'd1;
             if (xck_tick_i && diag_xck_count_r != 8'hFF)
                 diag_xck_count_r <= diag_xck_count_r + 8'd1;
+            powered_prev_r <= powered_o;
+            if (powered_o && !powered_prev_r && debug_powerup_count_r != 8'hFF)
+                debug_powerup_count_r <= debug_powerup_count_r + 8'd1;
         end
     end
 
@@ -85,7 +93,8 @@ module ssi263_slot (
         .amplitude_o(amplitude_w),
         .inflection_o(inflection_w),
         .rate_o(rate_w),
-        .phoneme_start_o(phoneme_start_w)
+        .phoneme_start_o(phoneme_start_w),
+        .debug_r3_o(debug_r3_w)
     );
 
     ssi263_voice voice (
@@ -107,12 +116,20 @@ module ssi263_slot (
     // $Cn42 Apple PHI/XCK ticks (saturating)
     // $Cn43 fixed signature $A5 (proves read-selection path)
     // $Cn44 powered state (bit 0)
+    // $Cn45 last latched SSI write register address (0..7)
+    // $Cn46 last latched SSI write data
+    // $Cn47 internal SSI R3 register state
+    // $Cn48 power-up transition counter (saturates at 255)
     // These do not alter SSI writes, IRQ, timers, or audio behavior.
     assign speech_data_o =
         (card_addr_i[2:0] == 3'd1) ? diag_wr_count_r :
         (card_addr_i[2:0] == 3'd2) ? diag_xck_count_r :
         (card_addr_i[2:0] == 3'd3) ? 8'hA5 :
+        (card_addr_i[3:0] == 4'h8) ? debug_powerup_count_r :
         (card_addr_i[2:0] == 3'd4) ? {7'b0,powered_o} :
+        (card_addr_i[2:0] == 3'd5) ? {5'b0,wr_reg_r} :
+        (card_addr_i[2:0] == 3'd6) ? wr_data_r :
+        (card_addr_i[2:0] == 3'd7) ? debug_r3_w :
                                    {ar_status_w,7'b0};
     // VIA observes the physical active-low A/R line; its falling-edge
     // detector latches IFR bit 1 when a phoneme requests the next one.
