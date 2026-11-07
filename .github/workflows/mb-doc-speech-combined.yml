@@ -1,0 +1,51 @@
+name: Combined MB DOC P5 and SSI263 P5 checks
+on:
+  push:
+    branches:
+      - petar/mb-doc-p5-speech-p5-combined-20261107
+    paths:
+      - "hdl/mockingboard/**"
+      - "boards/a2n20v2-Enhanced/hdl/top.sv"
+      - "boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj"
+      - "tools/generate_ssi263_voice.py"
+      - "tests/mb_ssi263/**"
+      - ".github/workflows/mb-doc-speech-combined.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Verilog checkers
+        run: sudo apt-get update && sudo apt-get install -y iverilog verilator
+      - name: Generate speech ROM
+        run: |
+          python3 -m py_compile tools/generate_ssi263_voice.py
+          python3 tools/generate_ssi263_voice.py
+          python3 tools/generate_ssi263_voice.py --check
+          test "$(wc -l < boards/a2n20v2-Enhanced/hdl/ssi263_voice.mem)" -eq 8192
+      - name: SSI slot protocol simulation
+        run: |
+          iverilog -g2012 -s tb_ssi263_slot -o /tmp/ssi_slot.vvp hdl/mockingboard/ssi263_control.sv hdl/mockingboard/ssi263_voice.sv hdl/mockingboard/ssi263_slot.sv tests/mb_ssi263/tb_ssi263_slot.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/ssi_slot.vvp)
+      - name: Original speech demo record simulation
+        run: |
+          iverilog -g2012 -s tb_ssi263_demo -o /tmp/ssi_demo.vvp hdl/mockingboard/ssi263_control.sv hdl/mockingboard/ssi263_voice.sv hdl/mockingboard/ssi263_slot.sv tests/mb_ssi263/tb_ssi263_demo.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/ssi_demo.vvp)
+      - name: Check combined project source and audio ownership
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj').read_text()
+          top=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text()
+          mb=Path('hdl/mockingboard/mockingboard.sv').read_text()
+          for f in ('mb_doc_bridge.sv','piano_multisustain.mem','ssi263_control.sv','ssi263_slot.sv','ssi263_voice.sv','ssi263_voice.mem'):
+              assert f in p, f
+          for x in ('MB_DOC_FX_AY_BYPASS_ENABLE','MB_DOC_PIANO_ARTICULATION_ENABLE','mb_doc_gain_minus_2db','MOCKINGBOARD_SSI263_VOICE_PROFILE','mb_speech_mix_w','mb_speech_sum_l_w'):
+              assert x in top, x
+          assert ".ca1_i(ssi_ca1_w)" in mb.split('// Right Channel',1)[1]
+          assert 'data_in_strobe_i(a2bus_if.data_in_strobe)' in mb
+          print('PASS: combined source connectivity, speech handshake and music gain preserved')
+          PY
