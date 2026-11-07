@@ -55,6 +55,9 @@ module top #(
     // SSI speech can coexist with exclusive AY-to-DOC music ownership.
     parameter bit MOCKINGBOARD_SSI263_ENABLE = 1'b1,
     parameter integer MOCKINGBOARD_SSI263_VOICE_PROFILE = 1,
+    // P7: 0=hardware-proven P6 wavetable speech, 1=native ROM diagnostic DSP.
+    // Keep 0 until native DSP matches real SSI hardware.
+    parameter integer MOCKINGBOARD_SSI263_NATIVE_SELECT = 0,
     // P6: speech-only output gain. 3/1 ~= +9.54dB in normal MB-DOC mode.
     // Music's existing HDMI gain/limiter remains unchanged.
     parameter integer MB_SPEECH_GAIN_NUM = 3,
@@ -1261,6 +1264,7 @@ wire [7:0] doc_128k_status_w;
         .ENABLE(MOCKINGBOARD_ENABLE | AUDIO_MODE_MB_DOC),
         .ENABLE_SSI263(MOCKINGBOARD_SSI263_ENABLE),
         .SSI263_VOICE_PROFILE(MOCKINGBOARD_SSI263_VOICE_PROFILE),
+        .SSI263_NATIVE_SELECT(MOCKINGBOARD_SSI263_NATIVE_SELECT),
         .ID(MOCKINGBOARD_ID)
     ) mockingboard (
         .a2bus_if(a2bus_if),  // use system_reset_n

@@ -8,7 +8,8 @@
 // experimental FPGA-only formant wavetable speech approximation. It is not
 // a transistor-accurate voice reproduction; verify on physical hardware.
 module ssi263_slot #(
-    parameter integer VOICE_PROFILE = 1
+    parameter integer VOICE_PROFILE = 1,
+    parameter integer NATIVE_SELECT = 0
 ) (
     input  wire       clk_i,
     input  wire       reset_n_i,
@@ -102,6 +103,11 @@ module ssi263_slot #(
         .debug_r3_o(debug_r3_w)
     );
 
+    wire signed [15:0] baseline_pcm_w;
+    // Generate-time choice: only one audio synthesizer is instantiated.
+    // Existing SSI control is deliberately unchanged: it alone owns A/R, VIA
+    // CA1, CPU register timing and the data-valid write capture protocol.
+    generate if (NATIVE_SELECT == 0) begin : g_p6_voice
     ssi263_voice #(.VOICE_PROFILE(VOICE_PROFILE)) voice (
         .clk_i(clk_i),
         .reset_n_i(reset_n_i && enabled_i),
@@ -111,8 +117,18 @@ module ssi263_slot #(
         .amplitude_i(amplitude_w),
         .inflection_i(inflection_w),
         .rate_i(rate_w),
-        .pcm_o(speech_pcm_o)
+        .pcm_o(baseline_pcm_w)
     );
+    end else begin : g_native_voice
+      ssi263_native_voice voice (
+        .clk_i(clk_i), .reset_n_i(reset_n_i && enabled_i),
+        .powered_i(powered_o), .phoneme_start_i(phoneme_start_w),
+        .phoneme_i(phoneme_o), .amplitude_i(amplitude_w),
+        .inflection_i(inflection_w), .rate_i(rate_w),
+        .pcm_o(baseline_pcm_w)
+      );
+    end endgenerate
+    assign speech_pcm_o = baseline_pcm_w;
 
     assign speech_selected_o = speech_sel_w;
     assign speech_read_o = speech_sel_w && rw_n_i;
