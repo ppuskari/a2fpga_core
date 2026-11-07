@@ -18,6 +18,7 @@ module tb_mb_doc_bridge;
     logic [4:0] l_env_level = 0, r_env_level = 0;
     logic l_reset_n = 1'b1, r_reset_n = 1'b1;
 
+    wire fx_l, fx_r;
     wire doc_wr;
     wire [7:0] doc_addr, doc_data;
     wire ram_wr;
@@ -53,7 +54,6 @@ module tb_mb_doc_bridge;
     );
 
     integer write_count = 0, doc_count = 0;
-    wire fx_l, fx_r;
     integer ram_busy = 0, ram_delay = 0;
     logic prev_ram_wr = 0;
     logic [7:0] doc_addresses [0:255];
