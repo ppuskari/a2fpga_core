@@ -1,7 +1,7 @@
 // Experimental Mockingboard C single SSI-263 socket, slot address $Cn40-$Cn7F.
 // Physical chip select: A6=1, A7=0; A0..A2 are register-select lines.
 // The ordinary Mockingboard's dual 6522 windows are preserved outside speech
-// selection. A/R pin is wired to the LEFT VIA CA1 input.
+// selection. Demo Disk 1 uses right VIA CA1 ($C48D/$C48E) for A/R.
 // Reference: kue-m/mockingboard-pico bus interface (MIT, Kitcat, 2026).
 //
 // P1 retains the P0 CPU bus, status and IRQ timing and adds an original
