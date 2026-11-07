@@ -157,6 +157,11 @@ module mb_doc_bridge #(
         endcase
     endfunction
 
+    // Gowin parser requires the WTS choice to be evaluated outside of a
+    // concatenation. The 1KB zones use WTS=2; the upper 512B zones use WTS=1.
+    wire [2:0] voice_wts_w =
+        (prev_zone_r[voice_r] >= 3'd4) ? 3'd1 : 3'd2;
+
     wire [2:0] selected_zone_w = sample_zone(selected_period_w);
     wire selected_note_active_w = selected_reset_n_w && tone_allowed_w &&
         (!REST_MUTE_ENABLE || selected_period_w > 12'd1) &&
@@ -452,7 +457,7 @@ module mb_doc_bridge #(
                         end
                         3'd2: begin
                             cmd_addr_r <= 8'hC0 + {5'b0, voice_r};
-                            cmd_data_r <= {2'b00, (prev_zone_r[voice_r]>=3'd4?3'd1:3'd2), SUSTAIN_RES};
+                            cmd_data_r <= {2'b00, voice_wts_w, SUSTAIN_RES};
                         end
                         3'd3: begin
                             cmd_addr_r <= 8'h00 + {5'b0, voice_r};
