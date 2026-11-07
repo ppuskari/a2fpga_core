@@ -14,7 +14,7 @@ The real Ensoniq frequency law is: `output_table_repetition_hz = (894886.25/(OSC
 The input PCM and the AY->DOC `FC=93623/max(P,1)` formula are unchanged. The Enhanced `top.sv` exposes only one compile-time parameter:
 
 ```systemverilog
-parameter logic [2:0] MB_DOC_SUSTAIN_RES = 3'd1,
+parameter logic [2:0] MB_DOC_SUSTAIN_RES = 3'd0,
 ```
 
 Selecting this knob makes all six voice RTS writes use `WTS=2` (1024 bytes) plus selected `RES` bits:
@@ -43,7 +43,7 @@ Set-Location C:\AppleIIgsDev_02\a2fpga-mb-doc-c3-pitch; py -3 tools\extract_synt
 
 Open `boards\a2n20v2-Enhanced\a2n20v2_enhanced.gprj` in Gowin, synthesize, check sample ROM and all MB-DOC module retention and timing, then program *FPGA only*. BL616 firmware must be left untouched.
 
-Test at `MB_DOC_SUSTAIN_RES=3'd1` first. If still an octave low, change top.sv to `3'd0` and synthesize/route/program a separately named `.fs`. For a baseline A/B revert this parameter to `3'd2` without altering PCM. The change is *not runtime-selectable*; each value requires recompiling the FPGA.
+Test at `MB_DOC_SUSTAIN_RES=3'd0` first (new default after the A440 sweep). If still an octave low, change top.sv to `3'd0` and synthesize/route/program a separately named `.fs`. For a baseline A/B revert this parameter to `3'd2` without altering PCM. The change is *not runtime-selectable*; each value requires recompiling the FPGA.
 
 ## Verification limits
 
