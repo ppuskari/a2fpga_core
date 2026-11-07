@@ -6,10 +6,11 @@
 // Reuse the native YM2149 envelope generators (registers 11-13,
 // all sixteen shapes and restart-on-write). AY noise is not yet modeled.
 //
-// The loader installs the authentic 8192-byte SynthLAB Piano C3 attack
-// into DOC bank-0 sound RAM. PCM is extracted locally from System 6.0.4
+// The loader installs the authentic 1024-byte SynthLAB ~Piano C3 sustain
+// loop into DOC bank-0 sound RAM. PCM is extracted locally from System 6.0.4
 // instead of being redistributed in the source repository.
-// This is a FREE-RUN repeat of the attack, not full attack/sustain switching.
+// This deliberately tests sustain ONLY, with no hammer attack or note retrigger.
+// It isolates the bad repeated-attack behavior of the preceding 8KB test.
 //
 // No reconfiguration of the native IIgs/GS mode is performed here.
 module mb_doc_bridge #(
@@ -57,7 +58,7 @@ module mb_doc_bridge #(
     // reach here; the original YM2149 still owns VIA readback.
     logic [7:0] ay_regs [0:1][0:15];
 
-    logic [10:0] wave_word_r;
+    logic [7:0] wave_word_r;
     logic [2:0] voice_r;
     logic [2:0] command_step_r;
     logic first_scan_r;
@@ -75,9 +76,9 @@ module mb_doc_bridge #(
     // DOC frame = 7.15909 MHz / (8 * (8+2)).
     // FC ~= (1.022727 MHz / (16*P)) * 131072 / DOCframe
     //    ~= 93623/P for ONE period of the old 256-byte waveform.
-    // Piano C3 PCM has ~32 oscillations per 8192-byte loop, while
-    // WTS5/RES7 increases the accumulator scale by 128.
-    // Thus FC = (93623/P)*4 for approximately equivalent tone pitch.
+    // Sustain PCM is 1024 bytes and contains roughly four base cycles.
+    // WTS2/RES2 adjusts accumulator scale by 4 to match that length.
+    // FC = 93623/P as in the original 256-byte one-cycle version.
     logic [16:0] dividend_r, quotient_r, remainder_r;
     logic [16:0] subtract_w, shifted_remainder_w;
     logic [4:0] division_count_r;
@@ -117,14 +118,14 @@ module mb_doc_bridge #(
     assign next_quotient_w =
         {quotient_r[15:0], subtract_valid_w};
 
-    // The source 'Piano C3' is 8192 nonzero offset-binary samples.
+    // The source '~Piano C3' is 1024 nonzero offset-binary samples.
     // Generated locally from the authentic synthLAB.po disk, not committed.
-    // One 32-bit little-endian word per line, 2048 lines total.
+    // One 32-bit little-endian word per line, 256 lines total.
     //
     // Registered ROM read; RAM_FETCH waits a clock after word index changes.
-    logic [31:0] synthlab_pcm_rom [0:2047];
+    logic [31:0] synthlab_pcm_rom [0:255];
     logic [31:0] synthlab_pcm_word_r;
-    initial $readmemh("hdl/piano_c3_attack.mem", synthlab_pcm_rom);
+    initial $readmemh("hdl/piano_c3_sustain.mem", synthlab_pcm_rom);
     always_ff @(posedge clk_i)
         synthlab_pcm_word_r <= synthlab_pcm_rom[wave_word_r];
 
@@ -169,7 +170,7 @@ module mb_doc_bridge #(
 
     // Byte zero of the patch corresponds to DOC address $0000.
     // The SDRAM GLU port takes a 32-bit word address and byte lanes.
-    assign ram_addr_o = {10'b0, wave_word_r};
+    assign ram_addr_o = {13'b0, wave_word_r};
     assign ram_byte_en_o = 4'hF;
     assign ram_data_o = synthlab_pcm_word_r;
     assign ram_wr_o = (state_r == RAM_ISSUE) ||
@@ -210,7 +211,7 @@ module mb_doc_bridge #(
         if (!reset_n_i) begin
             state_r          <= WAIT_SDRAM;
             return_state_r   <= WAIT_SDRAM;
-            wave_word_r      <= 11'd0;
+            wave_word_r      <= 8'd0;
             voice_r          <= 3'd0;
             command_step_r   <= 3'd0;
             first_scan_r     <= 1'b1;
@@ -232,7 +233,7 @@ module mb_doc_bridge #(
                 WAIT_SDRAM: begin
                     ready_o <= 1'b0;
                     if (sdram_ready_i) begin
-                        wave_word_r <= 11'd0;
+                        wave_word_r <= 8'd0;
                         state_r <= RAM_FETCH;
                     end
                 end
@@ -252,7 +253,7 @@ module mb_doc_bridge #(
                 RAM_RELEASE: begin
                     // Drop WR for one full clock to re-arm SDRAM's
                     // rising-edge request capture before next word.
-                    if (wave_word_r == 11'd2047) begin
+                    if (wave_word_r == 8'd255) begin
                         state_r <= ENABLE_DOC;
                     end else begin
                         wave_word_r <= wave_word_r + 1'b1;
@@ -298,10 +299,10 @@ module mb_doc_bridge #(
                     quotient_r <= next_quotient_w;
                     division_count_r <= division_count_r - 1'b1;
                     if (division_count_r == 5'd1) begin
-                        // FC times four: saturate rather than truncate.
-                        voice_freq_r <= (|next_quotient_w[16:14]) ?
+                        // WTS2+RES2 restores the unscaled AY pitch conversion.
+                        voice_freq_r <= next_quotient_w[16] ?
                                         16'hFFFF :
-                                        {next_quotient_w[13:0], 2'b00};
+                                        next_quotient_w[15:0];
                         command_step_r <= first_scan_r ? 3'd0 : 3'd3;
                         state_r <= VOICE_COMMAND;
                     end
@@ -323,7 +324,7 @@ module mb_doc_bridge #(
                         end
                         3'd2: begin
                             cmd_addr_r <= 8'hC0 + {5'b0, voice_r};
-                            cmd_data_r <= 8'h2F; // WTS5 = 8KB, RES7
+                            cmd_data_r <= 8'h12; // WTS2 = 1KB, RES2
                         end
                         3'd3: begin
                             cmd_addr_r <= 8'h00 + {5'b0, voice_r};
