@@ -4,9 +4,9 @@
 // selection. A/R pin is wired to the LEFT VIA CA1 input.
 // Reference: kue-m/mockingboard-pico bus interface (MIT, Kitcat, 2026).
 //
-// P0 implements CPU bus, status and IRQ timing only. A future SSI263 DSP
-// must consume the phoneme/amplitude/control and output real PCM; never claim
-// the present module produces intelligible speech.
+// P1 retains the P0 CPU bus, status and IRQ timing and adds an original
+// experimental FPGA-only formant wavetable speech approximation. It is not
+// a transistor-accurate voice reproduction; verify on physical hardware.
 module ssi263_slot (
     input  wire       clk_i,
     input  wire       reset_n_i,
@@ -22,7 +22,8 @@ module ssi263_slot (
     output wire [7:0] speech_data_o,
     output wire       via_ca1_o,
     output wire       powered_o,
-    output wire [5:0] phoneme_o
+    output wire [5:0] phoneme_o,
+    output wire signed [15:0] speech_pcm_o
 );
     wire speech_sel_w = enabled_i && card_io_sel_i &&
                         (card_addr_i[7:6] == 2'b01);
@@ -30,7 +31,9 @@ module ssi263_slot (
     logic wr_prev_r, wr_pulse_r;
     logic [2:0] wr_reg_r;
     logic [7:0] wr_data_r;
-    wire ar_n_w, ar_status_w;
+    wire ar_n_w, ar_status_w, phoneme_start_w;
+    wire [3:0] amplitude_w;
+    wire [7:0] inflection_w, rate_w;
 
     // The Apple slot bus holds an I/O write throughout a PHI0 window.
     // Generate exactly one strobe per distinct bus write, not one per
@@ -62,9 +65,22 @@ module ssi263_slot (
         .status_d7_o(ar_status_w),
         .powered_o(powered_o),
         .phoneme_o(phoneme_o),
-        .amplitude_o(),
-        .inflection_o(),
-        .rate_o()
+        .amplitude_o(amplitude_w),
+        .inflection_o(inflection_w),
+        .rate_o(rate_w),
+        .phoneme_start_o(phoneme_start_w)
+    );
+
+    ssi263_voice voice (
+        .clk_i(clk_i),
+        .reset_n_i(reset_n_i && enabled_i),
+        .powered_i(powered_o),
+        .phoneme_start_i(phoneme_start_w),
+        .phoneme_i(phoneme_o),
+        .amplitude_i(amplitude_w),
+        .inflection_i(inflection_w),
+        .rate_i(rate_w),
+        .pcm_o(speech_pcm_o)
     );
 
     assign speech_selected_o = speech_sel_w;
