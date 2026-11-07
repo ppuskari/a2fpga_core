@@ -62,3 +62,4 @@ src/cardrom/cardrom
 # Generated, locally extracted Apple synthLAB copyrighted PCM; NEVER commit.
 /boards/a2n20v2-Enhanced/hdl/piano_c3_attack.mem
 /boards/a2n20v2-Enhanced/hdl/piano_c3_sustain.mem
+/boards/a2n20v2-Enhanced/hdl/piano_multisustain.mem
