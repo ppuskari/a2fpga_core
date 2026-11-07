@@ -10,7 +10,9 @@
 // with: python tools/generate_ssi263_voice.py
 module ssi263_voice #(
     parameter integer CLK_HZ = 54_000_000,
-    parameter integer SAMPLE_HZ = 16_000
+    parameter integer SAMPLE_HZ = 16_000,
+    // 0 = hardware-proven P4 raw baseline, 1 = P5 enhanced voice.
+    parameter integer VOICE_PROFILE = 1
 ) (
     input  wire               clk_i,
     input  wire               reset_n_i,
@@ -59,10 +61,29 @@ module ssi263_voice #(
     wire signed [8:0] noise_w = $signed({1'b0,noise_r[7:0]}) - 9'sd128;
     wire signed [9:0] source_w =
         noisy_phoneme(phoneme_i) ?
-          ($signed({rom_w[8],rom_w}) + ($signed({noise_w[8],noise_w}) >>> 1)) :
+          ($signed({rom_w[8],rom_w}) +
+            ($signed({noise_w[8],noise_w}) >>> ((VOICE_PROFILE == 0) ? 1 : 2))) :
            $signed({rom_w[8],rom_w});
     wire signed [14:0] gain_w = source_w * $signed({1'b0,amplitude_i});
     wire signed [15:0] scaled_w = $signed({gain_w[14],gain_w}) <<< 2;
+    // Enhanced profile: 2x amplitude (~6 dB), saturating rather than wrapping.
+    // A short output one-pole ramp softens discontinuities between phonemes
+    // and drains the output toward zero on explicit PA/LB phonemes.
+    wire signed [17:0] target_w =
+        (phoneme_i == 6'd0 || phoneme_i == 6'd63) ? 18'sd0 :
+        ((VOICE_PROFILE == 0) ? {{2{scaled_w[15]}},scaled_w} :
+         ($signed({{2{scaled_w[15]}},scaled_w}) <<< 1));
+    wire signed [15:0] limited_w =
+        (target_w > 18'sd32767) ? 16'sh7FFF :
+        (target_w < -18'sd32768) ? 16'sh8000 : target_w[15:0];
+    wire signed [17:0] delta_w =
+        $signed({{2{limited_w[15]}},limited_w}) -
+        $signed({{2{pcm_o[15]}},pcm_o});
+    wire signed [17:0] smooth_step_w = delta_w >>> 2;
+    wire signed [17:0] smooth_next_w =
+        $signed({{2{pcm_o[15]}},pcm_o}) +
+        ((smooth_step_w == 18'sd0 && delta_w != 18'sd0) ?
+         ((delta_w > 18'sd0) ? 18'sd1 : -18'sd1) : smooth_step_w);
 
     always_ff @(posedge clk_i) begin
         if (!reset_n_i) begin
@@ -81,11 +102,15 @@ module ssi263_voice #(
                     phase_r <= phase_r + phase_step_w;
                 noise_r <= {noise_r[14:0],
                            noise_r[15]^noise_r[13]^noise_r[12]^noise_r[10]};
-                // Explicit pause phonemes are silent even with full amplitude.
-                if (phoneme_i == 6'd0 || phoneme_i == 6'd63)
-                    pcm_o <= 16'sd0;
-                else
-                    pcm_o <= scaled_w;
+                if (VOICE_PROFILE == 0) begin
+                    // Exact P4 audio behavior for A/B comparison.
+                    if (phoneme_i == 6'd0 || phoneme_i == 6'd63)
+                        pcm_o <= 16'sd0;
+                    else
+                        pcm_o <= scaled_w;
+                end else begin
+                    pcm_o <= smooth_next_w[15:0];
+                end
             end
             if (sample_tick_w)
                 divider_r <= '0;
