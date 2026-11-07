@@ -6,9 +6,10 @@
 // Reuse the native YM2149 envelope generators (registers 11-13,
 // all sixteen shapes and restart-on-write). AY noise is not yet modeled.
 //
-// The loader populates the first 256 bytes of native sound SDRAM
-// with a nonzero, offset-binary piano-like looped PCM wavetable. DOC
-// sample $00 means STOP, so each of the 256 sample bytes is nonzero.
+// The loader installs the authentic 8192-byte SynthLAB Piano C3 attack
+// into DOC bank-0 sound RAM. PCM is extracted locally from System 6.0.4
+// instead of being redistributed in the source repository.
+// This is a FREE-RUN repeat of the attack, not full attack/sustain switching.
 //
 // No reconfiguration of the native IIgs/GS mode is performed here.
 module mb_doc_bridge #(
@@ -45,7 +46,7 @@ module mb_doc_bridge #(
     output logic [2:0]  active_voice_o
 );
     typedef enum logic [3:0] {
-        WAIT_SDRAM, RAM_ISSUE, RAM_WAIT, RAM_RELEASE,
+        WAIT_SDRAM, RAM_FETCH, RAM_ISSUE, RAM_WAIT, RAM_RELEASE,
         ENABLE_DOC, VOICE_BEGIN, DIVIDE, VOICE_COMMAND,
         DOC_SEND, DOC_GAP, VOICE_NEXT, SCAN_PAUSE
     } state_t;
@@ -56,7 +57,7 @@ module mb_doc_bridge #(
     // reach here; the original YM2149 still owns VIA readback.
     logic [7:0] ay_regs [0:1][0:15];
 
-    logic [5:0] wave_word_r;
+    logic [10:0] wave_word_r;
     logic [2:0] voice_r;
     logic [2:0] command_step_r;
     logic first_scan_r;
@@ -73,7 +74,10 @@ module mb_doc_bridge #(
     // At 8 enabled DOC oscillators (6 playing, 2 halted):
     // DOC frame = 7.15909 MHz / (8 * (8+2)).
     // FC ~= (1.022727 MHz / (16*P)) * 131072 / DOCframe
-    //    ~= 93623/P. Clamp FC for AY period 0 or 1.
+    //    ~= 93623/P for ONE period of the old 256-byte waveform.
+    // Piano C3 PCM has ~32 oscillations per 8192-byte loop, while
+    // WTS5/RES7 increases the accumulator scale by 128.
+    // Thus FC = (93623/P)*4 for approximately equivalent tone pitch.
     logic [16:0] dividend_r, quotient_r, remainder_r;
     logic [16:0] subtract_w, shifted_remainder_w;
     logic [4:0] division_count_r;
@@ -113,83 +117,16 @@ module mb_doc_bridge #(
     assign next_quotient_w =
         {quotient_r[15:0], subtract_valid_w};
 
-    // PIANO-WAVETABLE EXPERIMENT: 256 bytes of original, modeled piano
-    // steady-state PCM (12 tuned partials). This is a compact *looped*
-    // timbre, NOT a multisample of a recorded acoustic piano and NOT an
-    // attack/sustain envelope. The native YM envelope still drives volume.
-    // Pack four consecutive unsigned offset-binary bytes in each little-
-    // endian SDRAM word. Do NOT store $00: the DOC interprets $00 as HALT.
-    // This case ROM is generated from a deterministic harmonic model.
-    // FNV-1a of 256 bytes, ascending address: 32'hB4D62B32.
-    function automatic logic [31:0] piano_word(input logic [5:0] index);
-        case (index)
-            6'd0: piano_word = 32'hA1968B7F;
-            6'd1: piano_word = 32'hC6BEB5AB;
-            6'd2: piano_word = 32'hDDD9D3CD;
-            6'd3: piano_word = 32'hE8E6E4E1;
-            6'd4: piano_word = 32'hEBEBEAE9;
-            6'd5: piano_word = 32'hEDECECEC;
-            6'd6: piano_word = 32'hEEEEEDED;
-            6'd7: piano_word = 32'hEDEEEEEE;
-            6'd8: piano_word = 32'hEBECECED;
-            6'd9: piano_word = 32'hE8E8E9EA;
-            6'd10: piano_word = 32'hE4E5E6E7;
-            6'd11: piano_word = 32'hE1E2E3E3;
-            6'd12: piano_word = 32'hDEDFDFE0;
-            6'd13: piano_word = 32'hD9DADBDC;
-            6'd14: piano_word = 32'hD4D5D7D8;
-            6'd15: piano_word = 32'hD1D1D2D3;
-            6'd16: piano_word = 32'hCECECFD0;
-            6'd17: piano_word = 32'hCBCCCCCD;
-            6'd18: piano_word = 32'hC6C7C8CA;
-            6'd19: piano_word = 32'hC0C2C3C5;
-            6'd20: piano_word = 32'hBABCBDBF;
-            6'd21: piano_word = 32'hB5B6B8B9;
-            6'd22: piano_word = 32'hB1B2B3B4;
-            6'd23: piano_word = 32'hACAEAFB0;
-            6'd24: piano_word = 32'hA7A9AAAB;
-            6'd25: piano_word = 32'hA2A3A5A6;
-            6'd26: piano_word = 32'h9C9E9FA1;
-            6'd27: piano_word = 32'h9597999B;
-            6'd28: piano_word = 32'h8C8F9193;
-            6'd29: piano_word = 32'h8184878A;
-            6'd30: piano_word = 32'h777A7C7F;
-            6'd31: piano_word = 32'h70717375;
-            6'd32: piano_word = 32'h6D6D6E6F;
-            6'd33: piano_word = 32'h6D6D6D6D;
-            6'd34: piano_word = 32'h6F6E6E6E;
-            6'd35: piano_word = 32'h6F6F6F6F;
-            6'd36: piano_word = 32'h6E6F6F6F;
-            6'd37: piano_word = 32'h6C6D6D6E;
-            6'd38: piano_word = 32'h67696A6B;
-            6'd39: piano_word = 32'h62636566;
-            6'd40: piano_word = 32'h5B5D5E60;
-            6'd41: piano_word = 32'h54565759;
-            6'd42: piano_word = 32'h4E505153;
-            6'd43: piano_word = 32'h494A4B4D;
-            6'd44: piano_word = 32'h44454647;
-            6'd45: piano_word = 32'h3E404142;
-            6'd46: piano_word = 32'h393A3C3D;
-            6'd47: piano_word = 32'h34353638;
-            6'd48: piano_word = 32'h2F303133;
-            6'd49: piano_word = 32'h2A2B2C2E;
-            6'd50: piano_word = 32'h25262729;
-            6'd51: piano_word = 32'h21222324;
-            6'd52: piano_word = 32'h1D1E1F20;
-            6'd53: piano_word = 32'h1A1B1C1C;
-            6'd54: piano_word = 32'h16171819;
-            6'd55: piano_word = 32'h13141415;
-            6'd56: piano_word = 32'h11111212;
-            6'd57: piano_word = 32'h10101010;
-            6'd58: piano_word = 32'h10101010;
-            6'd59: piano_word = 32'h12111111;
-            6'd60: piano_word = 32'h19171513;
-            6'd61: piano_word = 32'h2A25201C;
-            6'd62: piano_word = 32'h4A413831;
-            6'd63: piano_word = 32'h74695E53;
-            default: piano_word = 32'h80808080;
-        endcase
-    endfunction
+    // The source 'Piano C3' is 8192 nonzero offset-binary samples.
+    // Generated locally from the authentic synthLAB.po disk, not committed.
+    // One 32-bit little-endian word per line, 2048 lines total.
+    //
+    // Registered ROM read; RAM_FETCH waits a clock after word index changes.
+    logic [31:0] synthlab_pcm_rom [0:2047];
+    logic [31:0] synthlab_pcm_word_r;
+    initial $readmemh("hdl/piano_c3_attack.mem", synthlab_pcm_rom);
+    always_ff @(posedge clk_i)
+        synthlab_pcm_word_r <= synthlab_pcm_rom[wave_word_r];
 
     // YM2149's native 32-step DAC law, scaled to P2's 208 DOC-volume ceiling.
     function automatic logic [7:0] ym_level(input logic [4:0] amp);
@@ -232,9 +169,9 @@ module mb_doc_bridge #(
 
     // Byte zero of the patch corresponds to DOC address $0000.
     // The SDRAM GLU port takes a 32-bit word address and byte lanes.
-    assign ram_addr_o = {15'b0, wave_word_r};
+    assign ram_addr_o = {10'b0, wave_word_r};
     assign ram_byte_en_o = 4'hF;
-    assign ram_data_o = piano_word(wave_word_r);
+    assign ram_data_o = synthlab_pcm_word_r;
     assign ram_wr_o = (state_r == RAM_ISSUE) ||
                        (state_r == RAM_WAIT);
 
@@ -273,7 +210,7 @@ module mb_doc_bridge #(
         if (!reset_n_i) begin
             state_r          <= WAIT_SDRAM;
             return_state_r   <= WAIT_SDRAM;
-            wave_word_r      <= 6'd0;
+            wave_word_r      <= 11'd0;
             voice_r          <= 3'd0;
             command_step_r   <= 3'd0;
             first_scan_r     <= 1'b1;
@@ -295,9 +232,13 @@ module mb_doc_bridge #(
                 WAIT_SDRAM: begin
                     ready_o <= 1'b0;
                     if (sdram_ready_i) begin
-                        wave_word_r <= 6'd0;
-                        state_r <= RAM_ISSUE;
+                        wave_word_r <= 11'd0;
+                        state_r <= RAM_FETCH;
                     end
+                end
+
+                RAM_FETCH: begin
+                    state_r <= RAM_ISSUE;
                 end
 
                 RAM_ISSUE:
@@ -311,11 +252,11 @@ module mb_doc_bridge #(
                 RAM_RELEASE: begin
                     // Drop WR for one full clock to re-arm SDRAM's
                     // rising-edge request capture before next word.
-                    if (wave_word_r == 6'd63) begin
+                    if (wave_word_r == 11'd2047) begin
                         state_r <= ENABLE_DOC;
                     end else begin
                         wave_word_r <= wave_word_r + 1'b1;
-                        state_r <= RAM_ISSUE;
+                        state_r <= RAM_FETCH;
                     end
                 end
 
@@ -357,9 +298,10 @@ module mb_doc_bridge #(
                     quotient_r <= next_quotient_w;
                     division_count_r <= division_count_r - 1'b1;
                     if (division_count_r == 5'd1) begin
-                        voice_freq_r <= next_quotient_w[16] ?
+                        // FC times four: saturate rather than truncate.
+                        voice_freq_r <= (|next_quotient_w[16:14]) ?
                                         16'hFFFF :
-                                        next_quotient_w[15:0];
+                                        {next_quotient_w[13:0], 2'b00};
                         command_step_r <= first_scan_r ? 3'd0 : 3'd3;
                         state_r <= VOICE_COMMAND;
                     end
@@ -381,7 +323,7 @@ module mb_doc_bridge #(
                         end
                         3'd2: begin
                             cmd_addr_r <= 8'hC0 + {5'b0, voice_r};
-                            cmd_data_r <= 8'h00; // 256-byte table, RES0
+                            cmd_data_r <= 8'h2F; // WTS5 = 8KB, RES7
                         end
                         3'd3: begin
                             cmd_addr_r <= 8'h00 + {5'b0, voice_r};
