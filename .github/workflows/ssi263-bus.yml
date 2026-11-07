@@ -1,0 +1,27 @@
+name: SSI-263 Mockingboard register bus contract
+on:
+  push:
+    branches:
+      - petar/mockingboard-ssi263-p0-20261106
+    paths:
+      - "hdl/mockingboard/ssi263_slot_frontend.sv"
+      - "tests/ssi263/**"
+      - ".github/workflows/ssi263-bus.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bus-rtl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Icarus
+        run: sudo apt-get update && sudo apt-get install -y iverilog
+      - name: Validate isolated SSI-263 Apple II bus contract
+        run: |
+          iverilog -g2012 -s tb_ssi263_slot_frontend -o /tmp/ssi263-bus.vvp \
+            hdl/mockingboard/ssi263_slot_frontend.sv \
+            tests/ssi263/tb_ssi263_slot_frontend.sv
+          vvp /tmp/ssi263-bus.vvp
