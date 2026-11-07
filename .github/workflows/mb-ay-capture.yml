@@ -31,7 +31,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Icarus Verilog
         run: sudo apt-get update && sudo apt-get install -y iverilog verilator
-      - name: Extract original SynthLAB Piano C3 from archive (experimental branch)
+      - name: Validate Python extractors and DOS 3.3 analyzer syntax
+        if: github.ref_name == 'petar/mb-doc-p4-mcs-articulation-rest-multisample-20261107'
+        run: python3 -m py_compile tools/extract_synthlab_piano.py tools/inspect_mockingboard_dos33.py
+      - name: Extract original SynthLAB piano sustains from archive (experimental branch)
         if: github.ref_name == 'petar/mb-doc-synthlab-piano-c3-8k-20261106' || github.ref_name == 'petar/mb-doc-synthlab-c3-sustain-only-20261106' || github.ref_name == 'petar/mb-doc-c3-pitch-calibration-20261106' || github.ref_name == 'petar/mb-doc-p4-mcs-articulation-rest-multisample-20261107'
         run: python3 tools/extract_synthlab_piano.py --download
       - name: Simulate AY capture and six-voice DOC bridge
