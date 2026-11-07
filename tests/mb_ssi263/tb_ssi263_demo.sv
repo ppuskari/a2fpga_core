@@ -76,6 +76,22 @@ module tb_ssi263_demo;
         #1;
         if (read_data !== 8'd0)
             $fatal(1,"P2 XCK count should start at zero");
+        addr=8'h45;
+        #1;
+        if (read_data !== 8'd3)
+            $fatal(1,"P3 last SSI register address is not R3");
+        addr=8'h46;
+        #1;
+        if (read_data !== 8'h70)
+            $fatal(1,"P3 last SSI data was not $70");
+        addr=8'h47;
+        #1;
+        if (read_data !== 8'h70)
+            $fatal(1,"P3 internal R3 did not latch $70");
+        addr=8'h48;
+        #1;
+        if (read_data !== 8'd1)
+            $fatal(1,"P3 power-up transition counter missing");
         sel=0;
         if (!powered || ar_n!==1'b1 || pcm!==16'sd0)
             $fatal(1,"SSI startup pause/standby sequence wrong");
