@@ -6,6 +6,7 @@ on:
       - petar/mockingboard-ensoniq-p0
       - petar/mb-doc-p3-envelope-gain
       - petar/mb-doc-piano-wavetable-20261106
+      - petar/mb-doc-synthlab-piano-c3-8k-20261106
     paths:
       - "hdl/mockingboard/mockingboard.sv"
       - "hdl/support/YM2149.sv"
@@ -13,6 +14,7 @@ on:
       - "boards/a2n20v2-Enhanced/hdl/top.sv"
       - "hdl/sound/sound_glu.sv"
       - "tests/mb_doc/**"
+      - "tools/extract_synthlab_piano.py"
       - ".github/workflows/mb-ay-capture.yml"
   workflow_dispatch:
 
@@ -26,6 +28,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Icarus Verilog
         run: sudo apt-get update && sudo apt-get install -y iverilog verilator
+      - name: Extract original SynthLAB Piano C3 from archive (experimental branch)
+        if: github.ref_name == 'petar/mb-doc-synthlab-piano-c3-8k-20261106'
+        run: python3 tools/extract_synthlab_piano.py --download
       - name: Simulate AY capture and six-voice DOC bridge
         run: sh tests/mb_doc/run_capture_test.sh
       - name: Simulate native 32-step YM2149 envelope and retrigger
