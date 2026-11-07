@@ -48,16 +48,18 @@ module tb_mb_doc_bridge;
         .ram_wr_o(ram_wr), .ram_addr_o(ram_addr),
         .ram_data_o(ram_data), .ram_byte_en_o(ram_byte_en),
         .ram_ready_i(ram_ready), .ready_o(active),
-        .active_voice_o(active_voice)
+        .active_voice_o(active_voice),
+        .fx_ay_l_o(fx_l), .fx_ay_r_o(fx_r)
     );
 
     integer write_count = 0, doc_count = 0;
+    wire fx_l, fx_r;
     integer ram_busy = 0, ram_delay = 0;
     logic prev_ram_wr = 0;
     logic [7:0] doc_addresses [0:255];
     logic [7:0] doc_values [0:255];
 
-    // Independent 1024-byte SynthLAB ~Piano C3 fingerprint. This detects a missing,
+    // Independent 5632-byte seven-zone SynthLAB piano sustain fingerprint. This detects a missing,
     // truncated, lane-swapped or stale piano sample during SDRAM preload.
     logic [31:0] sample_fnv = 32'h811C9DC5;
 
@@ -72,7 +74,7 @@ module tb_mb_doc_bridge;
         end else begin
             prev_ram_wr <= ram_wr;
             if (ram_wr && !prev_ram_wr) begin
-                if (ram_busy || write_count >= 256)
+                if (ram_busy || write_count >= 1408)
                     $fatal(1, "RAM double request");
                 if (ram_addr !== write_count || ram_byte_en !== 4'hF)
                     $fatal(1, "Bad RAM addr/lane %d %h", write_count, ram_addr);
@@ -95,9 +97,9 @@ module tb_mb_doc_bridge;
                 end else ram_delay <= ram_delay - 1;
             end
             if (doc_wr) begin
-                if (write_count != 256)
+                if (write_count != 1408)
                     $fatal(1, "DOC command before preload complete");
-                if (sample_fnv !== 32'h430E4B0A)
+                if (sample_fnv !== 32'h170BB8B3)
                     $fatal(1, "Piano PCM FNV32 mismatch: %h", sample_fnv);
                 if (doc_count < 256) begin
                     doc_addresses[doc_count] <= doc_addr;
@@ -140,13 +142,22 @@ module tb_mb_doc_bridge;
 
     function automatic integer period_for(input integer i);
         case(i)
-            0:period_for=100;
-            1:period_for=150;
-            2:period_for=200;
-            3:period_for=250;
-            4:period_for=300;
-            default:period_for=400;
+            0:period_for=60;    // D5 zone
+            1:period_for=100;   // B3 zone
+            2:period_for=150;   // calibrated C3 zone
+            3:period_for=250;   // calibrated C3 zone
+            4:period_for=800;   // E2 zone
+            default:period_for=1800; // C1 zone
         endcase
+    endfunction
+    function automatic integer zone_wtp_for(input integer period);
+        if (period <= 70) zone_wtp_for = 'h14;
+        else if (period <= 90) zone_wtp_for = 'h12;
+        else if (period <= 112) zone_wtp_for = 'h10;
+        else if (period <= 600) zone_wtp_for = 'h0C;
+        else if (period <= 1000) zone_wtp_for = 'h08;
+        else if (period <= 1600) zone_wtp_for = 'h04;
+        else zone_wtp_for = 'h00;
     endfunction
 
     initial begin
@@ -159,7 +170,7 @@ module tb_mb_doc_bridge;
         wait (active && doc_count >= 43);
         @(negedge clk);
 
-        if (write_count != 256 || doc_count < 43)
+        if (write_count != 1408 || doc_count < 43)
             $fatal(1, "Startup incomplete %d / %d",write_count,doc_count);
         if (doc_addresses[0] !== 8'hE1 || doc_values[0] !== 8'h0E)
             $fatal(1, "Osc enable incorrect");
@@ -171,10 +182,10 @@ module tb_mb_doc_bridge;
                 doc_values[off] !== (v < 3 ? 8'h11 : 8'h01))
                 $fatal(1, "Voice %0d initial HALT bad",v);
             if (doc_addresses[off+1] !== 8'(8'h80+v) ||
-                doc_values[off+1] !== 8'h00)
+                doc_values[off+1] !== 8'(zone_wtp_for(period_for(v))))
                 $fatal(1, "Voice %0d WTP bad",v);
             if (doc_addresses[off+2] !== 8'(8'hC0+v) ||
-                doc_values[off+2] !== 8'(8'h10 | TEST_RES))
+                doc_values[off+2] !== 8'((period_for(v) <= 112 ? 8'h08 : 8'h10) | TEST_RES))
                 $fatal(1, "Voice %0d RTS bad",v);
             if (doc_addresses[off+3] !== 8'(v) ||
                 doc_values[off+3] !== 8'(expect_fc))
@@ -204,9 +215,9 @@ module tb_mb_doc_bridge;
             doc_values[46] !== 8'h11)
             $fatal(1, "Retrigger or volume-mute regression");
 
-        // A subsequent period-zero command saturates FC to
-        // $FFFF. This remains a pitch limit, not a divide-by-zero.
-        ay_write(1'b0, 4'h0, 8'h00);
+        // MCS uses period $0001 as a rest: the DOC must not play
+        // aliased ultrasonic garbage even if AY fixed volume is nonzero.
+        ay_write(1'b0, 4'h0, 8'h01);
         ay_write(1'b0, 4'h1, 8'h00);
         ay_write(1'b0, 4'h8, 8'h0F);
         // The new value is visible on the next round of voice0.
@@ -216,47 +227,67 @@ module tb_mb_doc_bridge;
             doc_addresses[68] !== 8'h20 ||
             doc_values[67] !== 8'hFF ||
             doc_values[68] !== 8'hFF)
-            $fatal(1, "Period-zero frequency clamp incorrect");
+            $fatal(1, "Period-one frequency clamp incorrect");
 
-        // P3: native envelope input replaces the former permanent
-        // maximum-volume preview. The DOC must follow changing envelopes,
-        // including a zero step that halts the oscillator.
+        // Rest with nonzero AY volume must actually mute DOC, including CTRL.
+        if (doc_values[69] !== 8'h00 || doc_values[70] !== 8'h11)
+            $fatal(1, "MCS period-one rest leaked DOC sound");
+
+        // A valid new note following that rest must restart the oscillator
+        // and select the calibrated C3 sustain at WTP $0C.
         l_env_level = 5'd31;
+        ay_write(1'b0, 4'h0, 8'd145); // A4 keyboard test
         ay_write(1'b0, 4'h8, 8'h10);
-        wait (doc_count >= 95);
+        wait (doc_count >= 98);
         @(negedge clk);
-        if (doc_addresses[93] !== 8'h40 ||
-            doc_values[93] !== 8'd208 ||
-            doc_values[94] !== 8'h10)
-            $fatal(1, "P3 envelope maximum did not reach DOC left A");
+        if (doc_addresses[91] !== 8'hA0 || doc_values[91] !== 8'h11 ||
+            doc_addresses[92] !== 8'h80 || doc_values[92] !== 8'h0C ||
+            doc_addresses[93] !== 8'hC0 || doc_values[93] !== (8'h10|TEST_RES) ||
+            doc_addresses[96] !== 8'h40 || doc_values[96] !== 8'd208 ||
+            doc_addresses[97] !== 8'hA0 || doc_values[97] !== 8'h10)
+            $fatal(1, "P4 note retrigger or preserved keyboard envelope failed");
 
+        // The native YM envelope must still control keyboard decay.
         l_env_level = 5'd0;
-        wait (doc_count >= 119);
+        wait (doc_count >= 122);
         @(negedge clk);
-        if (doc_addresses[117] !== 8'h40 ||
-            doc_values[117] !== 8'h00 ||
-            doc_values[118] !== 8'h11)
-            $fatal(1, "P3 envelope zero failed to HALT DOC left A");
+        if (doc_addresses[120] !== 8'h40 ||
+            doc_values[120] !== 8'h00 ||
+            doc_values[121] !== 8'h11)
+            $fatal(1, "Native R13 envelope mute failed");
 
-        // P3: the external per-chip PSG reset must clear the AY shadows
-        // even when the software omits an explicit register-8 note-off.
+        // Fixed-volume MCS notes recover after keyboard envelope without
+        // a new phase restart if pitch hasn't changed.
         ay_write(1'b0, 4'h8, 8'h0F);
-        wait (doc_count >= 143);
+        wait (doc_count >= 146);
         @(negedge clk);
-        if (doc_values[141] !== 8'd208)
-            $fatal(1, "P3 fixed-volume recovery after envelope failed");
+        if (doc_values[144] == 8'd0)
+            $fatal(1, "P4 fixed-volume note failed");
+
+        // PB2 reset must clear shadows and silence a running DOC voice.
         l_reset_n = 1'b0;
         repeat (3) @(negedge clk);
         l_reset_n = 1'b1;
-        wait (doc_count >= 167);
+        wait (doc_count >= 170);
         @(negedge clk);
-        if (doc_addresses[165] !== 8'h40 ||
-            doc_values[165] !== 8'h00 ||
-            doc_values[166] !== 8'h11)
-            $fatal(1, "P3 PSG RESET failed to clear stale DOC note");
+        if (doc_addresses[168] !== 8'h40 ||
+            doc_values[168] !== 8'h00 ||
+            doc_values[169] !== 8'h11)
+            $fatal(1, "P4 PSG reset failed");
 
         $display("PASS: native AY envelope level, zero-vol note-off, PB2 reset");
-        $display("PASS: authentic 1KB SynthLAB C3 sustain loop, RES=%0d; 6 voice startup, stereo,", TEST_RES);
+        // Title animation FX signature ($1C, 15/15) and native AY noise.
+        ay_write(1'b0, 4'h7, 8'h1C);
+        ay_write(1'b0, 4'h8, 8'h0F);
+        ay_write(1'b0, 4'h9, 8'h0F);
+        if (fx_l !== 1'b1) $fatal(1, "Startup 2-tone glide AY bypass missing");
+        ay_write(1'b0, 4'h7, 8'h3E);
+        if (fx_l !== 1'b0) $fatal(1, "Keyboard wrongly bypasses sampled piano");
+        ay_write(1'b1, 4'h7, 8'h07);
+        ay_write(1'b1, 4'h8, 8'h10);
+        if (fx_r !== 1'b1) $fatal(1, "AY noise bypass missing");
+
+        $display("PASS: seven authentic PCM zones 5632B; RES=%0d, period-one rest, note restart, FX bypass", TEST_RES);
         $display("      continued phase, mute, and period-zero pitch clamp");
         $finish;
     end
