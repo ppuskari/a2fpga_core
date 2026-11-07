@@ -1,16 +1,17 @@
 // Mockingboard AY register stream -> existing Ensoniq DOC5503.
 //
-// P2 first-tone implementation: six pitched voices, 3L + 3R.
+// P4: six note-aware multisampled voices, three left and three right.
 // The DOC is exclusively owned by this core in MB mode.
 // All signals are synchronous to the A2FPGA 54 MHz logic clock.
 // Reuse the native YM2149 envelope generators (registers 11-13,
 // all sixteen shapes and restart-on-write). AY noise is not yet modeled.
 //
-// The loader installs the authentic 1024-byte SynthLAB ~Piano C3 sustain
-// loop into DOC bank-0 sound RAM. PCM is extracted locally from System 6.0.4
-// instead of being redistributed in the source repository.
-// This deliberately tests sustain ONLY, with no hammer attack or note retrigger.
-// It isolates the bad repeated-attack behavior of the preceding 8KB test.
+// The loader installs seven authentic SynthLAB piano SUSTAIN zones (5632 B),
+// extracted locally from System 6.0.4 rather than redistributing the PCM.
+// The original 8 KB hammer attacks are NOT looped. New discrete notes restart
+// the DOC table and may receive a soft decay if AY uses a fixed volume.
+// AY hardware-envelope keyboard notes retain their own native envelope.
+// DOS 3.3 MCS period 0/1 ultrasonic rest markers are silent, not aliased DOC.
 //
 // No reconfiguration of the native IIgs/GS mode is performed here.
 module mb_doc_bridge #(
@@ -19,7 +20,11 @@ module mb_doc_bridge #(
     // Pitch A/B knob (same original 1024 bytes):
     // 2 = old low sustain (RTS $12), 1 = +1 octave (RTS $11),
     // 0 = +2 octaves (RTS $10). WTS stays 2 in all three cases.
-    parameter logic [2:0] SUSTAIN_RES = 3'd1
+    parameter logic [2:0] SUSTAIN_RES = 3'd0,
+    parameter bit MULTISAMPLE_ENABLE = 1'b1,
+    parameter bit PIANO_ENVELOPE_ENABLE = 1'b1,
+    parameter bit REST_MUTE_ENABLE = 1'b1,
+    parameter bit FX_AY_BYPASS_ENABLE = 1'b1
 ) (
     input  logic        clk_i,
     input  logic        reset_n_i,
@@ -48,7 +53,11 @@ module mb_doc_bridge #(
     input  logic        ram_ready_i,
 
     output logic        ready_o,
-    output logic [2:0]  active_voice_o
+    output logic [2:0]  active_voice_o,
+    // Select native AY rendering for noise/multitone sound effects.
+    // The FPGA still keeps the YM cores running in parallel.
+    output logic        fx_ay_l_o,
+    output logic        fx_ay_r_o
 );
     typedef enum logic [3:0] {
         WAIT_SDRAM, RAM_FETCH, RAM_ISSUE, RAM_WAIT, RAM_RELEASE,
@@ -62,7 +71,7 @@ module mb_doc_bridge #(
     // reach here; the original YM2149 still owns VIA readback.
     logic [7:0] ay_regs [0:1][0:15];
 
-    logic [7:0] wave_word_r;
+    logic [10:0] wave_word_r;
     logic [2:0] voice_r;
     logic [2:0] command_step_r;
     logic first_scan_r;
@@ -73,6 +82,12 @@ module mb_doc_bridge #(
     logic [15:0] voice_freq_r;
     logic [7:0] voice_volume_r;
     logic voice_tone_r;
+    logic [11:0] prev_period_r [0:5];
+    logic [2:0] prev_zone_r [0:5];
+    logic prev_active_r [0:5];
+    logic [7:0] piano_env_r [0:5];
+    logic [3:0] piano_tick_r [0:5];
+    logic note_restart_r;
 
     // One shared, 17-clock non-restoring? No: standard restoring
     // unsigned divider, constant dividend 93623 / AY period.
@@ -114,6 +129,72 @@ module mb_doc_bridge #(
     wire selected_reset_n_w =
         selected_chip_w ? ay_r_reset_n_i : ay_l_reset_n_i;
 
+    // Conservative zoning: preserve the calibrated C4..C5 keyboard using
+    // the known-good ~Piano C3 sustain. Use other genuine source samples
+    // only beyond that range until their real-hardware timbre is checked.
+    // Thresholds use the AY tone period, which falls as pitch rises.
+    function automatic logic [2:0] sample_zone(input logic [11:0] period);
+        if (!MULTISAMPLE_ENABLE) sample_zone = 3'd3;
+        else if (period <= 12'd70) sample_zone = 3'd6; // D5
+        else if (period <= 12'd90) sample_zone = 3'd5; // F4
+        else if (period <= 12'd112) sample_zone = 3'd4; // B3
+        else if (period <= 12'd600) sample_zone = 3'd3; // C3
+        else if (period <= 12'd1000) sample_zone = 3'd2; // E2
+        else if (period <= 12'd1600) sample_zone = 3'd1; // G1
+        else sample_zone = 3'd0;                         // C1
+    endfunction
+
+    function automatic logic [7:0] zone_wtp(input logic [2:0] zone);
+        case (zone)
+            3'd0: zone_wtp=8'h00; // C1, 1024 bytes
+            3'd1: zone_wtp=8'h04; // G1, 1024 bytes
+            3'd2: zone_wtp=8'h08; // E2, 1024 bytes
+            3'd3: zone_wtp=8'h0C; // C3, 1024 bytes
+            3'd4: zone_wtp=8'h10; // B3,  512 bytes
+            3'd5: zone_wtp=8'h12; // F4,  512 bytes
+            default:zone_wtp=8'h14; // D5, 512 bytes
+        endcase
+    endfunction
+
+    wire [2:0] selected_zone_w = sample_zone(selected_period_w);
+    wire selected_note_active_w = selected_reset_n_w && tone_allowed_w &&
+        (!REST_MUTE_ENABLE || selected_period_w > 12'd1) &&
+        (selected_amp_w[4] || |selected_amp_w[3:0]);
+
+    wire [11:0] old_period_w = prev_period_r[voice_r];
+    wire [11:0] period_delta_w =
+        (selected_period_w >= old_period_w)
+        ? (selected_period_w - old_period_w)
+        : (old_period_w - selected_period_w);
+    // >3.125% change distinguishes MCS melody steps from the introductory
+    // 1-count-per-IRQ pitch glides, whose sound must NOT be retriggered.
+    wire note_step_w = old_period_w >= 12'd2 &&
+        ({5'b0,period_delta_w} << 5) >= {5'b0,old_period_w};
+    wire note_restart_w = selected_note_active_w &&
+        (!prev_active_r[voice_r] || note_step_w ||
+         selected_zone_w != prev_zone_r[voice_r]);
+
+    // Bypass the piano for genuinely noise-driven AY effects, the
+    // two-tone fixed-volume timer sweep and three-channel envelope effects.
+    // This is tonal-instrument classification, not a hardcoded disk address.
+    function automatic logic uses_ay_fx(
+        input logic [7:0] mixer,
+        input logic [7:0] a,
+        input logic [7:0] b,
+        input logic [7:0] c
+    );
+        uses_ay_fx =
+            ((!mixer[3] && |a[4:0]) ||
+             (!mixer[4] && |b[4:0]) ||
+             (!mixer[5] && |c[4:0])) ||
+            (mixer==8'h1C && |a[3:0] && |b[3:0]) ||
+            (mixer==8'h38 && a[4] && b[4] && c[4]);
+    endfunction
+    assign fx_ay_l_o = FX_AY_BYPASS_ENABLE && ay_l_reset_n_i &&
+        uses_ay_fx(ay_regs[0][7],ay_regs[0][8],ay_regs[0][9],ay_regs[0][10]);
+    assign fx_ay_r_o = FX_AY_BYPASS_ENABLE && ay_r_reset_n_i &&
+        uses_ay_fx(ay_regs[1][7],ay_regs[1][8],ay_regs[1][9],ay_regs[1][10]);
+
     // 5-bit upper range can occur when dividend=93623 and P=1.
     // Saturate to DOC's maximum 16-bit frequency.
     assign shifted_remainder_w =
@@ -130,9 +211,9 @@ module mb_doc_bridge #(
     // One 32-bit little-endian word per line, 256 lines total.
     //
     // Registered ROM read; RAM_FETCH waits a clock after word index changes.
-    logic [31:0] synthlab_pcm_rom [0:255];
+    logic [31:0] synthlab_pcm_rom [0:1407];
     logic [31:0] synthlab_pcm_word_r;
-    initial $readmemh("hdl/piano_c3_sustain.mem", synthlab_pcm_rom);
+    initial $readmemh("hdl/piano_multisustain.mem", synthlab_pcm_rom);
     always_ff @(posedge clk_i)
         synthlab_pcm_word_r <= synthlab_pcm_rom[wave_word_r];
 
@@ -177,7 +258,7 @@ module mb_doc_bridge #(
 
     // Byte zero of the patch corresponds to DOC address $0000.
     // The SDRAM GLU port takes a 32-bit word address and byte lanes.
-    assign ram_addr_o = {13'b0, wave_word_r};
+    assign ram_addr_o = {10'b0, wave_word_r};
     assign ram_byte_en_o = 4'hF;
     assign ram_data_o = synthlab_pcm_word_r;
     assign ram_wr_o = (state_r == RAM_ISSUE) ||
@@ -189,6 +270,7 @@ module mb_doc_bridge #(
     assign active_voice_o = voice_r;
 
     integer chip, reg_index;
+    integer vi;
     always_ff @(posedge clk_i) begin
         if (!reset_n_i) begin
             for (chip = 0; chip < 2; chip = chip + 1)
@@ -218,7 +300,7 @@ module mb_doc_bridge #(
         if (!reset_n_i) begin
             state_r          <= WAIT_SDRAM;
             return_state_r   <= WAIT_SDRAM;
-            wave_word_r      <= 8'd0;
+            wave_word_r      <= 11'd0;
             voice_r          <= 3'd0;
             command_step_r   <= 3'd0;
             first_scan_r     <= 1'b1;
@@ -229,6 +311,14 @@ module mb_doc_bridge #(
             voice_freq_r     <= 16'h0000;
             voice_volume_r   <= 8'h00;
             voice_tone_r     <= 1'b0;
+            note_restart_r    <= 1'b0;
+            for (vi=0;vi<6;vi=vi+1) begin
+                prev_period_r[vi] <= 12'd0;
+                prev_zone_r[vi]   <= 3'd3;
+                prev_active_r[vi] <= 1'b0;
+                piano_env_r[vi]   <= 8'd0;
+                piano_tick_r[vi]  <= 4'd0;
+            end
             dividend_r       <= 17'd0;
             quotient_r       <= 17'd0;
             remainder_r      <= 17'd0;
@@ -240,7 +330,7 @@ module mb_doc_bridge #(
                 WAIT_SDRAM: begin
                     ready_o <= 1'b0;
                     if (sdram_ready_i) begin
-                        wave_word_r <= 8'd0;
+                        wave_word_r <= 11'd0;
                         state_r <= RAM_FETCH;
                     end
                 end
@@ -260,7 +350,7 @@ module mb_doc_bridge #(
                 RAM_RELEASE: begin
                     // Drop WR for one full clock to re-arm SDRAM's
                     // rising-edge request capture before next word.
-                    if (wave_word_r == 8'd255) begin
+                    if (wave_word_r == 11'd1407) begin
                         state_r <= ENABLE_DOC;
                     end else begin
                         wave_word_r <= wave_word_r + 1'b1;
@@ -282,13 +372,35 @@ module mb_doc_bridge #(
                     // Live AY shadow captures take effect at the next
                     // voice scan, not asynchronously in the DOC.
                     voice_tone_r <= tone_allowed_w;
+                    note_restart_r <= note_restart_w;
+                    prev_active_r[voice_r] <= selected_note_active_w;
+                    prev_period_r[voice_r] <= selected_period_w;
+                    prev_zone_r[voice_r] <= selected_zone_w;
+                    if (!selected_note_active_w) begin
+                        piano_env_r[voice_r] <= 8'd0;
+                        piano_tick_r[voice_r] <= 4'd0;
+                    end else if (note_restart_w) begin
+                        piano_env_r[voice_r] <= 8'hFF;
+                        piano_tick_r[voice_r] <= 4'd0;
+                    end else if (!selected_amp_w[4] && PIANO_ENVELOPE_ENABLE) begin
+                        if (piano_tick_r[voice_r] == 4'd15) begin
+                            piano_tick_r[voice_r] <= 4'd0;
+                            if (piano_env_r[voice_r] != 8'd0)
+                                piano_env_r[voice_r] <= piano_env_r[voice_r] - 1'b1;
+                        end else piano_tick_r[voice_r] <= piano_tick_r[voice_r]+1'b1;
+                    end
                     // AY amplitude bit 4 selects the actual, clocked 32-step
                     // envelope from the existing YM2149 core. Fixed levels
                     // share the logarithmic law; RESET/tone-off force mute.
-                    voice_volume_r <=
-                        (selected_reset_n_w && tone_allowed_w) ?
-                        ym_level(selected_amp_w[4] ? selected_env_level_w :
-                                 {selected_amp_w[3:0],selected_amp_w[3]}) :
+                    // Do not reshape the keyboard's real AY R13 envelope.
+                    // Fixed-volume MCS notes get a mild one-shot piano decay.
+                    voice_volume_r <= selected_note_active_w ?
+                        ((selected_amp_w[4] || !PIANO_ENVELOPE_ENABLE) ?
+                            ym_level(selected_amp_w[4] ? selected_env_level_w :
+                                     {selected_amp_w[3:0],selected_amp_w[3]}) :
+                            8'((({8'b0,ym_level({selected_amp_w[3:0],selected_amp_w[3]})}
+                                * {8'b0,(note_restart_w ? 8'hFF : piano_env_r[voice_r])})
+                                + 16'd255) >> 8)) :
                         8'd0;
                     divisor_r <= (selected_period_w == 12'd0) ?
                                   12'd1 : selected_period_w;
@@ -310,7 +422,7 @@ module mb_doc_bridge #(
                         voice_freq_r <= next_quotient_w[16] ?
                                         16'hFFFF :
                                         next_quotient_w[15:0];
-                        command_step_r <= first_scan_r ? 3'd0 : 3'd3;
+                        command_step_r <= (first_scan_r || note_restart_r) ? 3'd0 : 3'd3;
                         state_r <= VOICE_COMMAND;
                     end
                 end
@@ -327,11 +439,11 @@ module mb_doc_bridge #(
                         end
                         3'd1: begin
                             cmd_addr_r <= 8'h80 + {5'b0, voice_r};
-                            cmd_data_r <= 8'h00;
+                            cmd_data_r <= zone_wtp(prev_zone_r[voice_r]);
                         end
                         3'd2: begin
                             cmd_addr_r <= 8'hC0 + {5'b0, voice_r};
-                            cmd_data_r <= {2'b00, 3'd2, SUSTAIN_RES}; // WTS2=1KB; RES0..2
+                            cmd_data_r <= {2'b00, (prev_zone_r[voice_r]>=3'd4?3'd1:3'd2), SUSTAIN_RES};
                         end
                         3'd3: begin
                             cmd_addr_r <= 8'h00 + {5'b0, voice_r};
