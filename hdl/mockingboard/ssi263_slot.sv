@@ -71,7 +71,9 @@ module ssi263_slot (
             wr_reg_r <= 3'b0;
             wr_data_r <= 8'h00;
         end else begin
-            wr_prev_r <= wr_phase_w;
+            // Arm only when the data-valid strobe is actually present.
+            // Prior address-select cycles must not consume the edge.
+            wr_prev_r <= wr_phase_w && data_in_strobe_i;
             wr_pulse_r <= wr_phase_w && data_in_strobe_i && !wr_prev_r;
             if (wr_phase_w && data_in_strobe_i && !wr_prev_r) begin
                 wr_reg_r <= card_addr_i[2:0];
