@@ -58,12 +58,36 @@ module tb_ssi263_demo;
         cpu_wr(8'h43,8'h80); // $6D40: standby
         cpu_wr(8'h40,8'hC0); // $6D45: duration/mode=3, pause
         cpu_wr(8'h43,8'h70); // $6D4A: power up and mode latch
+        // Verify P2 read-only diagnostics without affecting the original
+        // SSI control behavior; real reads are sampled with rw_n asserted.
+        @(negedge clk); sel=1; rw_n=1; addr=8'h43;
+        #1;
+        if (!read_enable || read_data !== 8'hA5)
+            $fatal(1,"P2 signature read mux missing");
+        addr=8'h41;
+        #1;
+        if (read_data !== 8'd3)
+            $fatal(1,"P2 write counter missed an SSI write: %0d",read_data);
+        addr=8'h44;
+        #1;
+        if (read_data !== 8'd1)
+            $fatal(1,"P2 powered diagnostic missing");
+        addr=8'h42;
+        #1;
+        if (read_data !== 8'd0)
+            $fatal(1,"P2 XCK count should start at zero");
+        sel=0;
         if (!powered || ar_n!==1'b1 || pcm!==16'sd0)
             $fatal(1,"SSI startup pause/standby sequence wrong");
 
         // The initial all-zero phoneme is silent. One SSI timer period
         // must request the FIRST MESS record via the VIA's CA1 edge.
         ticks(65535);
+        @(negedge clk); sel=1; rw_n=1; addr=8'h42;
+        #1;
+        if (read_data !== 8'hFF)
+            $fatal(1,"P2 XCK diagnostic should saturate at 255");
+        sel=0;
         if (ar_n!==1'b1) $fatal(1,"First SSI IRQ arrived too early");
         ticks(1);
         if (ar_n!==1'b0 || read_data[7]!==1'b1)
