@@ -26,7 +26,8 @@ module ssi263_control #(
     output wire [3:0] amplitude_o,
     output wire [7:0] inflection_o,
     output wire [7:0] rate_o,
-    output wire       phoneme_start_o
+    output wire       phoneme_start_o,
+    output wire [7:0] debug_r3_o
 );
     logic [7:0] r0, r1, r2, r3, r4;
     logic [1:0] active_mode_r;
@@ -64,6 +65,8 @@ module ssi263_control #(
     assign inflection_o = r1;
     assign rate_o = r2;
     assign phoneme_start_o = phoneme_start_r;
+    // Read-only P3 diagnostic; no effect on the SSI state machine.
+    assign debug_r3_o = r3;
 
     always @(posedge clk_i) begin
         if (!reset_n_i) begin
