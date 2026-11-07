@@ -1,0 +1,31 @@
+name: Mockingboard SSI263 P0 bus and A-R timing
+
+on:
+  push:
+    branches:
+      - petar/mb-ssi263-kue-m-isolated-20261106
+    paths:
+      - "hdl/mockingboard/ssi263_*.sv"
+      - "hdl/mockingboard/mockingboard.sv"
+      - "boards/a2n20v2-Enhanced/hdl/top.sv"
+      - "tests/mb_ssi263/**"
+      - ".github/workflows/mb-ssi263.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ssi263-register-and-request:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Icarus Verilog
+        run: sudo apt-get update && sudo apt-get install -y iverilog
+      - name: Verify SSI263 bus, timing, status and CA1
+        run: |
+          iverilog -g2012 -s tb_ssi263_slot -o /tmp/mb_ssi263.vvp \
+            hdl/mockingboard/ssi263_control.sv \
+            hdl/mockingboard/ssi263_slot.sv \
+            tests/mb_ssi263/tb_ssi263_slot.sv
+          vvp /tmp/mb_ssi263.vvp
