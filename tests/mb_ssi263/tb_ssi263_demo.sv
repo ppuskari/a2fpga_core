@@ -95,8 +95,7 @@ module tb_ssi263_demo;
         if (powered || pcm !== 16'sd0)
             $fatal(1,"Demo stop did not mute speech");
 
-        $display("PASS: Disk 1 SSI demo: initial IRQ, MESS L/A/YI, "+
-                 "right-CA1 request timing, audible PCM and stop");
+        $display("PASS: Disk 1 SSI demo initial IRQ, MESS L/A/YI, CA1 timing, PCM and stop");
         $finish;
     end
     initial begin
