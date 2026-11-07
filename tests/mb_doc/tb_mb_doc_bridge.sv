@@ -4,6 +4,7 @@
 // frequency results and six independent voices, not actual DOC audio.
 `timescale 1ns/1ps
 module tb_mb_doc_bridge;
+    parameter integer TEST_RES = 1; // compile-time: 0=+2 oct, 1=+1 oct, 2=old pitch
     logic clk = 1'b0;
     always #5 clk = ~clk;
     logic reset_n = 1'b0;
@@ -29,7 +30,8 @@ module tb_mb_doc_bridge;
 
     mb_doc_bridge #(
         .HOST_SPACING_CYCLES(80),
-        .SCAN_PAUSE_CYCLES(128)
+        .SCAN_PAUSE_CYCLES(128),
+        .SUSTAIN_RES(3'(TEST_RES))
     ) dut (
         .clk_i(clk), .reset_n_i(reset_n),
         .sdram_ready_i(sdram_ready),
@@ -172,7 +174,7 @@ module tb_mb_doc_bridge;
                 doc_values[off+1] !== 8'h00)
                 $fatal(1, "Voice %0d WTP bad",v);
             if (doc_addresses[off+2] !== 8'(8'hC0+v) ||
-                doc_values[off+2] !== 8'h12)
+                doc_values[off+2] !== 8'(8'h10 | TEST_RES))
                 $fatal(1, "Voice %0d RTS bad",v);
             if (doc_addresses[off+3] !== 8'(v) ||
                 doc_values[off+3] !== 8'(expect_fc))
@@ -254,7 +256,7 @@ module tb_mb_doc_bridge;
             $fatal(1, "P3 PSG RESET failed to clear stale DOC note");
 
         $display("PASS: native AY envelope level, zero-vol note-off, PB2 reset");
-        $display("PASS: authentic 1KB SynthLAB C3 sustain loop; 6 voice startup, stereo, ");
+        $display("PASS: authentic 1KB SynthLAB C3 sustain loop, RES=%0d; 6 voice startup, stereo,", TEST_RES);
         $display("      continued phase, mute, and period-zero pitch clamp");
         $finish;
     end
