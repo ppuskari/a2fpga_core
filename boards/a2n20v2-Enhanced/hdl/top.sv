@@ -53,8 +53,8 @@ module top #(
     parameter bit SUPERSPRITE_FORCE_VDP_OVERLAY = 0,
 
     parameter bit MOCKINGBOARD_ENABLE = 1,
-    // Isolated SSI-263 interface experiment. AY sound is unchanged;
-    // audible speech DSP is NOT implemented in this P0 branch.
+    // P1: disk-driven SSI-263 speech in FPGA, with right VIA CA1 IRQ.
+    // The BL616 firmware is unchanged and not required for synthesis.
     parameter bit MOCKINGBOARD_SSI263_ENABLE = 1,
     parameter bit [7:0] MOCKINGBOARD_ID = 2,
 
@@ -1566,6 +1566,7 @@ module top #(
     wire mb_irq_n;
     wire [9:0] mb_audio_l;
     wire [9:0] mb_audio_r;
+    wire signed [15:0] mb_speech_pcm_w;
 
     Mockingboard #(
         .ENABLE(MOCKINGBOARD_ENABLE),
@@ -1580,7 +1581,8 @@ module top #(
         .irq_n_o(mb_irq_n),
 
         .audio_l_o(mb_audio_l),
-        .audio_r_o(mb_audio_r)
+        .audio_r_o(mb_audio_r),
+        .speech_pcm_o(mb_speech_pcm_w)
     );
 
     // SuperSerial Card
@@ -1680,8 +1682,24 @@ module top #(
     wire signed [15:0] core_audio_r_w;
     // Combine all the audio sources into a single 16-bit signed audio signal
     // This could theoretically overflow by 1 bit and clip, but unlikely
-    assign core_audio_l_w = sg_audio_l + ssp_audio_ext_w + mb_audio_l_ext_w + speaker_audio_ext_w;
-    assign core_audio_r_w = sg_audio_r + ssp_audio_ext_w + mb_audio_r_ext_w + speaker_audio_ext_w;
+    // Preserve original mixer levels, then add mono SSI263 to BOTH channels.
+    // Saturate final 17-bit mix rather than wrap when speech and AY coincide.
+    wire signed [15:0] pre_speech_l_w =
+        sg_audio_l + ssp_audio_ext_w + mb_audio_l_ext_w + speaker_audio_ext_w;
+    wire signed [15:0] pre_speech_r_w =
+        sg_audio_r + ssp_audio_ext_w + mb_audio_r_ext_w + speaker_audio_ext_w;
+    wire signed [16:0] speech_sum_l_w =
+        $signed({pre_speech_l_w[15],pre_speech_l_w}) +
+        $signed({mb_speech_pcm_w[15],mb_speech_pcm_w});
+    wire signed [16:0] speech_sum_r_w =
+        $signed({pre_speech_r_w[15],pre_speech_r_w}) +
+        $signed({mb_speech_pcm_w[15],mb_speech_pcm_w});
+    assign core_audio_l_w =
+        (speech_sum_l_w > 17'sd32767) ? 16'sh7FFF :
+        (speech_sum_l_w < -17'sd32768) ? 16'sh8000 : speech_sum_l_w[15:0];
+    assign core_audio_r_w =
+        (speech_sum_r_w > 17'sd32767) ? 16'sh7FFF :
+        (speech_sum_r_w < -17'sd32768) ? 16'sh8000 : speech_sum_r_w[15:0];
 
     // CDC to shift audio to the pixel clock domain from the logic clock domain
 
