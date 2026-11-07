@@ -58,3 +58,6 @@ src/cardrom/cardrom
 *.m4a
 *.wav
 *.mov
+
+# Generated, locally extracted Apple synthLAB copyrighted PCM; NEVER commit.
+/boards/a2n20v2-Enhanced/hdl/piano_c3_attack.mem
