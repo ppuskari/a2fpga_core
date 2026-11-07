@@ -44,7 +44,7 @@ module top #(
     // would still disable this parameter (remove such an override).
     parameter bit AUDIO_MODE_MB_DOC = 1'b1,
     // SynthLAB C3 sustain pitch experiment: 2=original, 1=+1 octave,
-    // 0=+2 octaves. Defaults to 1 for the first calibration bitstream.
+    // 0=+2 octaves. Defaults to 0 after the asdfghjk A440 sweep.
     parameter logic [2:0] MB_DOC_SUSTAIN_RES = 3'd0,
     parameter bit MOCKINGBOARD_ENABLE = 0,
     parameter bit [7:0] MOCKINGBOARD_ID = 2,
