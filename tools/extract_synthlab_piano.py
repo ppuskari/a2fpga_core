@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract authentic 8192-byte SynthLAB Piano C3 attack into a Gowin ROM .mem.
+"""Extract authentic 1024-byte SynthLAB ~Piano C3 sustain into a Gowin ROM .mem.
 
 Requires the original Apple IIgs System 6.0.4 SynthLAB ProDOS-order disk image.
 --download fetches it from a public archive; --disk accepts a local image.
@@ -15,9 +15,9 @@ import urllib.request
 DISK_URL = ("https://raw.githubusercontent.com/gungwald/apple-ii-dev/main/"
             "var/apple2gs/Apple_IIGS_System_6.0.4/PO%20Disk%20Images/synthLAB.po")
 DISK_MD5 = "fa4f143dd899d0cc4c8ed9c9e41b7d37"
-SAMPLE_FNV = 0xB4AF4568
+SAMPLE_FNV = 0x430E4B0A
 DEFAULT_OUTPUT = (Path(__file__).resolve().parents[1]
-                  / "boards/a2n20v2-Enhanced/hdl/piano_c3_attack.mem")
+                  / "boards/a2n20v2-Enhanced/hdl/piano_c3_sustain.mem")
 
 
 def u16(buf, off):
@@ -90,16 +90,16 @@ def extract(disk):
         raise ValueError("Not a version 1 Apple MIDI Synth Wave file")
     bank_offset = u16(wavefile, 6)
     valid_waves = u16(wavefile, 0x18)
-    if bank_offset != 0x900 or valid_waves < 7:
+    if bank_offset != 0x900 or valid_waves < 8:
         raise ValueError("Unexpected SynthLAB Wave header")
-    entry = wavefile[0x100 + 6 * 32:0x100 + 7 * 32]
+    entry = wavefile[0x100 + 7 * 32:0x100 + 8 * 32]
     name = entry[1:1 + entry[0]].decode("ascii")
     address = u16(entry, 16)
     size_code = entry[19]
-    if (name, address, size_code) != ("Piano C3", 0x8000, 5):
+    if (name, address, size_code) != ("~Piano C3", 0x1800, 2):
         raise ValueError(f"Unexpected wave definition {name}, address={address}, size={size_code}")
-    pcm = wavefile[bank_offset + address:bank_offset + address + 8192]
-    if len(pcm) != 8192 or 0 in pcm:
+    pcm = wavefile[bank_offset + address:bank_offset + address + 1024]
+    if len(pcm) != 1024 or 0 in pcm:
         raise ValueError("Invalid sample length or forbidden DOC zero byte")
     hash32 = fnv32(pcm)
     if hash32 != SAMPLE_FNV:
@@ -123,8 +123,8 @@ def main():
     opts.out.parent.mkdir(parents=True, exist_ok=True)
     opts.out.write_text("".join(f"{int.from_bytes(pcm[i:i+4], 'little'):08X}\n"
                                 for i in range(0, len(pcm), 4)), encoding="ascii")
-    print("Verified Apple SynthLAB Piano C3; 8192 bytes, 2048 words, "
-          "DOC size=8K, FNV32=B4AF4568, no zero samples.")
+    print("Verified Apple SynthLAB Piano C3; 1024 bytes, 256 words, "
+          "DOC size=1K, FNV32=430E4B0A, no zero samples.")
     print(f"Generated: {opts.out.resolve()}")
     print("Do not commit the generated Apple PCM waveform file.")
 
