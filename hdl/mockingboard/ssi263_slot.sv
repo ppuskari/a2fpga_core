@@ -13,6 +13,7 @@ module ssi263_slot (
     input  wire       enabled_i,
     input  wire       card_io_sel_i,
     input  wire       xck_tick_i,
+    input  wire       data_in_strobe_i,
     input  wire       rw_n_i,
     input  wire [7:0] card_addr_i,
     input  wire [7:0] data_i,
@@ -60,9 +61,9 @@ module ssi263_slot (
         end
     end
 
-    // The Apple slot bus holds an I/O write throughout a PHI0 window.
-    // Generate exactly one strobe per distinct bus write, not one per
-    // 54 MHz clock. The captured data is stable before the next clock.
+    // The bridge presents address/RW before it fetches the actual CPU data.
+    // Wait for its data_in_strobe: data_i is then the newly latched byte.
+    // The prior wr_phase rising-edge sampler captured stale READ data ($A5).
     always @(posedge clk_i) begin
         if (!reset_n_i || !enabled_i) begin
             wr_prev_r <= 1'b0;
@@ -71,8 +72,8 @@ module ssi263_slot (
             wr_data_r <= 8'h00;
         end else begin
             wr_prev_r <= wr_phase_w;
-            wr_pulse_r <= wr_phase_w && !wr_prev_r;
-            if (wr_phase_w && !wr_prev_r) begin
+            wr_pulse_r <= wr_phase_w && data_in_strobe_i && !wr_prev_r;
+            if (wr_phase_w && data_in_strobe_i && !wr_prev_r) begin
                 wr_reg_r <= card_addr_i[2:0];
                 wr_data_r <= data_i;
             end
