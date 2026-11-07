@@ -30,7 +30,8 @@ module Mockingboard #(
     output irq_n_o,
 
     output [9:0] audio_l_o,
-    output [9:0] audio_r_o
+    output [9:0] audio_r_o,
+    output wire signed [15:0] speech_pcm_o
 );
 
     reg card_enable;
@@ -66,7 +67,8 @@ module Mockingboard #(
         .speech_read_o(ssi_read_w),
         .speech_data_o(ssi_data_w),
         .via_ca1_o(ssi_ca1_w),
-        .powered_o(), .phoneme_o()
+        .powered_o(), .phoneme_o(),
+        .speech_pcm_o(speech_pcm_o)
     );
 
     wire [7:0] pb_l_o;
@@ -127,7 +129,8 @@ module Mockingboard #(
         .port_b_t(),
         .port_b_i(8'hFF),
 
-        .ca1_i(ssi_ca1_w),
+        // Demo Disk 1 SSI phoneme A/R uses the RIGHT VIA CA1, not this one.
+        .ca1_i(1'b1),
         .ca2_o(),
         .ca2_i(1'b0),
         .ca2_t(),
@@ -195,7 +198,8 @@ module Mockingboard #(
         .port_b_t(),
         .port_b_i(8'hFF),
 
-        .ca1_i(1'b1),
+        // COMPOSITE DRIVER enables $C48E bit 1; service reads $C48D.
+        .ca1_i(ssi_ca1_w),
         .ca2_o(),
         .ca2_i(1'b0),
         .ca2_t(),
