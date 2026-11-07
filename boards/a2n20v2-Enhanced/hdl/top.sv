@@ -49,6 +49,7 @@ module top #(
     // P4: seven real SynthLAB sustain zones and AY-specific articulation.
     parameter bit MB_DOC_MULTISAMPLE_ENABLE = 1'b1,
     parameter bit MB_DOC_PIANO_ARTICULATION_ENABLE = 1'b1,
+    parameter bit MB_DOC_REST_MUTE_ENABLE = 1'b1,
     parameter bit MB_DOC_FX_AY_BYPASS_ENABLE = 1'b1,
     parameter bit MOCKINGBOARD_ENABLE = 0,
     parameter bit [7:0] MOCKINGBOARD_ID = 2,
@@ -1283,6 +1284,7 @@ wire [7:0] doc_128k_status_w;
                 .SUSTAIN_RES(MB_DOC_SUSTAIN_RES),
                 .MULTISAMPLE_ENABLE(MB_DOC_MULTISAMPLE_ENABLE),
                 .PIANO_ENVELOPE_ENABLE(MB_DOC_PIANO_ARTICULATION_ENABLE),
+                .REST_MUTE_ENABLE(MB_DOC_REST_MUTE_ENABLE),
                 .FX_AY_BYPASS_ENABLE(MB_DOC_FX_AY_BYPASS_ENABLE)
             ) bridge (
                 .clk_i(clk_logic_w),
