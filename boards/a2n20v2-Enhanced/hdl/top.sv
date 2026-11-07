@@ -52,6 +52,9 @@ module top #(
     parameter bit MB_DOC_REST_MUTE_ENABLE = 1'b1,
     parameter bit MB_DOC_FX_AY_BYPASS_ENABLE = 1'b1,
     parameter bit MOCKINGBOARD_ENABLE = 0,
+    // SSI speech can coexist with exclusive AY-to-DOC music ownership.
+    parameter bit MOCKINGBOARD_SSI263_ENABLE = 1'b1,
+    parameter integer MOCKINGBOARD_SSI263_VOICE_PROFILE = 1,
     parameter bit [7:0] MOCKINGBOARD_ID = 2,
 
     parameter bit SUPERSERIAL_ENABLE = 0,
@@ -1240,6 +1243,7 @@ wire [7:0] doc_128k_status_w;
     wire mb_irq_n;
     wire [9:0] mb_audio_l;
     wire [9:0] mb_audio_r;
+    wire signed [15:0] mb_speech_pcm_w;
 
     // The two independent AY command streams feed the future
     // single-DOC translator. They are never PCM audio sources.
@@ -1252,6 +1256,8 @@ wire [7:0] doc_128k_status_w;
 
     Mockingboard #(
         .ENABLE(MOCKINGBOARD_ENABLE | AUDIO_MODE_MB_DOC),
+        .ENABLE_SSI263(MOCKINGBOARD_SSI263_ENABLE),
+        .SSI263_VOICE_PROFILE(MOCKINGBOARD_SSI263_VOICE_PROFILE),
         .ID(MOCKINGBOARD_ID)
     ) mockingboard (
         .a2bus_if(a2bus_if),  // use system_reset_n
@@ -1263,6 +1269,7 @@ wire [7:0] doc_128k_status_w;
 
         .audio_l_o(mb_audio_l),
         .audio_r_o(mb_audio_r),
+        .speech_pcm_o(mb_speech_pcm_w),
 
         .ay_l_wr_o(mb_ay_l_wr_w),
         .ay_l_reg_o(mb_ay_l_reg_w),
@@ -1453,10 +1460,30 @@ wire [7:0] doc_128k_status_w;
     end
     wire signed [15:0] mb_fx_pcm_l = 16'(ay_hp_l_q16 >>> 12);
     wire signed [15:0] mb_fx_pcm_r = 16'(ay_hp_r_q16 >>> 12);
-    assign core_audio_l_w =
+    // Preserve the P4 DOC/native-AY FX selector and its calibrated
+    // downstream 8x HDMI gain (-2 dBFS ceiling). Mix speech upstream of
+    // audio_out at 1/8 amplitude in MB_DOC mode to compensate for that gain.
+    // This avoids applying an unintended second 8x boost to P5 speech.
+    wire signed [15:0] mb_music_base_l_w =
         (AUDIO_MODE_MB_DOC && mb_fx_ay_l_w) ? mb_fx_pcm_l : sg_audio_l;
-    assign core_audio_r_w =
+    wire signed [15:0] mb_music_base_r_w =
         (AUDIO_MODE_MB_DOC && mb_fx_ay_r_w) ? mb_fx_pcm_r : sg_audio_r;
+    wire signed [15:0] mb_speech_mix_w = AUDIO_MODE_MB_DOC ?
+        (mb_speech_pcm_w >>> 3) : mb_speech_pcm_w;
+    wire signed [16:0] mb_speech_sum_l_w =
+        $signed({mb_music_base_l_w[15], mb_music_base_l_w}) +
+        $signed({mb_speech_mix_w[15], mb_speech_mix_w});
+    wire signed [16:0] mb_speech_sum_r_w =
+        $signed({mb_music_base_r_w[15], mb_music_base_r_w}) +
+        $signed({mb_speech_mix_w[15], mb_speech_mix_w});
+    assign core_audio_l_w =
+        (mb_speech_sum_l_w > 17'sd32767) ? 16'sh7FFF :
+        (mb_speech_sum_l_w < -17'sd32768) ? 16'sh8000 :
+        mb_speech_sum_l_w[15:0];
+    assign core_audio_r_w =
+        (mb_speech_sum_r_w > 17'sd32767) ? 16'sh7FFF :
+        (mb_speech_sum_r_w < -17'sd32768) ? 16'sh8000 :
+        mb_speech_sum_r_w[15:0];
 
 //    wire signed [15:0] sg_mono_w = (sg_audio_l >>> 1) + (sg_audio_r >>> 1);
 
