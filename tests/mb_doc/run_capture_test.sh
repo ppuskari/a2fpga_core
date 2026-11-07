@@ -24,4 +24,5 @@ iverilog -g2012 -Wall -s tb_mb_doc_bridge \
   -o "$tmpdir/mb_doc_bridge.vvp" \
   boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv \
   tests/mb_doc/tb_mb_doc_bridge.sv
-vvp "$tmpdir/mb_doc_bridge.vvp"
+# DOC PCM ROM path is relative to the Enhanced Gowin project directory.
+(cd boards/a2n20v2-Enhanced && vvp "$tmpdir/mb_doc_bridge.vvp")
