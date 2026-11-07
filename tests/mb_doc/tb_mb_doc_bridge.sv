@@ -256,23 +256,26 @@ module tb_mb_doc_bridge;
             doc_values[121] !== 8'h11)
             $fatal(1, "Native R13 envelope mute failed");
 
-        // Fixed-volume MCS notes recover after keyboard envelope without
-        // a new phase restart if pitch hasn't changed.
+        // Upward software volume change, even on an identical pitch, is an
+        // MCS note re-strike. A new one-shot piano envelope must start.
         ay_write(1'b0, 4'h8, 8'h0F);
-        wait (doc_count >= 146);
+        wait (doc_count >= 149);
         @(negedge clk);
-        if (doc_values[144] == 8'd0)
-            $fatal(1, "P4 fixed-volume note failed");
+        if (doc_addresses[142] !== 8'hA0 || doc_values[142] !== 8'h11 ||
+            doc_addresses[143] !== 8'h80 || doc_values[143] !== 8'h0C ||
+            doc_addresses[147] !== 8'h40 || doc_values[147] !== 8'd208 ||
+            doc_addresses[148] !== 8'hA0 || doc_values[148] !== 8'h10)
+            $fatal(1, "MCS same-pitch amplitude re-strike failed");
 
         // PB2 reset must clear shadows and silence a running DOC voice.
         l_reset_n = 1'b0;
         repeat (3) @(negedge clk);
         l_reset_n = 1'b1;
-        wait (doc_count >= 170);
+        wait (doc_count >= 173);
         @(negedge clk);
-        if (doc_addresses[168] !== 8'h40 ||
-            doc_values[168] !== 8'h00 ||
-            doc_values[169] !== 8'h11)
+        if (doc_addresses[171] !== 8'h40 ||
+            doc_values[171] !== 8'h00 ||
+            doc_values[172] !== 8'h11)
             $fatal(1, "P4 PSG reset failed");
 
         $display("PASS: native AY envelope level, zero-vol note-off, PB2 reset");
