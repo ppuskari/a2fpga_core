@@ -9,7 +9,7 @@
 module tb_ssi263_demo;
     logic clk = 0;
     always #5 clk = ~clk;
-    logic reset_n=0, en=1, sel=0, xck=0, rw_n=1;
+    logic reset_n=0, en=1, sel=0, xck=0, rw_n=1, data_strobe=0;
     logic [7:0] addr=0, data=0;
     wire selected, read_enable, ar_n, powered;
     wire [7:0] read_data;
@@ -19,7 +19,7 @@ module tb_ssi263_demo;
 
     ssi263_slot dut (
         .clk_i(clk), .reset_n_i(reset_n), .enabled_i(en),
-        .card_io_sel_i(sel), .xck_tick_i(xck), .rw_n_i(rw_n),
+        .card_io_sel_i(sel), .xck_tick_i(xck), .data_in_strobe_i(data_strobe), .rw_n_i(rw_n),
         .card_addr_i(addr), .data_i(data),
         .speech_selected_o(selected), .speech_read_o(read_enable),
         .speech_data_o(read_data), .via_ca1_o(ar_n),
@@ -31,8 +31,13 @@ module tb_ssi263_demo;
 
     task automatic cpu_wr(input logic [7:0] r, input logic [7:0] v);
         @(negedge clk);
-        addr = r; data = v; rw_n=0; sel=1;
+        // Model real Apple bridge: selection and R/W appear ahead of data;
+        // an old read byte ($A5) remains until data_in_strobe.
+        addr = r; data = 8'hA5; rw_n=0; sel=1;
         repeat(3) @(negedge clk);
+        data = v; data_strobe=1;
+        @(negedge clk); data_strobe=0;
+        repeat(2) @(negedge clk);
         sel=0; rw_n=1;
         repeat(3) @(negedge clk);
     endtask
