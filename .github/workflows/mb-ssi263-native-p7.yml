@@ -1,0 +1,56 @@
+name: P7 SSI-263 native FPGA integration checks
+on:
+  push:
+    branches:
+      - petar/mb-doc-p7-ssi263-native-fpga-20261107
+  pull_request:
+    paths:
+      - "hdl/mockingboard/**"
+      - "tests/mb_ssi263/**"
+      - "boards/a2n20v2-Enhanced/**"
+      - "tools/test_ssi263_native.sh"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  simulation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Icarus Verilog
+        run: sudo apt-get update && sudo apt-get install -y iverilog
+      - name: Native silicon ROM and diagnostic PCM
+        run: bash tools/test_ssi263_native.sh
+      - name: Build P6 ROM and keep prior SSI tests running
+        run: |
+          python3 tools/generate_ssi263_voice.py
+          (cd boards/a2n20v2-Enhanced && \
+            iverilog -g2012 -s tb_ssi263_slot -o /tmp/ssi_slot.vvp \
+            ../../hdl/mockingboard/ssi263_control.sv \
+            ../../hdl/mockingboard/ssi263_voice.sv \
+            ../../hdl/mockingboard/ssi263_native_rom.sv \
+            ../../hdl/mockingboard/ssi263_native_voice.sv \
+            ../../hdl/mockingboard/ssi263_slot.sv \
+            ../../tests/mb_ssi263/tb_ssi263_slot.sv && vvp /tmp/ssi_slot.vvp)
+          (cd boards/a2n20v2-Enhanced && \
+            iverilog -g2012 -s tb_ssi263_demo -o /tmp/ssi_demo.vvp \
+            ../../hdl/mockingboard/ssi263_control.sv \
+            ../../hdl/mockingboard/ssi263_voice.sv \
+            ../../hdl/mockingboard/ssi263_native_rom.sv \
+            ../../hdl/mockingboard/ssi263_native_voice.sv \
+            ../../hdl/mockingboard/ssi263_slot.sv \
+            ../../tests/mb_ssi263/tb_ssi263_demo.sv && vvp /tmp/ssi_demo.vvp)
+      - name: Verify P6 default and Gowin sources
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          top=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text()
+          p=Path('boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj').read_text()
+          slot=Path('hdl/mockingboard/ssi263_slot.sv').read_text()
+          assert 'MOCKINGBOARD_SSI263_NATIVE_SELECT = 0' in top
+          assert 'ssi263_native_rom.sv' in p and 'ssi263_native_voice.sv' in p
+          assert 'if (NATIVE_SELECT == 0)' in slot
+          assert 'ssi263_control core' in slot
+          assert 'MB_DOC_FX_AY_BYPASS_ENABLE' in top
+          print('PASS P7 source manifest and P6 default')
+          PY
