@@ -43,6 +43,9 @@ module top #(
     // Verify synthesis properties; an explicit Gowin top override to 0
     // would still disable this parameter (remove such an override).
     parameter bit AUDIO_MODE_MB_DOC = 1'b1,
+    // SynthLAB C3 sustain pitch experiment: 2=original, 1=+1 octave,
+    // 0=+2 octaves. Defaults to 1 for the first calibration bitstream.
+    parameter logic [2:0] MB_DOC_SUSTAIN_RES = 3'd1,
     parameter bit MOCKINGBOARD_ENABLE = 0,
     parameter bit [7:0] MOCKINGBOARD_ID = 2,
 
@@ -1271,7 +1274,9 @@ wire [7:0] doc_128k_status_w;
     // The document/golden IIgs Sound GLU remains in sole control.
     generate
         if (AUDIO_MODE_MB_DOC) begin : gen_mb_doc_audio
-            mb_doc_bridge bridge (
+            mb_doc_bridge #(
+                .SUSTAIN_RES(MB_DOC_SUSTAIN_RES)
+            ) bridge (
                 .clk_i(clk_logic_w),
                 .reset_n_i(system_reset_n_w),
                 .sdram_ready_i(sdram_init_complete),
