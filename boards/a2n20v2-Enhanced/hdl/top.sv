@@ -53,6 +53,9 @@ module top #(
     parameter bit SUPERSPRITE_FORCE_VDP_OVERLAY = 0,
 
     parameter bit MOCKINGBOARD_ENABLE = 1,
+    // Isolated SSI-263 interface experiment. AY sound is unchanged;
+    // audible speech DSP is NOT implemented in this P0 branch.
+    parameter bit MOCKINGBOARD_SSI263_ENABLE = 1,
     parameter bit [7:0] MOCKINGBOARD_ID = 2,
 
     parameter bit SUPERSERIAL_ENABLE = 1,
@@ -1566,6 +1569,7 @@ module top #(
 
     Mockingboard #(
         .ENABLE(MOCKINGBOARD_ENABLE),
+        .ENABLE_SSI263(MOCKINGBOARD_SSI263_ENABLE),
         .ID(MOCKINGBOARD_ID)
     ) mockingboard (
         .a2bus_if(a2bus_if),  // use system_reset_n
