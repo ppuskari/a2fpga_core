@@ -35,6 +35,23 @@ module ssi263_slot (
     wire [3:0] amplitude_w;
     wire [7:0] inflection_w, rate_w;
 
+    // P2 hardware-only diagnostics: non-destructive read overlays at
+    // $Cn41-$Cn44. CPU writes retain their original SSI-263 semantics.
+    // Counters saturate instead of wrapping so long BASIC delays are useful.
+    logic [7:0] diag_wr_count_r;
+    logic [7:0] diag_xck_count_r;
+    always @(posedge clk_i) begin
+        if (!reset_n_i || !enabled_i) begin
+            diag_wr_count_r <= 8'd0;
+            diag_xck_count_r <= 8'd0;
+        end else begin
+            if (wr_pulse_r && diag_wr_count_r != 8'hFF)
+                diag_wr_count_r <= diag_wr_count_r + 8'd1;
+            if (xck_tick_i && diag_xck_count_r != 8'hFF)
+                diag_xck_count_r <= diag_xck_count_r + 8'd1;
+        end
+    end
+
     // The Apple slot bus holds an I/O write throughout a PHI0 window.
     // Generate exactly one strobe per distinct bus write, not one per
     // 54 MHz clock. The captured data is stable before the next clock.
@@ -85,8 +102,18 @@ module ssi263_slot (
 
     assign speech_selected_o = speech_sel_w;
     assign speech_read_o = speech_sel_w && rw_n_i;
-    // D7 is meaningful; retain the existing zero convention for D6..D0.
-    assign speech_data_o = {ar_status_w, 7'b0};
+    // Preserve original $Cn40 status. Read-only diagnostic overlay:
+    // $Cn41 accepted CPU writes (saturating)
+    // $Cn42 Apple PHI/XCK ticks (saturating)
+    // $Cn43 fixed signature $A5 (proves read-selection path)
+    // $Cn44 powered state (bit 0)
+    // These do not alter SSI writes, IRQ, timers, or audio behavior.
+    assign speech_data_o =
+        (card_addr_i[2:0] == 3'd1) ? diag_wr_count_r :
+        (card_addr_i[2:0] == 3'd2) ? diag_xck_count_r :
+        (card_addr_i[2:0] == 3'd3) ? 8'hA5 :
+        (card_addr_i[2:0] == 3'd4) ? {7'b0,powered_o} :
+                                   {ar_status_w,7'b0};
     // VIA observes the physical active-low A/R line; its falling-edge
     // detector latches IFR bit 1 when a phoneme requests the next one.
     assign via_ca1_o = enabled_i ? ar_n_w : 1'b1;
