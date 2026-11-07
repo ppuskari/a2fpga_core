@@ -8,6 +8,7 @@ on:
     paths:
       - "hdl/mockingboard/ssi263_*.sv"
       - "tools/generate_ssi263_voice.py"
+      - "tools/inspect_mb_speech_dsk.py"
       - "hdl/mockingboard/mockingboard.sv"
       - "boards/a2n20v2-Enhanced/hdl/top.sv"
       - "tests/mb_ssi263/**"
@@ -25,6 +26,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Icarus Verilog
         run: sudo apt-get update && sudo apt-get install -y iverilog verilator
+      - name: Validate Python speech tooling syntax
+        run: python3 -m py_compile tools/inspect_mb_speech_dsk.py tools/generate_ssi263_voice.py
       - name: Generate original phoneme PCM bank
         run: |
           python3 tools/generate_ssi263_voice.py
