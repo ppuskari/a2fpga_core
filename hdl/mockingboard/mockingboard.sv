@@ -60,6 +60,7 @@ module Mockingboard #(
         .enabled_i(card_enable && ENABLE_SSI263),
         .card_io_sel_i(card_io_sel),
         .xck_tick_i(a2bus_if.phi1_negedge),
+        .data_in_strobe_i(a2bus_if.data_in_strobe),
         .rw_n_i(a2bus_if.rw_n),
         .card_addr_i(a2bus_if.addr[7:0]),
         .data_i(a2bus_if.data),
