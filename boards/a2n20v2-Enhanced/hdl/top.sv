@@ -56,6 +56,8 @@ module top #(
     // P1: disk-driven SSI-263 speech in FPGA, with right VIA CA1 IRQ.
     // The BL616 firmware is unchanged and not required for synthesis.
     parameter bit MOCKINGBOARD_SSI263_ENABLE = 1,
+    // 0 = P4 baseline voice; 1 = enhanced gain/noise/smoothing.
+    parameter integer MOCKINGBOARD_SSI263_VOICE_PROFILE = 1,
     parameter bit [7:0] MOCKINGBOARD_ID = 2,
 
     parameter bit SUPERSERIAL_ENABLE = 1,
@@ -1571,6 +1573,7 @@ module top #(
     Mockingboard #(
         .ENABLE(MOCKINGBOARD_ENABLE),
         .ENABLE_SSI263(MOCKINGBOARD_SSI263_ENABLE),
+        .SSI263_VOICE_PROFILE(MOCKINGBOARD_SSI263_VOICE_PROFILE),
         .ID(MOCKINGBOARD_ID)
     ) mockingboard (
         .a2bus_if(a2bus_if),  // use system_reset_n
