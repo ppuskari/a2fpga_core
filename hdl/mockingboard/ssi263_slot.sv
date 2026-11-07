@@ -7,7 +7,9 @@
 // P1 retains the P0 CPU bus, status and IRQ timing and adds an original
 // experimental FPGA-only formant wavetable speech approximation. It is not
 // a transistor-accurate voice reproduction; verify on physical hardware.
-module ssi263_slot (
+module ssi263_slot #(
+    parameter integer VOICE_PROFILE = 1
+) (
     input  wire       clk_i,
     input  wire       reset_n_i,
     input  wire       enabled_i,
@@ -100,7 +102,7 @@ module ssi263_slot (
         .debug_r3_o(debug_r3_w)
     );
 
-    ssi263_voice voice (
+    ssi263_voice #(.VOICE_PROFILE(VOICE_PROFILE)) voice (
         .clk_i(clk_i),
         .reset_n_i(reset_n_i && enabled_i),
         .powered_i(powered_o),
