@@ -25,13 +25,15 @@ module ssi263_control #(
     output wire [5:0] phoneme_o,
     output wire [3:0] amplitude_o,
     output wire [7:0] inflection_o,
-    output wire [7:0] rate_o
+    output wire [7:0] rate_o,
+    output wire       phoneme_start_o
 );
     logic [7:0] r0, r1, r2, r3, r4;
     logic [1:0] active_mode_r;
     logic       active_r;
     logic       request_r;
     logic [18:0] ticks_left_r;
+    logic        phoneme_start_r;
 
     // At rate=0 the SSI frame spans 65536 XCK cycles (~64 ms);
     // at rate=15 it spans 4096 XCK cycles (~4 ms).
@@ -61,6 +63,7 @@ module ssi263_control #(
     assign amplitude_o = r3[3:0];
     assign inflection_o = r1;
     assign rate_o = r2;
+    assign phoneme_start_o = phoneme_start_r;
 
     always @(posedge clk_i) begin
         if (!reset_n_i) begin
@@ -73,7 +76,11 @@ module ssi263_control #(
             active_mode_r <= 2'b00;
             request_r <= 1'b0;
             ticks_left_r <= 19'd0;
-        end else if (wr_i) begin
+            phoneme_start_r <= 1'b0;
+        end else begin
+            // Exactly one logic-clock pulse per CPU phoneme write.
+            phoneme_start_r <= wr_i && (addr_i == 3'd0);
+            if (wr_i) begin
             case (addr_i)
                 3'd0: begin
                     r0 <= data_i;
@@ -101,13 +108,14 @@ module ssi263_control #(
                 end
                 default: r4 <= data_i; // R4 aliases at addresses 4..7
             endcase
-        end else if (xck_tick_i && active_r && !r3[7]) begin
+            end else if (xck_tick_i && active_r && !r3[7]) begin
             if (ticks_left_r > 19'd1) begin
                 ticks_left_r <= ticks_left_r - 19'd1;
             end else if (ticks_left_r == 19'd1) begin
                 ticks_left_r <= 19'd0;
                 request_r <= (active_mode_r != 2'd0);
             end
+        end
         end
     end
 endmodule
