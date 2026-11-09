@@ -49,10 +49,17 @@ Dedicated ROMs:
 - `boards/a2n20v2-Enhanced/hdl/ssi263_p8_params.mem`, 64 words
 - `boards/a2n20v2-Enhanced/hdl/ssi263_p8_coefs.mem`, 50 words.
 
-The new RTL is NOT yet connected to the P6 Mockingboard slot or
-HDMI audio, intentionally: it has not passed full waveform/spectral
-equivalence, synthesis timing or resource acceptance. The working
-P6 music and speech path is still the board-build default.
+The new RTL is now connected as an **opt-in compile-time alternate**
+chip path through the existing SSI socket and HDMI speech mixer.
+The toggle is `MOCKINGBOARD_SSI263_FULL_CHIP_ENABLE=0` by default
+in `boards/a2n20v2-Enhanced/hdl/top.sv`, so P6 is unchanged.
+
+Switching this parameter to 1 compiles the independent P8 register
+and DSP module instead of **both** legacy `ssi263_control` and
+`ssi263_voice`. Do NOT ship or flash it for audio-quality acceptance
+until waveform/spectral equivalence and Gowin resource/timing checks
+are established. The optional wiring is currently useful for
+register-level integration verification.
 
 ## Current verification
 
@@ -61,6 +68,8 @@ P6 music and speech path is still the board-build default.
 - [x] Native reference C compiles and generates nonzero PCM
 - [x] Independent chip RTL compiled and simulated on isolated controls
 - [x] Independent Verilator lint passes (warnings allowed)
+- [x] Optional full-chip slot integration with P6 selected by default
+- [x] Demo Disk 1 register/CA1 sequence in stand-alone chip path
 - [ ] Exact R0-R4, CTL, A/R, pitch/glide, and duration register
       equivalence against a captured real Demo Disk register stream
 - [ ] Dynamic six-field latch and transition equivalence
@@ -105,6 +114,12 @@ wiring it into the production music/speech build.
 analog gain value. When the full-chip output path is integrated,
 calibrate amplitude at the **chip output stage**, and revisit
 the HDMI level separately while preserving piano and effects levels.
+
+**Current P8 limitation:** the FPGA includes a preliminary fixed-point
+implementation of every major chip block, but specific analog transfer
+functions, early request handling, closure articulation, noise routing,
+field interpolation and audio decimation still differ from the
+upstream C model. Do not label it a verified complete SSI263 core.
 
 CI: `.github/workflows/ssi263-fullchip-p8.yml`.
 Reference test and isolated RTL simulation are automated. No Gowin
