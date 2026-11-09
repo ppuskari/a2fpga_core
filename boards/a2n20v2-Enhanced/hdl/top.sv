@@ -94,6 +94,11 @@ module top #(
     //   1 = pixel_stream_if generators (apple_video_gen + vgc_gen) feeding
     //       direct_display, HDMI-locked but using the new interface
     parameter bit USE_PIXEL_STREAM = 1,
+    // P9M Apple IIe speech build: drop unused IIgs Super Hi-Res VGC
+    // generator and its extra auxiliary video RAM. Preserve the Apple IIe
+    // text/lores/hires/80-column pixel generator and HDMI output.
+    // Set to 0 to restore original Enhanced IIgs/SHR video capability.
+    parameter bit IIE_SPEECH_VIDEO_TRIM = 1'b1,
 
     // direct_display hsync cx offsets used to center each window in the 720px
     // visible area (apple = 560 wide, SHR = 640 wide). The apple value differs
@@ -429,7 +434,7 @@ module top #(
     wire [31:0] vgc_data_w;
 
     apple_memory_sdram #(
-        .VGC_MEMORY(1),
+        .VGC_MEMORY(IIE_SPEECH_VIDEO_TRIM ? 0 : 1),
         .SHADOW_ALL_MEMORY(SHADOW_ALL_MEMORY)
     ) apple_memory (
         .a2bus_if(a2bus_if),
@@ -889,6 +894,19 @@ module top #(
             .video_b_o(dd_apple_b_w)
         );
 
+        wire [7:0] ps_r_w, ps_g_w, ps_b_w;
+        wire       ps_active_w;
+        if (IIE_SPEECH_VIDEO_TRIM) begin : gen_iie_speech_video_only
+            // The IIe's SDRAM-backed apple_video_gen is retained.
+            // No Super Hi-Res generator, SHRG mux or extra aux memory.
+            assign vgc_active_w  = 1'b0;
+            assign vgc_address_w = 13'd0;
+            assign vgc_rd_w      = 1'b0;
+            assign ps_r_w        = dd_apple_r_w;
+            assign ps_g_w        = dd_apple_g_w;
+            assign ps_b_w        = dd_apple_b_w;
+            assign ps_active_w   = apple_ps.active;
+        end else begin : gen_full_iigs_vgc
         // --- VGC (Super Hi-Res) generator + direct display ---
         pixel_stream_if vgc_ps();
 
@@ -949,10 +967,12 @@ module top #(
             if (apple_ps.vsync) use_vgc_r <= a2mem_if.SHRG_MODE;
         end
 
-        wire [7:0] ps_r_w      = use_vgc_r ? dd_vgc_r_w : dd_apple_r_w;
-        wire [7:0] ps_g_w      = use_vgc_r ? dd_vgc_g_w : dd_apple_g_w;
-        wire [7:0] ps_b_w      = use_vgc_r ? dd_vgc_b_w : dd_apple_b_w;
-        wire       ps_active_w = use_vgc_r ? vgc_ps.active : apple_ps.active;
+        assign ps_r_w      = use_vgc_r ? dd_vgc_r_w : dd_apple_r_w;
+        assign ps_g_w      = use_vgc_r ? dd_vgc_g_w : dd_apple_g_w;
+        assign ps_b_w      = use_vgc_r ? dd_vgc_b_w : dd_apple_b_w;
+        assign ps_active_w = use_vgc_r ? vgc_ps.active : apple_ps.active;
+
+        end
 
         // Register the composited pixel in clk_logic first, so the clk_pixel
         // sampler below captures a clean single-FF source rather than a deep
