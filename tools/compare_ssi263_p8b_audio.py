@@ -12,8 +12,8 @@ from pathlib import Path
 
 def load(path:Path)->list[float]:
     b=path.read_bytes()
-    assert len(b)==15000, f"{path}: expected 7,500 mono PCM16 samples, got {len(b)//2}"
-    return [float(v) for v in struct.unpack("<7500h",b)]
+    assert len(b)==20000, f"{path}: expected 10,000 mono PCM16 samples, got {len(b)//2}"
+    return [float(v) for v in struct.unpack("<10000h",b)]
 
 def rms(x):
     return math.sqrt(sum(v*v for v in x)/max(1,len(x)))
