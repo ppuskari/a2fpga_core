@@ -85,6 +85,16 @@ module tb_ssi263_hybrid_bridge;
       rd(3'd4,24'h800004,v);if(v!==0)$fatal(1,"PCM reset");
       rd(3'd4,24'h80000A,v);if(v!==0)$fatal(1,"reset underrun counter");
       if(pcm!==0)$fatal(1,"PCM reset did not mute");
+      wr(3'd4,24'd0,8'h34);
+      wr(3'd4,24'd1,8'h12);
+      rd(3'd4,24'h800004,v);if(v!==1)$fatal(1,"one PCM sample queued");
+      @(negedge clk);power=0;
+      repeat(3)@(negedge clk);
+      rd(3'd4,24'h800004,v);if(v!==0)$fatal(1,"powerdown did not flush stale speech");
+      if(pcm!==0)$fatal(1,"powerdown didn't force silence");
+      @(negedge clk);power=1;
+      repeat(4)@(negedge clk);
+      if(pcm!==0)$fatal(1,"stale speech replayed after CTL powerup");
       $display("PASS P10: timestamped SSI events, order/seq, real sample clock, PCM, underrun, reset and MCU-missing silence");
       $finish;
     end
