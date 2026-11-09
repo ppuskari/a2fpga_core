@@ -1,0 +1,58 @@
+name: P10 BL616/FPGA SSI263 hybrid integration
+on:
+  push:
+    branches:
+      - petar/ssi263-p10-hybrid-feasibility-20261109
+    paths:
+      - "hdl/mockingboard/ssi263_slot.sv"
+      - "hdl/mockingboard/mockingboard.sv"
+      - "boards/a2n20v2-Enhanced/hdl/**"
+      - "boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj"
+      - "boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/**"
+      - "tests/ssi263_hybrid/**"
+      - "reference/ssi263/pico-v1.0.1/**"
+      - ".github/workflows/ssi263-p10-hybrid-build.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  hybrid-transport:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Verilog lint/simulation
+        run: sudo apt-get update && sudo apt-get install -y iverilog verilator
+      - name: Compile and run SPI/event/PCM audio ring testbench
+        run: |
+          iverilog -g2012 -Wall -s tb_ssi263_hybrid_bridge -o /tmp/p10bridge.vvp boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv tests/ssi263_hybrid/tb_ssi263_hybrid_bridge.sv
+          vvp /tmp/p10bridge.vvp
+      - name: Lint hybrid FIFO implementation
+        run: |
+          verilator --lint-only --timing -Wno-fatal --top-module ssi263_hybrid_bridge boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv
+      - name: Host-compile pinned C engine and entire hybrid task with BL616 headers mocked
+        run: |
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -fsyntax-only             -Itests/ssi263_hybrid/stubs             -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host             -Ireference/ssi263/pico-v1.0.1             boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c             reference/ssi263/pico-v1.0.1/ssi263.c             reference/ssi263/pico-v1.0.1/ssi263dsp.c
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -Ireference/ssi263/pico-v1.0.1             tests/ssi263_hybrid/test_pico_model.c             reference/ssi263/pico-v1.0.1/ssi263.c             reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/p10picomodel
+          /tmp/p10picomodel
+      - name: Confirm heavy P9 DSP not elaborated and IIgs VGC restored
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          top=Path("boards/a2n20v2-Enhanced/hdl/top.sv").read_text()
+          slot=Path("hdl/mockingboard/ssi263_slot.sv").read_text()
+          board=Path("boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj").read_text()
+          connector=Path("boards/a2n20v2-Enhanced/hdl/bl616/bl616_spi_connector.sv").read_text()
+          fw=Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/CMakeLists.txt").read_text()
+          assert "MOCKINGBOARD_SSI263_HYBRID_ENABLE = 1'b1" in top
+          assert "MOCKINGBOARD_SSI263_FULL_CHIP_ENABLE = 1'b0" in top
+          assert "IIE_SPEECH_VIDEO_TRIM = 1'b0" in top
+          assert "if (HYBRID_ENABLE) begin : gen_p10_hybrid" in slot
+          assert "end else if (FULL_CHIP_ENABLE)" in slot
+          assert "ssi263_hybrid_bridge.sv" in board
+          assert "ssi_spi_wr_o" in connector and "ssi_spi_rd_o" in connector
+          assert "ssi263_hybrid.c" in fw and "pico-v1.0.1/ssi263.c" in fw
+          assert "MB_SPEECH_GAIN_NUM = 1" in top
+          assert "MB_DOC_MULTISAMPLE_ENABLE = 1'b1" in top
+          print("PASS: IIgs VGC restored, P9 DSP compile-excluded, unchanged piano and BL616 linked")
+          print("Gowin P&R and actual BL616 firmware compilation require hardware developer")
+          PY
