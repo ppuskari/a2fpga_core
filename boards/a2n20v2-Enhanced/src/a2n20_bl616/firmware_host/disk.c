@@ -28,6 +28,9 @@
 #include "usbh_hub.h"      /* port power-cycle kick for stalled hubs */
 #include "bl616_glb.h"
 #include "bl616_pds.h"
+#include "boot_timeline.h" /* boot-milestone timeline (mount / reset-release) */
+
+extern bool g_slots_applied_early;  /* main.c: early slot map confirmed+strobed */
 
 /* ---- Volume register map (must match bl616_spi_connector.sv 0x40-0x5F) ---- */
 #define VOL_BASE(v)       (0x40u + (v) * 0x10u)
@@ -59,6 +62,8 @@
 #define HDD_CTL_READY     0x01u
 #define HDD_CTL_MOUNTED   0x02u
 #define HDD_CTL_READONLY  0x04u
+
+#define REG_CARDROM_REL   0x31u   /* W: release the CardROM INH overlay */
 
 /* ---- SDRAM track windows (must match top.sv DISK_WORD_BASE + d*0x2000) ----
  * DISK_WORD_BASE = word 0x080000 = byte 0x200000; per-drive stride = 8KB.
@@ -135,6 +140,18 @@ static bool has_ext(const char *name, const char *ext)
         if ((name[n - x + i] | 0x20) != (ext[i] | 0x20))
             return false;
     return true;
+}
+
+/* Case-insensitive name compare for the directory listing sort. */
+static int name_cmp(const char *a, const char *b)
+{
+    while (*a && *b) {
+        int ca = *a | 0x20, cb = *b | 0x20;
+        if (ca != cb)
+            return ca - cb;
+        a++; b++;
+    }
+    return (*a & 0xff) - (*b & 0xff);
 }
 
 /* Format + sector order from the filename extension. .2mg is resolved from its
@@ -290,19 +307,23 @@ static void mount_drive(int v)
                 bytes = paylen;
             else if (bytes > base)
                 bytes -= base;
-            /* Only floppy-size payloads are Disk II volumes; larger 2mg images
-             * are block devices and belong to the hard-disk path. */
-            if (fmt == FMT_DSK && bytes != DSK_TRACK_BYTES * 35u) {
-                osd_log("DISK II: D%d %s not a 5.25 floppy (%lu B) - skip",
-                        v + 1, name + 3, (unsigned long)bytes);
-                fmt = FMT_NONE;
-            }
         } else {
             fmt = detect_format(name, &order);
             /* Bare .dsk is ambiguous: sniff the actual sector order (.do and
              * .po stay explicit). */
             if (fmt == FMT_DSK && has_ext(name, "dsk"))
                 order = sniff_dsk_order(&g_img[v]);
+        }
+
+        /* Only floppy-size payloads are Disk II volumes. Anything larger
+         * (e.g. an 800K ProDOS .po) is a block device and belongs to the
+         * hard-disk path — serving it here would nibblize garbage geometry
+         * and hang the Apple's boot. */
+        if ((fmt == FMT_DSK && bytes != DSK_TRACK_BYTES * 35u) ||
+            (fmt == FMT_NIB && bytes != MAX_TRACK_BYTES * 35u)) {
+            osd_log("DISK II: D%d %s not a 5.25 floppy (%lu B) - use HDD slot",
+                    v + 1, name + 3, (unsigned long)bytes);
+            fmt = FMT_NONE;
         }
 
         if (fmt == FMT_NONE) {
@@ -369,6 +390,16 @@ static void mount_hdd(int u)
         else
             continue;
 
+        /* CONTAINMENT: serve HDD volumes read-only for now. The Apple ->
+         * SDRAM window -> SPI XFER -> file write-back chain corrupts data
+         * at 32-bit-word granularity (observed on hardware: a game's
+         * high-score save destroyed the volume directory blocks with
+         * shifted/interleaved words). Until that path is fixed and
+         * verified, protect the images: reads are proven byte-faithful,
+         * writes are not. GS/OS boots and games run fine read-only; saves
+         * are rejected by the card's write-protect status. */
+        rw = false;
+
         uint32_t base  = 0;
         uint32_t bytes = (uint32_t)f_size(&g_hdd_img[u]);
 
@@ -428,15 +459,13 @@ static volatile bool g_remounting  = false;   /* disk_remount() running */
  * 0 = nothing scheduled. */
 static uint32_t g_hide_console_at_us = 0;
 
-/* Show failures long enough to diagnose, but never trap the Apple II behind
- * the USB disk console indefinitely. Successful mounts keep the fast 1.5 s
- * handoff; missing/invalid media gets 15 s. Timer arithmetic handles wrap. */
+/* Nonblocking screen handoff: 1.5 s with mounted media, 15 s if USB/SD
+ * fails. The steady P10 speech diagnostics must never trap Apple video. */
 static void schedule_console_hide(uint32_t delay_us)
 {
     g_hide_console_at_us = (uint32_t)bflb_mtimer_get_time_us() + delay_us;
-    if (!g_hide_console_at_us) g_hide_console_at_us = 1; /* zero = disabled */
+    if (!g_hide_console_at_us) g_hide_console_at_us = 1;
 }
-
 
 void disk_request_remount(void)
 {
@@ -450,8 +479,7 @@ void disk_request_remount(void)
  * can be read. */
 static void disk_remount(void)
 {
-    /* Reset the previous remount's deadline and guarantee every early-return
-     * path eventually reveals the Apple II display. */
+    /* Arm the failure timeout BEFORE any mount early-return path. */
     g_hide_console_at_us = 0;
     osd_console_show();
     schedule_console_hide(15000000u);
@@ -533,7 +561,7 @@ static void disk_remount(void)
         schedule_console_hide(1500000u);
     } else {
         osd_log("DISK II: NO DISK IMAGES ON VOLUME");
-        /* The 15-second failure deadline remains armed. */
+        /* leave the console up so the message is visible */
     }
 }
 
@@ -838,6 +866,15 @@ static int usb_leaf_count(struct usbh_hub *hub)
 }
 void disk_poll(void)
 {
+    /* Stamp the actual Apple /RES release the moment it is observable -- the
+     * FPGA can release on its own native timer (v2+ gateware) BEFORE any 0x2E
+     * write, so poll from the top of every tick rather than from the release
+     * path (which made the stamp an upper bound). One reg read per 2 ms tick,
+     * and only until the release is seen. */
+    if (!bt_reset_released() &&
+        (fpga_spi_reg_read(0x06) & FPGA_STATUS_A2BUS_RESET_N))
+        bt_mark(BT_RST_RELEASED);
+
     if (g_remount_req) {
         g_remount_req = false;
         g_remounting  = true;
@@ -845,7 +882,7 @@ void disk_poll(void)
         g_remounting  = false;
     }
 
-    /* Non-blocking console hide: 1.5 s on a good mount, 15 s on failure. */
+    /* Non-blocking console hide (scheduled by disk_remount on a good mount). */
     if (g_hide_console_at_us &&
         (int32_t)((uint32_t)bflb_mtimer_get_time_us() - g_hide_console_at_us) >= 0) {
         g_hide_console_at_us = 0;
@@ -863,32 +900,62 @@ void disk_poll(void)
             bool any = false;
             for (int v = 0; v < NDRV; v++) any = any || g_mounted[v];
             for (int u = 0; u < NHDD; u++) any = any || g_hdd_mounted[u];
+            if (any) bt_mark(BT_MOUNT_FOUND);   /* first volume seen (pre-release) */
             if ((any && !g_remount_req) ||
                 bflb_mtimer_get_time_us() > 7000000u) {
-                /* Program the slot map JUST before the release — this late in
-                 * boot the SPI link is proven good (the mounts above ran over
-                 * it; writes issued from early main() were getting lost), and
-                 * the Apple II is still held in reset so the reconfig is
-                 * race-free. The registers double as the readable mirror the
-                 * menu's "NOW:" column uses. 0xFF = hardware default. */
-                for (int i = 0; i < 8; i++) {
-                    uint8_t c = settings()->slot_cards[i];
-                    if (c == 0xFF)
-                        c = settings_slot_hw_defaults[i];
-                    fpga_spi_reg_write((uint8_t)(0x60 + i), c);
+                /* Fallback slot-map apply: normally main() already programmed
+                 * and strobed the map (readback-verified, g_slots_applied_early)
+                 * and /RES released on that strobe per the reset contract. Only
+                 * if the early apply could not be confirmed do we program here
+                 * -- this late in boot the SPI link is proven good (the mounts
+                 * above ran over it), and the Apple II is STILL held in reset
+                 * (the gateware waits for the 0x6B strobe), so the reconfig
+                 * remains race-free. Never re-strobe once applied: the Apple
+                 * is running by then and a slotmaker reconfig mid-run would
+                 * glitch card decode. 0xFF = hardware default. */
+                if (!g_slots_applied_early) {
+                    for (int i = 0; i < 8; i++) {
+                        uint8_t c = settings()->slot_cards[i];
+                        if (c == 0xFF)
+                            c = settings_slot_hw_defaults[i];
+                        fpga_spi_reg_write((uint8_t)(0x60 + i), c);
+                    }
+                    fpga_spi_reg_write(0x6B, 1);   /* slotmaker reconfig strobe */
+                    bt_mark(BT_SLOTS_APPLIED);
                 }
-                fpga_spi_reg_write(0x6B, 1);   /* slotmaker reconfig strobe */
                 osd_log("SLOTS: %d %d %d %d %d %d %d %d",
                         fpga_spi_reg_read(0x60), fpga_spi_reg_read(0x61),
                         fpga_spi_reg_read(0x62), fpga_spi_reg_read(0x63),
                         fpga_spi_reg_read(0x64), fpga_spi_reg_read(0x65),
                         fpga_spi_reg_read(0x66), fpga_spi_reg_read(0x67));
 
-                fpga_spi_reg_write(0x2E, 1);   /* A2_RST_RELEASE */
+                /* Release the CardROM INH overlay BEFORE the Apple II
+                 * starts: releasing after opens a race where the CPU's
+                 * first $FFFC fetch reads the CardROM stub vector and the
+                 * machine strands in the keyboard stub until a manual
+                 * reset. (The CardROM is also parameter-disabled in HDL
+                 * until the keyboard-snoop bootstrap is finished.) */
+                fpga_spi_reg_write(REG_CARDROM_REL, 1);
+
+                /* Robust A2_RST_RELEASE: the single 0x2E write has been observed
+                 * to get LOST on the SPI link -> the FPGA never sees it and
+                 * falls through to its 15 s backstop instead of releasing here.
+                 * Write, read back reg 0x2E bit0 (a2_rst_release_r), and retry
+                 * until it sticks. Bounded, one-time, microsecond-scale. */
+                bt_mark(BT_RST_WRITE);
+                int rst_ok = 0;
+                for (int a = 0; a < 5; a++) {
+                    fpga_spi_reg_write(0x2E, 1);        /* A2_RST_RELEASE */
+                    if (fpga_spi_reg_read(0x2E) & 0x01) { rst_ok = 1; break; }
+                    bflb_mtimer_delay_us(50);
+                }
                 s_released = true;
-                osd_log("A2: RESET RELEASED%s", any ? "" : " (NO MEDIA)");
+                osd_log("A2: RESET RELEASED%s%s", any ? "" : " (NO MEDIA)",
+                        rst_ok ? "" : " (0x2E UNCONFIRMED)");
             }
         }
+        /* (BT_RST_RELEASED is stamped at the top of disk_poll, independent of
+         * this release path -- the FPGA may release on its own timer.) */
     }
 
     /* Async directory listing for the menu (FatFS is not re-entrant, so the
@@ -925,6 +992,19 @@ void disk_poll(void)
                 e->is_dir = is_dir;
             }
             f_closedir(&dir);
+        }
+        /* Alphabetize within each group (the two passes already put
+         * directories first). FAT returns creation order, which makes big
+         * game folders unnavigable. Insertion sort: n <= DISK_LIST_MAX. */
+        for (int i = 1; i < g_list_count; i++) {
+            disk_list_ent_t tmp = g_list_ents[i];
+            int j = i;
+            while (j > 0 && g_list_ents[j - 1].is_dir == tmp.is_dir &&
+                   name_cmp(g_list_ents[j - 1].name, tmp.name) > 0) {
+                g_list_ents[j] = g_list_ents[j - 1];
+                j--;
+            }
+            g_list_ents[j] = tmp;
         }
         g_list_req  = false;
         g_list_done = true;
