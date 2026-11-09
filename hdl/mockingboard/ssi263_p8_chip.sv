@@ -58,13 +58,22 @@ module ssi263_p8_chip #(
     localparam integer OUTCW=$clog2(OUTPUT_DIV);
     logic [OUTCW-1:0] out_count_r;
     logic signed [15:0] held_pcm_r;
+    // Hardware-rate equivalent of Pico's area-sampling of the switched-
+    // capacitor output into the host PCM stream. The held value is
+    // integrated over each actual logic tick before the 44.1 kHz FIR.
+    // Constant reciprocal avoids an area divider in FPGA fabric.
+    logic signed [31:0] area_acc_r;
+    localparam integer AREA_RECIP_Q24 = ((24'd1 << 24) + OUTPUT_DIV/2)/OUTPUT_DIV;
+    wire signed [31:0] area_sum_w = $signed(area_acc_r) + $signed(held_pcm_r);
+    wire signed [63:0] area_mul_w = $signed(area_sum_w) * $signed(AREA_RECIP_Q24);
+    wire signed [15:0] area_pcm_w = clip16(area_mul_w >>> 24);
     logic signed [31:0] hp_x_r,hp_y_r;
     wire signed [63:0] hp_fb_w = ($signed(hp_y_r) * 64'sd32100) >>> 15;
     wire signed [63:0] hp_acc_w =
         $signed(next_filter_w) - $signed(hp_x_r) + hp_fb_w;
     wire signed [31:0] hp_next_w = clip32(hp_acc_w);
     wire signed [63:0] fir_sum_w =
-        $signed(held_pcm_r) + ($signed(fir0_r) <<< 2) +
+        $signed(area_pcm_w) + ($signed(fir0_r) <<< 2) +
         ($signed(fir1_r) * 64'sd6) + ($signed(fir2_r) <<< 2) +
         $signed(fir3_r);
     logic [2:0] stage_r;
@@ -332,6 +341,7 @@ module ssi263_p8_chip #(
           glottal_age_r<=6'd63; lfsr_r<=16'hace1;
           noise_prev_r<=0;
           out_count_r<=0; held_pcm_r<=0; pcm_o<=0;
+          area_acc_r<=0;
           fir0_r<=0;fir1_r<=0;fir2_r<=0;fir3_r<=0;
           hp_x_r<=0; hp_y_r<=0;
           stage_r<=0; tract_r<=0;
@@ -480,16 +490,21 @@ module ssi263_p8_chip #(
           end
           if(out_count_r == OUTPUT_DIV-1) begin
              out_count_r<=0;
+             area_acc_r<=0;
              // Four retained samples plus current sample, 5-tap FIR.
              // Round towards zero via fixed signed arithmetic shift.
              fir3_r<=fir2_r;
              fir2_r<=fir1_r;
              fir1_r<=fir0_r;
-             fir0_r<=held_pcm_r;
+             fir0_r<=area_pcm_w;
              pcm_o<=powered_o ? clip16(fir_sum_w >>> 4) : 16'sd0;
-          end else out_count_r<=out_count_r+1'b1;
+          end else begin
+             out_count_r<=out_count_r+1'b1;
+             area_acc_r<=area_sum_w;
+          end
           if(!powered_o) begin
              pcm_o<=0;held_pcm_r<=0;
+             area_acc_r<=0;
              fir0_r<=0;fir1_r<=0;fir2_r<=0;fir3_r<=0;
              hp_x_r<=0;hp_y_r<=0;
              stage_r<=0;pitch_div_r<=0;glottal_age_r<=6'd63;
