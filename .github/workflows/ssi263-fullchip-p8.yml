@@ -7,7 +7,12 @@ on:
       - "reference/ssi263/**"
       - "tools/generate_ssi263_p8_roms.py"
       - "hdl/mockingboard/ssi263_p8_chip.sv"
+      - "hdl/mockingboard/ssi263_slot.sv"
+      - "hdl/mockingboard/mockingboard.sv"
+      - "boards/a2n20v2-Enhanced/hdl/top.sv"
+      - "boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj"
       - "tests/mb_ssi263/tb_ssi263_p8_chip.sv"
+      - "tests/mb_ssi263/tb_ssi263_p8_integration.sv"
       - "boards/a2n20v2-Enhanced/hdl/ssi263_p8_*.mem"
       - ".github/workflows/ssi263-fullchip-p8.yml"
   workflow_dispatch:
@@ -49,6 +54,25 @@ jobs:
         run: |
           iverilog -g2012 -s tb_ssi263_p8_chip -o /tmp/p8chip.vvp hdl/mockingboard/ssi263_p8_chip.sv tests/mb_ssi263/tb_ssi263_p8_chip.sv
           (cd boards/a2n20v2-Enhanced && vvp /tmp/p8chip.vvp)
+      - name: Exercise P8 chip via actual Mockingboard Demo Disk register traces
+        run: |
+          iverilog -g2012 -s tb_ssi263_p8_integration -o /tmp/p8slot.vvp hdl/mockingboard/ssi263_control.sv hdl/mockingboard/ssi263_voice.sv hdl/mockingboard/ssi263_p8_chip.sv hdl/mockingboard/ssi263_slot.sv tests/mb_ssi263/tb_ssi263_p8_integration.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/p8slot.vvp)
+      - name: Verify P6 remains selected by default
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          t=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text()
+          s=Path('hdl/mockingboard/ssi263_slot.sv').read_text()
+          m=Path('hdl/mockingboard/mockingboard.sv').read_text()
+          p=Path('boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj').read_text()
+          assert "MOCKINGBOARD_SSI263_FULL_CHIP_ENABLE = 1'b0" in t
+          assert "FULL_CHIP_ENABLE = 1'b0" in s
+          assert "SSI263_FULL_CHIP_ENABLE = 1'b0" in m
+          assert 'ssi263_p8_chip.sv' in p
+          assert 'mb_doc_gain_minus_2db' in t
+          print("PASS: P8 independent chip switch wired; P6 music default unchanged")
+          PY
       - name: Lint stand-alone P8 chip
         run: |
           (cd boards/a2n20v2-Enhanced && verilator --lint-only --timing -Wno-fatal --top-module ssi263_p8_chip ../../hdl/mockingboard/ssi263_p8_chip.sv)
