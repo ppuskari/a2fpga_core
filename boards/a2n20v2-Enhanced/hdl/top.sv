@@ -56,7 +56,10 @@ module top #(
     parameter bit MOCKINGBOARD_SSI263_ENABLE = 1'b1,
     parameter integer MOCKINGBOARD_SSI263_VOICE_PROFILE = 1,
     // P8 independent chip is experimental and OFF by default.
-    parameter bit MOCKINGBOARD_SSI263_FULL_CHIP_ENABLE = 1'b1,
+    parameter bit MOCKINGBOARD_SSI263_FULL_CHIP_ENABLE = 1'b0,
+    // P10 hybrid: compile out all P9 acoustic DSP and FIR. FPGA retains
+    // the SSI CPU register, XCK and VIA A/R path; BL616 produces PCM.
+    parameter bit MOCKINGBOARD_SSI263_HYBRID_ENABLE = 1'b1,
     // P6: speech-only output gain. 3/1 ~= +9.54dB in normal MB-DOC mode.
     // Music's existing HDMI gain/limiter remains unchanged.
     // P9 hardware-listening experiment: SSI263 full chip uses a separately
@@ -98,7 +101,8 @@ module top #(
     // generator and its extra auxiliary video RAM. Preserve the Apple IIe
     // text/lores/hires/80-column pixel generator and HDMI output.
     // Set to 0 to restore original Enhanced IIgs/SHR video capability.
-    parameter bit IIE_SPEECH_VIDEO_TRIM = 1'b1,
+    // P10 restores complete IIgs Super Hi-Res/VGC compatibility.
+    parameter bit IIE_SPEECH_VIDEO_TRIM = 1'b0,
 
     // direct_display hsync cx offsets used to center each window in the 720px
     // visible area (apple = 560 wide, SHR = 640 wide). The apple value differs
@@ -598,6 +602,11 @@ module top #(
     wire [15:0] u2_dbg_wr_count_w; // DEBUG: port-B write instrumentation (card -> connector)
     wire [15:0] u2_dbg_last_addr_w;
     wire [7:0]  u2_dbg_last_wdata_w;
+    // Dedicated P10 SPI XFER spaces 4/5 from BL616 connector.
+    wire hybrid_spi_wr_w,hybrid_spi_rd_w,hybrid_spi_rd_valid_w;
+    wire [2:0] hybrid_spi_wr_space_w,hybrid_spi_rd_space_w;
+    wire [23:0] hybrid_spi_wr_addr_w,hybrid_spi_rd_addr_w;
+    wire [7:0] hybrid_spi_wr_data_w,hybrid_spi_rd_data_w;
 
     bl616_spi_connector #(
         .USE_CRC(0),
@@ -647,7 +656,16 @@ module top #(
         .w5100_cmd_clr(u2_cmd_clr_w),
         .w5100_dbg_wr_count(u2_dbg_wr_count_w),
         .w5100_dbg_last_addr(u2_dbg_last_addr_w),
-        .w5100_dbg_last_wdata(u2_dbg_last_wdata_w)
+        .w5100_dbg_last_wdata(u2_dbg_last_wdata_w),
+        .ssi_spi_wr_o(hybrid_spi_wr_w),
+        .ssi_spi_wr_space_o(hybrid_spi_wr_space_w),
+        .ssi_spi_wr_addr_o(hybrid_spi_wr_addr_w),
+        .ssi_spi_wr_data_o(hybrid_spi_wr_data_w),
+        .ssi_spi_rd_o(hybrid_spi_rd_w),
+        .ssi_spi_rd_space_o(hybrid_spi_rd_space_w),
+        .ssi_spi_rd_addr_o(hybrid_spi_rd_addr_w),
+        .ssi_spi_rd_valid_i(hybrid_spi_rd_valid_w),
+        .ssi_spi_rd_data_i(hybrid_spi_rd_data_w)
     );
 
     assign ws2812 = mcu_ws2812_w;
@@ -1292,6 +1310,10 @@ wire [7:0] doc_128k_status_w;
     wire [9:0] mb_audio_l;
     wire [9:0] mb_audio_r;
     wire signed [15:0] mb_speech_pcm_w;
+    wire signed [15:0] hybrid_speech_pcm_w;
+    wire hybrid_ssi_event_valid_w,hybrid_ssi_xck_w,hybrid_ssi_powered_w;
+    wire [2:0] hybrid_ssi_event_reg_w;
+    wire [7:0] hybrid_ssi_event_data_w;
 
     // The two independent AY command streams feed the future
     // single-DOC translator. They are never PCM audio sources.
@@ -1307,6 +1329,7 @@ wire [7:0] doc_128k_status_w;
         .ENABLE_SSI263(MOCKINGBOARD_SSI263_ENABLE),
         .SSI263_VOICE_PROFILE(MOCKINGBOARD_SSI263_VOICE_PROFILE),
         .SSI263_FULL_CHIP_ENABLE(MOCKINGBOARD_SSI263_FULL_CHIP_ENABLE),
+        .SSI263_HYBRID_ENABLE(MOCKINGBOARD_SSI263_HYBRID_ENABLE),
         .ID(MOCKINGBOARD_ID)
     ) mockingboard (
         .a2bus_if(a2bus_if),  // use system_reset_n
@@ -1319,6 +1342,12 @@ wire [7:0] doc_128k_status_w;
         .audio_l_o(mb_audio_l),
         .audio_r_o(mb_audio_r),
         .speech_pcm_o(mb_speech_pcm_w),
+        .hybrid_pcm_i(hybrid_speech_pcm_w),
+        .hybrid_event_valid_o(hybrid_ssi_event_valid_w),
+        .hybrid_event_reg_o(hybrid_ssi_event_reg_w),
+        .hybrid_event_data_o(hybrid_ssi_event_data_w),
+        .hybrid_xck_tick_o(hybrid_ssi_xck_w),
+        .hybrid_powered_o(hybrid_ssi_powered_w),
 
         .ay_l_wr_o(mb_ay_l_wr_w),
         .ay_l_reg_o(mb_ay_l_reg_w),
@@ -1330,6 +1359,32 @@ wire [7:0] doc_128k_status_w;
         .ay_r_env_level_o(mb_ay_r_env_level_w),
         .ay_l_reset_n_o(mb_ay_l_reset_n_w),
         .ay_r_reset_n_o(mb_ay_r_reset_n_w)
+    );
+
+    // FPGA-half of P10: event journal and clock-locked PCM bridge.
+    // Audio will be silent until updated BL616 P10 firmware connects.
+    // The native DOC piano and AY effects do not depend on this path.
+    ssi263_hybrid_bridge #(
+        .PCM_DEPTH(2048),.START_WATERMARK(512),.EVENT_DEPTH(256)
+    ) ssi263_hybrid (
+        .clk_i(clk_logic_w),
+        .reset_n_i(device_reset_n_w),
+        .audio_tick_pixel_i(clk_audio_w),
+        .speech_powered_i(hybrid_ssi_powered_w),
+        .xck_tick_i(hybrid_ssi_xck_w),
+        .event_valid_i(hybrid_ssi_event_valid_w),
+        .event_reg_i(hybrid_ssi_event_reg_w),
+        .event_data_i(hybrid_ssi_event_data_w),
+        .spi_wr_i(hybrid_spi_wr_w),
+        .spi_wr_space_i(hybrid_spi_wr_space_w),
+        .spi_wr_addr_i(hybrid_spi_wr_addr_w),
+        .spi_wr_data_i(hybrid_spi_wr_data_w),
+        .spi_rd_i(hybrid_spi_rd_w),
+        .spi_rd_space_i(hybrid_spi_rd_space_w),
+        .spi_rd_addr_i(hybrid_spi_rd_addr_w),
+        .spi_rd_valid_o(hybrid_spi_rd_valid_w),
+        .spi_rd_data_o(hybrid_spi_rd_data_w),
+        .speech_pcm_o(hybrid_speech_pcm_w)
     );
 
     // Synthesize no bridge at all in normal GS mode.
