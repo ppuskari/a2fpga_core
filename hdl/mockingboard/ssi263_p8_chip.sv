@@ -308,7 +308,7 @@ module ssi263_p8_chip #(
         $signed(ns_next_w) * 64'sd393 *
         $signed({1'b0,amplitude_w});
     wire signed [31:0] noise_source_w=EXCITATION_NOISE_ENABLE ?
-        clip32(noise_product_w / 64'sd491520) : 32'sd0;
+        clip32(noise_product_w / 64'sd7372800) : 32'sd0;
     wire [15:0] noise_f2_target_w =
         (!closing_r || release_open_r) && route_f2_w ?
         field_r[5] : 16'd0;
