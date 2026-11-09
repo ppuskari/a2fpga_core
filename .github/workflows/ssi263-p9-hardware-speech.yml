@@ -64,7 +64,7 @@ jobs:
         run: |
           python3 tools/compare_ssi263_p8b_audio.py /tmp/p8b_c.pcm /tmp/p8b_rtl.pcm --report /tmp/p8b_comparison.json
           cp /tmp/p8b_comparison.json p8b_comparison.json
-      - name: Verify the HDMI piano is bit-transparent when SSI muted
+      - name: Verify P9 speech mixer selection and unchanged DOC music
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -72,9 +72,9 @@ jobs:
           t=Path("boards/a2n20v2-Enhanced/hdl/top.sv").read_text()
           report=json.loads(Path("p8b_comparison.json").read_text())
           assert "MOCKINGBOARD_SSI263_FULL_CHIP_ENABLE = 1'b1" in t
-          assert "MB_SPEECH_GAIN_NUM = 0" in t
+          assert "MB_SPEECH_GAIN_NUM = 1" in t
           if not report["fidelity_accepted"]:
-              print("FIDELITY GATE FAILED: SSI output stays hardware-muted")
+              print("EXPERIMENTAL: listening-only SSI output enabled despite C/RTL parity gate; never mark golden")
           assert "mb_speech_gain_w >>> 3" in t
           assert "mb_speech_sum_l_w" in t and "mb_speech_sum_r_w" in t
           assert "MB_DOC_MULTISAMPLE_ENABLE = 1'b1" in t
@@ -83,7 +83,7 @@ jobs:
           assert "ssi263_p8_glottal.mem" in Path("boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj").read_text()
           assert "ssi263_p9_outfir.mem" in Path("boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj").read_text()
           assert "ssi263_p9_f2nas.mem" in Path("boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj").read_text()
-          print("PASS: full chip selected for synthesis, SSI HDMI contribution exactly zero by construction")
+          print("PASS: P9 chip selected, 1x experimental SSI mix, unchanged DOC piano/AY settings")
           PY
       - name: Lint independent chip and its controls
         run: |
