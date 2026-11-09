@@ -9,9 +9,12 @@
 // Bus-derived SSI events/XCK belong to the FPGA; MCU PCM has no control
 // over VIA CA1 or Apple-visible register timing.
 //
-// PCM reader uses the actual 44.1k HDMI audio sample enable transferred
-// from 27 MHz pixel domain into 54 MHz logic domain. No independent
-// nominal-44.1k sample clock can drift relative to HDMI.
+// PCM output remains locked to the real 44.1k HDMI audio enable. A programmable
+// 1/2/4 sample-hold divider consumes MCU speech at 44.1/22.05/11.025 kHz.
+// DOC piano, AY FX, HDMI framing and SSI chip register/A-R timing are unchanged.
+// Legacy P10 MCU sees the same 24-byte status and starts at 44.1k (mode 0).
+// New MCU sees status extension 0xA6/mode at offsets 24/25; a write to
+// SPACE4:0x800001 sets mode 0/1/2 and atomically flushes the PCM FIFO.
 // All SPI mem strobes are already in the 54MHz connector domain.
 module ssi263_hybrid_bridge #(
     parameter integer PCM_DEPTH=2048,
@@ -46,6 +49,10 @@ module ssi263_hybrid_bridge #(
     wire [PCM_AW:0] pcm_free_w=PCM_DEPTH-pcm_count_w;
     logic [7:0] pcm_lo_r;
     logic pcm_lo_valid_r,playing_r;
+    logic [1:0] pcm_rate_mode_r,pcm_div_phase_r;
+    wire pcm_consume_tick_w = pcm_rate_mode_r==2'd0 ||
+        (pcm_rate_mode_r==2'd1 && !pcm_div_phase_r[0]) ||
+        (pcm_rate_mode_r==2'd2 && pcm_div_phase_r==2'd0);
     logic speech_power_prev_r;
     logic [15:0] underrun_r,overrun_r;
 
@@ -63,6 +70,9 @@ module ssi263_hybrid_bridge #(
                            !spi_wr_addr_i[23];
     wire pcm_reset_w=spi_wr_i && spi_wr_space_i==3'd4 &&
                        spi_wr_addr_i==24'h800000;
+    wire pcm_rate_set_w=spi_wr_i && spi_wr_space_i==3'd4 &&
+                         spi_wr_addr_i==24'h800001 &&
+                         spi_wr_data_i<=8'd2;
     wire pcm_write_sample_w=pcm_stream_wr_w && spi_wr_addr_i[0] &&
                             pcm_lo_valid_r && (pcm_count_w<PCM_DEPTH);
     wire evt_pop_w=spi_rd_i && spi_rd_space_i==3'd5 &&
@@ -112,7 +122,10 @@ module ssi263_hybrid_bridge #(
           20:status_byte=pcm_wrptr_r[7:0];
           21:status_byte=pcm_rdptr_r[7:0];
           22:status_byte=8'h50; // protocol "P1" marker
-          default:status_byte=8'h31;
+          23:status_byte=8'h31;
+          24:status_byte=8'hA6; // R6 PCM rate-select capability marker
+          25:status_byte={6'b0,pcm_rate_mode_r}; // 0=44k,1=22k,2=11k
+          default:status_byte=8'hff;
         endcase
     endfunction
 
@@ -120,6 +133,7 @@ module ssi263_hybrid_bridge #(
         if (!reset_n_i) begin
             pcm_wrptr_r<=0;pcm_rdptr_r<=0;
             pcm_lo_r<=0;pcm_lo_valid_r<=0;
+            pcm_rate_mode_r<=0;pcm_div_phase_r<=0;
             speech_power_prev_r<=0;
             speech_pcm_o<=0;playing_r<=0;
             underrun_r<=0;overrun_r<=0;
@@ -167,7 +181,10 @@ module ssi263_hybrid_bridge #(
 
             // Never replay buffered old-phoneme PCM across CTL powerdown.
             // Reset the FIFO even if the BL616 is delayed or absent.
-            if(pcm_reset_w || (speech_power_prev_r && !speech_powered_i))begin
+            if(pcm_reset_w || pcm_rate_set_w ||
+               (speech_power_prev_r && !speech_powered_i))begin
+                if(pcm_rate_set_w)pcm_rate_mode_r<=spi_wr_data_i[1:0];
+                pcm_div_phase_r<=0;
                 pcm_wrptr_r<=0;pcm_rdptr_r<=0;
                 pcm_lo_valid_r<=0;playing_r<=0;
                 speech_pcm_o<=0;
@@ -187,23 +204,30 @@ module ssi263_hybrid_bridge #(
                             overrun_r<=overrun_r+1'b1;
                     end
                 end
-                // One read per actual HDMI 44.1k sample strobe.
-                // Mute immediately on SSI chip power-down, but keep
-                // buffering during the next CTL start.
+                // Actual HDMI 44.1 kHz strobe. Low-rate speech holds its
+                // previous 16-bit sample between 2x/4x source consumption
+                // ticks. No MCU duplication and no extra SPI traffic.
                 if(audio_tick_w)begin
-                    if(!speech_powered_i)begin
+                    case(pcm_rate_mode_r)
+                      2'd0:pcm_div_phase_r<=0;
+                      2'd1:pcm_div_phase_r<={1'b0,~pcm_div_phase_r[0]};
+                      default:pcm_div_phase_r<=pcm_div_phase_r+2'd1;
+                    endcase
+                    if(!speech_powered_i)
                         speech_pcm_o<=0;
-                    end else if(playing_r && pcm_count_w!=0)begin
-                        speech_pcm_o<=pcm_mem[pcm_rdptr_r[PCM_AW-1:0]];
-                        pcm_rdptr_r<=pcm_rdptr_r+1'b1;
-                    end else begin
-                        speech_pcm_o<=0;
-                        if(playing_r && pcm_count_w==0)begin
-                            playing_r<=0;
-                            if(underrun_r!=16'hffff)
-                                underrun_r<=underrun_r+1'b1;
-                        end else if(pcm_count_w>=START_WATERMARK)
-                            playing_r<=1;
+                    else if(pcm_consume_tick_w)begin
+                        if(playing_r && pcm_count_w!=0)begin
+                            speech_pcm_o<=pcm_mem[pcm_rdptr_r[PCM_AW-1:0]];
+                            pcm_rdptr_r<=pcm_rdptr_r+1'b1;
+                        end else begin
+                            speech_pcm_o<=0;
+                            if(playing_r && pcm_count_w==0)begin
+                                playing_r<=0;
+                                if(underrun_r!=16'hffff)
+                                    underrun_r<=underrun_r+1'b1;
+                            end else if(pcm_count_w>=START_WATERMARK)
+                                playing_r<=1;
+                        end
                     end
                 end
             end
