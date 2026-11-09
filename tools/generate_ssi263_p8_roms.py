@@ -62,11 +62,11 @@ def glottal_rows() -> list[str]:
     """The MIT Pico C default has a 36-tick glottal wave, then 28 zeros."""
     text=REF.read_text(encoding="utf-8")
     match=re.search(
-        r"ssi263_default_params_d\\[SSI263_DEFAULT_PARAMS_N\\]\\s*=\\s*\\{(.*?)\\};",
+        r"ssi263_default_params_d\[SSI263_DEFAULT_PARAMS_N\]\s*=\s*\{(.*?)\};",
         text, re.S)
     if not match:
         raise RuntimeError("upstream chip parameter array missing")
-    numbers=[float(v) for v in re.findall(r"(?<![A-Za-z])[-+]?(?:\\d*\\.\\d+|\\d+\\.?\\d*)(?:[eE][-+]?\\d+)?",match.group(1))]
+    numbers=[float(v) for v in re.findall(r"(?<![A-Za-z])[-+]?(?:\d*\.\d+|\d+\.?\d*)(?:[eE][-+]?\d+)?",match.group(1))]
     # 100 numbers before glottal_wave (99: glottal_n=36).
     assert len(numbers)==166 and round(numbers[99])==36
     wave=numbers[100:136]
