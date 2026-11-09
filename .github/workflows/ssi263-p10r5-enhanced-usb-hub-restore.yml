@@ -20,7 +20,7 @@ jobs:
           import pathlib,re
           p=pathlib.Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host")
           s=(p/"usb_config.h").read_text()
-          defs=dict(re.findall(r"^#define\s+(CONFIG_USBHOST_\w+)\s+([^\n]+)$",s,re.M))
+          defs=dict(re.findall(r"^#define\s+(CONFIG_(?:USBHOST|USB_EHCI)_\w+)\s+([^\n]+)$",s,re.M))
           assert defs["CONFIG_USBHOST_MAX_EHPORTS"].split()[0]=="8",defs["CONFIG_USBHOST_MAX_EHPORTS"]
           assert defs["CONFIG_USBHOST_REQUEST_BUFFER_LEN"].split()[0]=="1024",defs["CONFIG_USBHOST_REQUEST_BUFFER_LEN"]
           assert defs["CONFIG_USB_EHCI_QH_NUM"].split()[0]=="20"
