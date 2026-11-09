@@ -20,15 +20,15 @@
 #include "task.h"
 #include "usbh_core.h"
 #include "usbh_xinput.h"
-#include "usb_kbd_menu.h"
-#include "board.h"
-#include "bflb_mtimer.h"
-
-#include "fpga_spi.h"
+#include "usbh_hidinput.h"  /* USB keyboard / remote-control menu input */
 #include "ssi263_hybrid.h"
 #ifdef SSI263_HYBRID_SPI_BENCH
 #include "ssi263_spi_bench.h"
 #endif
+#include "board.h"
+#include "bflb_mtimer.h"
+
+#include "fpga_spi.h"
 #include "fpga_screen.h"
 
 #include "lwip/tcpip.h"   /* lwIP for the USB-Ethernet (CDC-ECM) net path */
@@ -41,6 +41,12 @@
 #include "usbh_asix.h"      /* stock vendor driver for ASIX AX88772x adapters */
 #include "w5100.h"          /* emulated W5100 (Uthernet II) MACRAW bridge */
 #include "disk.h"           /* Disk II image serving (track-on-demand) */
+#include "boot_timeline.h"  /* boot-milestone timeline (FPGA sys_time capture) */
+
+/* True once the early slot-map apply (below, in main()) has been confirmed by
+ * readback and strobed -- disk_poll's mount-time slot programming then skips
+ * its (re-)apply so the slotmaker is never re-strobed while the Apple runs. */
+bool g_slots_applied_early = false;
 #include "diskio_host.h"    /* SD/USB FatFS backend (g_msc_class) */
 #include "usbh_msc.h"       /* USB Mass Storage host class */
 #include "osd_console.h"    /* shared boot/status console */
@@ -324,12 +330,12 @@ static void xinput_thread(void *arg)
             }
             g_dev = NULL;
             g_prev_buttons = 0;
-            /* No pad: still tick the menu at 20 ms so remote input (the
-             * telnet mirror's menu_inject pulses) works headless. The
-             * 500 ms device-scan cadence is preserved by the loop count. */
+            /* No pad: still tick the menu at 20 ms so remote input (HID
+             * keyboards/remotes, the telnet mirror's menu_inject pulses)
+             * works padless. The 500 ms device-scan cadence is preserved
+             * by the loop count. */
             for (int t = 0; t < 25; t++) {
-                usb_kbd_menu_poll();
-                menu_input(0);
+                menu_input(usbh_hidinput_buttons());
                 usb_osal_msleep(20);
             }
             continue;
@@ -368,9 +374,9 @@ static void xinput_thread(void *arg)
             g_prev_buttons = g_btn_latest;
         }
         /* Menu system: edge detection + hold-repeat live inside; feed the
-         * current state every tick (repeat needs a time base, not events). */
-        usb_kbd_menu_poll();
-        menu_input(g_btn_latest);
+         * current state every tick (repeat needs a time base, not events).
+         * HID keyboard/remote buttons ride along in the same word. */
+        menu_input(g_btn_latest | usbh_hidinput_buttons());
         dbg_tick();                  /* heartbeat (thread context) */
         usb_osal_msleep(20);
     }
@@ -1194,24 +1200,28 @@ int main(void)
     bool ready = fpga_spi_wait_ready(2000);
     dbg_stage(STG_FPGA_READY);
     if (ready) dbg_set(F_FPGA_READY);
+    bt_mark(BT_FPGA_READY);   /* config + SDRAM ready: FPGA-facing work can begin */
+
+    /* Assert bus-ready NOW, as early as possible: this lets apple_bus run
+     * its bridge init and grab the Apple II's RESET (hold-until-mounted).
+     * With the mcu_ready latch fixed on the FPGA side, the standalone
+     * fallback no longer asserts this for us — an MCU that never writes
+     * 0x30 would leave the Apple bus interface parked. Ready means "grab
+     * the bus now"; the mount-gated 0x2E release means "boot for real". */
+    fpga_spi_reg_write(REG_A2BUS_READY, 1);
+    bt_mark(BT_A2BUS_READY);   /* FPGA now grabs+holds the Apple II /RES */
 
     /* Persisted preferences, then the gamepad menu that edits them. */
     settings_init();
     menu_init();
 #ifdef SSI263_HYBRID_SPI_BENCH
-    // P10 feasibility benchmark only; not part of the shipping firmware.
-    // Run once pre-RTOS and record results on OSD/console.
+    /* Optional SPI throughput probe; do NOT run in ordinary firmware. */
     if (ready) {
-        ssi263_spi_bench_result br=ssi263_spi_bench_run();
-        printf("P10 SPI W=%lu B/s R=%lu B/s total=%lu B/s mismatches=%lu\r\n",
-            (unsigned long)br.write_bytes_per_sec,
-            (unsigned long)br.read_bytes_per_sec,
-            (unsigned long)br.total_bytes_per_sec,
-            (unsigned long)br.mismatches);
-        osd_log("P10 SPI W=%lu R=%lu kB/s err=%lu",
-            (unsigned long)(br.write_bytes_per_sec/1000),
-            (unsigned long)(br.read_bytes_per_sec/1000),
-            (unsigned long)br.mismatches);
+        ssi263_spi_bench_result br = ssi263_spi_bench_run();
+        osd_log("P10 SPI W=%lu R=%lu kB/s ERR=%lu",
+                (unsigned long)(br.write_bytes_per_sec / 1000u),
+                (unsigned long)(br.read_bytes_per_sec / 1000u),
+                (unsigned long)br.mismatches);
     }
 #endif
 
@@ -1220,6 +1230,37 @@ int main(void)
         settings_debug_line(dbg, sizeof(dbg));
         osd_log("SETTINGS: %s  %s",
                 settings_loaded_from_flash() ? "FLASH" : "DEFAULTS", dbg);
+    }
+
+    /* Apply the persisted slot map EARLY -- the gateware gates the Apple II
+     * /RES release on the 0x6B reconfig strobe (reset contract: the Apple
+     * never boots before the virtual cards know their slots), so this is what
+     * lets the machine boot at native-like speed instead of waiting for
+     * storage mounts. Early-main SPI writes are occasionally LOST (same
+     * failure mode as the 0x2E release), so verify every register by readback
+     * and only strobe once the whole map is confirmed; on failure, leave the
+     * strobe to the mount-time path in disk_poll (reset then releases later
+     * but still slot-correct). */
+    {
+        int ok = 1;
+        for (int i = 0; i < 8; i++) {
+            uint8_t c = settings()->slot_cards[i];
+            if (c == 0xFF)
+                c = settings_slot_hw_defaults[i];
+            int good = 0;
+            for (int a = 0; a < 5 && !good; a++) {
+                fpga_spi_reg_write((uint8_t)(0x60 + i), c);
+                good = (fpga_spi_reg_read((uint8_t)(0x60 + i)) == c);
+            }
+            ok &= good;
+        }
+        if (ok) {
+            fpga_spi_reg_write(0x6B, 1);   /* reconfig strobe -> /RES may release */
+            g_slots_applied_early = true;
+            bt_mark(BT_SLOTS_APPLIED);
+        } else {
+            osd_log("SLOTS: EARLY APPLY UNCONFIRMED (deferred to mount path)");
+        }
     }
     osd_log("USB HOST: WAITING FOR DEVICE...");
     dbg_stage(STG_PRE_USB);
@@ -1241,8 +1282,10 @@ int main(void)
     /* Disk II image serving: mount SD, serve track-on-demand requests. */
     usb_osal_thread_create("disk", 3072, CONFIG_USBHOST_PSC_PRIO + 1, disk_thread, NULL);
 
-    // P10 native SSI speech service. FPGA retains A/R and Apple bus timing.
-    usb_osal_thread_create("ssi263", 6144, CONFIG_USBHOST_PSC_PRIO + 2,
+    /* P10-R4: render speech below USB enumeration/input and disk service.
+     * The native Pico model is currently much slower than real-time on BL616,
+     * so it MUST NOT preempt USB PSC or the 20ms menu tick indefinitely. */
+    usb_osal_thread_create("ssi263", 6144, CONFIG_USBHOST_PSC_PRIO,
                            ssi263_hybrid_task, NULL);
 
     /* Remote console/menu mirror on TCP port 23. */
