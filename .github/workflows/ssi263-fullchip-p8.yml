@@ -5,6 +5,9 @@ on:
       - petar/ssi263-fullchip-p8-reference-20261109
     paths:
       - "reference/ssi263/**"
+      - "hdl/mockingboard/ssi263_p8_chip.sv"
+      - "tests/mb_ssi263/tb_ssi263_p8_chip.sv"
+      - "boards/a2n20v2-Enhanced/hdl/ssi263_p8_*.mem"
       - ".github/workflows/ssi263-fullchip-p8.yml"
   workflow_dispatch:
 permissions:
@@ -32,3 +35,17 @@ jobs:
           assert Path('reference/ssi263/pico-v1.0.1/NOTICE.md').exists()
           print('PASS: 64 physical die parameter rows and attribution present')
           PY
+
+  fpga-chip-bringup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install RTL tools
+        run: sudo apt-get update && sudo apt-get install -y iverilog verilator
+      - name: Simulate independent P8 chip register/DSP chain
+        run: |
+          iverilog -g2012 -s tb_ssi263_p8_chip -o /tmp/p8chip.vvp hdl/mockingboard/ssi263_p8_chip.sv tests/mb_ssi263/tb_ssi263_p8_chip.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/p8chip.vvp)
+      - name: Lint stand-alone P8 chip
+        run: |
+          (cd boards/a2n20v2-Enhanced && verilator --lint-only --timing -Wno-fatal --top-module ssi263_p8_chip ../../hdl/mockingboard/ssi263_p8_chip.sv)
