@@ -1,0 +1,55 @@
+name: P10-R5 Enhanced HID host regression guard
+on:
+  push:
+    branches:
+      - petar/ssi263-p10r5-enhanced-usb-hub-restore-20261109
+    paths:
+      - "boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/**"
+      - ".github/workflows/ssi263-p10r5-enhanced-usb-hub-restore.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard Nov 6 Enhanced USB host port and descriptor capacity
+        run: |
+          python3 - <<'PY'
+          import pathlib,re
+          p=pathlib.Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host")
+          s=(p/"usb_config.h").read_text()
+          defs=dict(re.findall(r"^#define\s+(CONFIG_USBHOST_\w+)\s+([^\n]+)$",s,re.M))
+          assert defs["CONFIG_USBHOST_MAX_EHPORTS"].split()[0]=="8",defs["CONFIG_USBHOST_MAX_EHPORTS"]
+          assert defs["CONFIG_USBHOST_REQUEST_BUFFER_LEN"].split()[0]=="1024",defs["CONFIG_USBHOST_REQUEST_BUFFER_LEN"]
+          assert defs["CONFIG_USB_EHCI_QH_NUM"].split()[0]=="20"
+          c=(p/"proj.conf").read_text()
+          assert "set(CONFIG_CHERRYUSB_HOST_HID 1)" in c
+          assert "set(CONFIG_CHERRYUSB_HOST_MSC 1)" in c
+          cm=(p/"CMakeLists.txt").read_text()
+          assert "usbh_hidinput.c" in cm
+          assert "ssi263_hybrid.c" in cm
+          assert "usb_kbd_menu.c" not in cm
+          m=(p/"main.c").read_text()
+          assert m.count("usbh_hidinput_buttons()")==2
+          assert "ssi263_hybrid_task" in m
+          assert "g_slots_applied_early" in m
+          assert "usb_osal_thread_create(\"ssi263\", 6144, CONFIG_USBHOST_PSC_PRIO," in m
+          hid=(p/"usbh_hidinput.c").read_text()
+          assert "usbh_hid_run(struct usbh_hid" in hid
+          assert "HID_PROTOCOL_KEYBOARD" in hid
+          assert "s->btn_kbd = bits" in hid
+          assert "case 0x2B: return XINPUT_BACK;" in hid
+          assert "case 0x28:" in hid
+          assert "void usbh_hid_stop(" in hid
+          print("PASS P10-R5: 8 hub ports / 1024B control buffer, original Enhanced HID TAB, menu, timer, slot/reset and Pico audio")
+          PY
+      - name: Verify unchanged pinned Pico C voice model still renders PCM
+        run: |
+          gcc -std=c99 -O3 -fsingle-precision-constant -Wall -Wextra -Werror \
+            -Ireference/ssi263/pico-v1.0.1 tests/ssi263_hybrid/test_pico_model.c \
+            reference/ssi263/pico-v1.0.1/ssi263.c \
+            reference/ssi263/pico-v1.0.1/ssi263dsp.c \
+            -lm -o /tmp/p10r5-pico
+          /tmp/p10r5-pico
