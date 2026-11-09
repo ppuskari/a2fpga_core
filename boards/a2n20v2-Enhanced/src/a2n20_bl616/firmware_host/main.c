@@ -20,6 +20,7 @@
 #include "task.h"
 #include "usbh_core.h"
 #include "usbh_xinput.h"
+#include "usb_kbd_menu.h"
 #include "board.h"
 #include "bflb_mtimer.h"
 
@@ -327,6 +328,7 @@ static void xinput_thread(void *arg)
              * telnet mirror's menu_inject pulses) works headless. The
              * 500 ms device-scan cadence is preserved by the loop count. */
             for (int t = 0; t < 25; t++) {
+                usb_kbd_menu_poll();
                 menu_input(0);
                 usb_osal_msleep(20);
             }
@@ -367,6 +369,7 @@ static void xinput_thread(void *arg)
         }
         /* Menu system: edge detection + hold-repeat live inside; feed the
          * current state every tick (repeat needs a time base, not events). */
+        usb_kbd_menu_poll();
         menu_input(g_btn_latest);
         dbg_tick();                  /* heartbeat (thread context) */
         usb_osal_msleep(20);
