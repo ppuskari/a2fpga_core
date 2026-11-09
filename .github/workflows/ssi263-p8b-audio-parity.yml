@@ -11,6 +11,8 @@ on:
       - "reference/ssi263/p8b_compare_trace.c"
       - "tools/compare_ssi263_p8b_audio.py"
       - "tools/generate_ssi263_p8_roms.py"
+      - "boards/a2n20v2-Enhanced/hdl/ssi263_p8_glottal.mem"
+      - "boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj"
       - ".github/workflows/ssi263-p8b-audio-parity.yml"
   workflow_dispatch:
 permissions:
@@ -53,14 +55,19 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import json
           t=Path("boards/a2n20v2-Enhanced/hdl/top.sv").read_text()
+          report=json.loads(Path("p8b_comparison.json").read_text())
           assert "MOCKINGBOARD_SSI263_FULL_CHIP_ENABLE = 1'b1" in t
           assert "MB_SPEECH_GAIN_NUM = 0" in t
+          if not report["fidelity_accepted"]:
+              print("FIDELITY GATE FAILED: SSI output stays hardware-muted")
           assert "mb_speech_gain_w >>> 3" in t
           assert "mb_speech_sum_l_w" in t and "mb_speech_sum_r_w" in t
           assert "MB_DOC_MULTISAMPLE_ENABLE = 1'b1" in t
           assert "MB_DOC_PIANO_ARTICULATION_ENABLE = 1'b1" in t
           assert "MB_DOC_FX_AY_BYPASS_ENABLE = 1'b1" in t
+          assert "ssi263_p8_glottal.mem" in Path("boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj").read_text()
           print("PASS: full chip selected for synthesis, SSI HDMI contribution exactly zero by construction")
           PY
       - name: Lint independent chip and its controls
