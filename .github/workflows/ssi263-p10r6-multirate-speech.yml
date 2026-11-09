@@ -11,7 +11,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check workspace
+      - name: Install simulators
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iverilog verilator
+      - name: Legacy 44k bridge simulation
         run: |
-          test -f boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv
-          echo "P10 R6 workspace ready"
+          iverilog -g2012 -Wall -s tb_ssi263_hybrid_bridge -o /tmp/p10.vvp boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv tests/ssi263_hybrid/tb_ssi263_hybrid_bridge.sv
+          vvp /tmp/p10.vvp
+      - name: New 22k and 11k bridge simulation
+        run: |
+          iverilog -g2012 -Wall -s tb_ssi263_p10r6_multirate -o /tmp/p10r6.vvp boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv tests/ssi263_hybrid/tb_ssi263_p10r6_multirate.sv
+          vvp /tmp/p10r6.vvp
+      - name: FPGA Verilog lint
+        run: verilator --lint-only --timing -Wno-fatal --top-module ssi263_hybrid_bridge boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv
+      - name: Compile MCU speech service at all three rates
+        run: |
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -fsyntax-only -DSSI263_PCM_RATE_DIV=1 -Itests/ssi263_hybrid/stubs -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Ireference/ssi263/pico-v1.0.1 boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -fsyntax-only -DSSI263_PCM_RATE_DIV=2 -Itests/ssi263_hybrid/stubs -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Ireference/ssi263/pico-v1.0.1 boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -fsyntax-only -DSSI263_PCM_RATE_DIV=4 -Itests/ssi263_hybrid/stubs -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Ireference/ssi263/pico-v1.0.1 boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c
+      - name: Pico model speech at three rates
+        run: |
+          gcc -std=c99 -O3 -fsingle-precision-constant -Wall -Wextra -Werror -Ireference/ssi263/pico-v1.0.1 tests/ssi263_hybrid/test_pico_multirate.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/p10r6voice
+          /tmp/p10r6voice
