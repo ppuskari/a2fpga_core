@@ -51,6 +51,38 @@ jobs:
             reference/ssi263/pico-v1.0.1/ssi263.c \
             reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/p10r4-reference
           /tmp/p10r4-reference
+      - name: Compare native-reference and float-literal Pico model PCM (no MCU behavior change)
+        run: |
+          for mode in reference nativefloat; do
+            flags=""
+            if [ "$mode" = "nativefloat" ]; then flags="-fsingle-precision-constant"; fi
+            gcc -std=c99 -O3 -Wall -Wextra $flags \
+              -Ireference/ssi263/pico-v1.0.1 \
+              tests/ssi263_hybrid/test_pico_float_precision.c \
+              reference/ssi263/pico-v1.0.1/ssi263.c \
+              reference/ssi263/pico-v1.0.1/ssi263dsp.c \
+              -lm -o /tmp/p10r4-pico-$mode
+            /tmp/p10r4-pico-$mode > /tmp/p10r4-$mode.pcm
+          done
+          python3 - <<'PY'
+          import array,math
+          def load(path):
+              a=array.array('h')
+              a.frombytes(open(path,'rb').read())
+              assert len(a)==12288
+              return a
+          x=load('/tmp/p10r4-reference.pcm')
+          y=load('/tmp/p10r4-nativefloat.pcm')
+          dot=sum(a*b for a,b in zip(x,y))
+          ax=sum(a*a for a in x)
+          ay=sum(b*b for b in y)
+          diff=sum((a-b)**2 for a,b in zip(x,y))
+          corr=dot/math.sqrt(ax*ay)
+          snr=10*math.log10(ax/max(diff,1))
+          peak=max(max(abs(a) for a in x),max(abs(a) for a in y))
+          print(f'Pico native float-literal experiment: correlation={corr:.6f}, SNR={snr:.2f} dB, peak={peak}, samples={len(x)}')
+          assert corr>0.97 and snr>12 and peak>0
+          PY
       - name: Compile hybrid MCU speech task against local FreeRTOS/SPI stub contract
         run: |
           gcc -std=c99 -O2 -Wall -Wextra -Werror -fsyntax-only \
