@@ -18,7 +18,8 @@ module ssi263_p8_chip #(
     // shared HDMI mixer. 6x avoids the clipping seen with 9x while
     // approaching the native recording's ~-3 dBFS peak.
     // This does NOT imply waveform fidelity to the reference C engine.
-    parameter integer OUTPUT_GAIN_NUM = 6
+    parameter integer OUTPUT_GAIN_NUM = 6,
+    parameter bit OUTPUT_FULL_FIR_ENABLE = 1'b1
 )(
     input wire clk_i,
     input wire reset_n_i,
@@ -30,7 +31,8 @@ module ssi263_p8_chip #(
     output wire powered_o,
     output wire [5:0] phoneme_o,
     output wire [7:0] r3_debug_o,
-    output logic signed [15:0] pcm_o
+    output wire signed [15:0] pcm_o,
+    output wire sample_valid_o
 );
     logic [7:0] r0,r1,r2,r3,r4;
     logic [1:0] mode_r;
@@ -58,6 +60,23 @@ module ssi263_p8_chip #(
     localparam integer OUTCW=$clog2(OUTPUT_DIV);
     logic [OUTCW-1:0] out_count_r;
     logic signed [15:0] held_pcm_r;
+    logic signed [15:0] legacy_pcm_r;
+    wire signed [15:0] p9_pcm_w;
+    wire p9_valid_w;
+    generate if (OUTPUT_FULL_FIR_ENABLE) begin : gen_p9_output_fir
+        ssi263_p9_output_fir #(
+            .LOGIC_HZ(LOGIC_HZ),.OUTPUT_HZ(OUTPUT_HZ)
+        ) reconstruction (
+            .clk_i(clk_i),.reset_n_i(reset_n_i),
+            .powered_i(powered_o),.hold_pcm_i(held_pcm_r),
+            .pcm_o(p9_pcm_w),.sample_valid_o(p9_valid_w)
+        );
+        assign pcm_o=p9_pcm_w;
+        assign sample_valid_o=p9_valid_w;
+    end else begin : gen_p8_output_fallback
+        assign pcm_o=legacy_pcm_r;
+        assign sample_valid_o=(out_count_r==OUTPUT_DIV-1);
+    end endgenerate
     // Hardware-rate equivalent of Pico's area-sampling of the switched-
     // capacitor output into the host PCM stream. The held value is
     // integrated over each actual logic tick before the 44.1 kHz FIR.
@@ -354,7 +373,7 @@ module ssi263_p8_chip #(
           pitch_xck_r<=0; pitch_div_r<=0; pulse_pending_r<=0;
           glottal_age_r<=6'd63; lfsr_r<=15'd1;
           noise_prev_r<=0;
-          out_count_r<=0; held_pcm_r<=0; pcm_o<=0;
+          out_count_r<=0; held_pcm_r<=0; legacy_pcm_r<=0;
           area_acc_r<=0;
           fir0_r<=0;fir1_r<=0;fir2_r<=0;fir3_r<=0;
           hp_x_r<=0; hp_y_r<=0;
@@ -566,13 +585,13 @@ module ssi263_p8_chip #(
              fir2_r<=fir1_r;
              fir1_r<=fir0_r;
              fir0_r<=area_pcm_w;
-             pcm_o<=powered_o ? clip16(fir_sum_w >>> 4) : 16'sd0;
+             legacy_pcm_r<=powered_o ? clip16(fir_sum_w >>> 4) : 16'sd0;
           end else begin
              out_count_r<=out_count_r+1'b1;
              area_acc_r<=area_sum_w;
           end
           if(!powered_o) begin
-             pcm_o<=0;held_pcm_r<=0;
+             legacy_pcm_r<=0;held_pcm_r<=0;
              area_acc_r<=0;
              fir0_r<=0;fir1_r<=0;fir2_r<=0;fir3_r<=0;
              hp_x_r<=0;hp_y_r<=0;
