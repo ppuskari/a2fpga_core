@@ -84,7 +84,15 @@ module ssi263_p8_chip #(
     logic [19:0] elapsed_xck_r;
     logic [19:0] close_delay_xck_r, release_window_xck_r;
     logic [15:0] noise_f2_gain_r, noise_f5_gain_r;
-    logic signed [31:0] noise_hp_x_r,noise_hp_y_r;
+    // Pinned Pico default: 2-pole band-pass at .28*fc, BW .15*fc;
+    // Q14: a1=-3833, a2=6384, peak-normalized g=5005.
+    logic signed [31:0] ns_x1_r,ns_x2_r,ns_y1_r,ns_y2_r;
+    wire signed [15:0] noise_bit_w = lfsr_r[14] ? 16'sd32767 : -16'sd32767;
+    wire signed [63:0] ns_sum_w =
+       (64'sd5005 * ($signed(noise_bit_w)-$signed(ns_x2_r)) -
+        64'sd3833 * $signed(ns_y1_r) -
+        64'sd6384 * $signed(ns_y2_r)) >>> 14;
+    wire signed [31:0] ns_next_w = clip32(ns_sum_w);
 
     logic [31:0] die_rom[0:63];
     logic [55:0] coefficient_rom[0:49];
@@ -260,10 +268,18 @@ module ssi263_p8_chip #(
     wire signed [15:0] a1_w=coeff_w[55:40];
     wire signed [15:0] a2_w=coeff_w[39:24];
     wire signed [24:0] gain_w={1'b0,coeff_w[23:0]};
+    // In the reference the b02 route chooses *both* F2 and F5
+    // injection levels: b02=0 -> (F2=0,F5=1), b02=1 ->
+    // (F2=1,F5=.25). The P8 either/or selector was wrong.
+    wire signed [31:0] injected_f2_w=clip32(
+        $signed(tract_r)+ (($signed(noise_source_w) *
+        $signed({1'b0,noise_f2_gain_r})) >>> 12));
+    wire signed [31:0] injected_f5_w=clip32(
+        $signed(tract_r)+ (($signed(noise_source_w) *
+        $signed({1'b0,noise_f5_gain_r})) >>> 12));
     wire signed [31:0] drive_w =
-        (stage_r==3'd2 && route_f2_w) ? tract_r+noise_source_w :
-        (stage_r==3'd5 && !route_f2_w) ? tract_r+noise_source_w :
-        tract_r;
+        (stage_r==3'd2) ? injected_f2_w :
+        (stage_r==3'd5) ? injected_f5_w : tract_r;
     wire signed [63:0] bilinear_input_w=
         $signed(drive_w)+($signed(tract_x1_r[stage_r-1])<<<1)+
         $signed(tract_x2_r[stage_r-1]);
@@ -285,10 +301,20 @@ module ssi263_p8_chip #(
         $signed({1'b0,amplitude_w})) / 32'sd225) : 32'sd0;
     // First-order noise excitation remains distinct from the
     // missing calibrated band-pass. 0.012 * 32768 ~ 393 Q15.
+    // Source equivalent in the C model: nz=noise*0.012/15,
+    // subsequently scaled by the per-path FA transition and VOL.
+    // In Q15 this is 393/15 before the F2/F5 injection gains.
+    wire signed [63:0] noise_product_w =
+        $signed(ns_next_w) * 64'sd393 *
+        $signed({1'b0,amplitude_w});
     wire signed [31:0] noise_source_w=EXCITATION_NOISE_ENABLE ?
-        (($signed(shaped_noise_w)*32'sd3*
-         $signed({1'b0,field_r[5][15:12]})*
-         $signed({1'b0,amplitude_w})) / 32'sd225) : 32'sd0;
+        clip32(noise_product_w / 64'sd491520) : 32'sd0;
+    wire [15:0] noise_f2_target_w =
+        (!closing_r || release_open_r) && route_f2_w ?
+        field_r[5] : 16'd0;
+    wire [15:0] noise_f5_target_w =
+        (!closing_r || release_open_r) ?
+        (route_f2_w ? (field_r[5]>>2) : field_r[5]) : 16'd0;
     wire signed [31:0] start_drive_w=
         (!powered_o || r0[5:0]==6'd0 || r0[5:0]==6'd63 ||
          (!closure_clear_w && closure_level_r==0)) ? 32'sd0 :
@@ -314,7 +340,7 @@ module ssi263_p8_chip #(
           closing_r<=0;release_allowed_r<=0;release_open_r<=0;
           elapsed_xck_r<=0;close_delay_xck_r<=0;release_window_xck_r<=0;
           noise_f2_gain_r<=0;noise_f5_gain_r<=0;
-          noise_hp_x_r<=0;noise_hp_y_r<=0;
+          ns_x1_r<=0;ns_x2_r<=0;ns_y1_r<=0;ns_y2_r<=0;
           for(i=0;i<6;i=i+1) begin field_r[i]<=0;target_r[i]<=0; end
           for(i=0;i<5;i=i+1) begin
             tract_y1_r[i]<=0;tract_y2_r[i]<=0;
@@ -406,6 +432,12 @@ module ssi263_p8_chip #(
              lfsr_r<={lfsr_r[14:0],
                        lfsr_r[15]^lfsr_r[13]^lfsr_r[12]^lfsr_r[10]};
              noise_prev_r<=noise_now_w;
+             ns_x2_r<=ns_x1_r;ns_x1_r<=noise_bit_w;
+             ns_y2_r<=ns_y1_r;ns_y1_r<=ns_next_w;
+             noise_f2_gain_r<=approach16(noise_f2_gain_r,
+                  noise_f2_target_w,fast_step_w);
+             noise_f5_gain_r<=approach16(noise_f5_gain_r,
+                  noise_f5_target_w,fast_step_w);
              if(pulse_pending_r) begin
                  glottal_age_r<=0;
                  pulse_pending_r<=0;
