@@ -51,6 +51,7 @@
         <File path="hdl/ssi263_p8_glottal.mem" type="file.other" enable="1"/>
         <File path="hdl/ssi263_p9_f2nas.mem" type="file.other" enable="1"/>
         <File path="hdl/ssi263_p9_outfir.mem" type="file.other" enable="1"/>
+        <File path="hdl/ssi263_hybrid_bridge.sv" type="file.verilog" enable="1"/>
         <File path="hdl/ssi263_voice.mem" type="file.other" enable="1"/>
         <File path="../../hdl/mockingboard/mockingboard.sv" type="file.verilog" enable="1"/>
         <File path="../../hdl/sound/apple_speaker.sv" type="file.verilog" enable="1"/>
