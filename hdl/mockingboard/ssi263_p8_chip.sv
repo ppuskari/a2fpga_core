@@ -71,9 +71,9 @@ module ssi263_p8_chip #(
     logic signed [31:0] tract_r;
     logic signed [31:0] tract_y1_r[0:4],tract_y2_r[0:4];
     logic signed [31:0] tract_x1_r[0:4],tract_x2_r[0:4];
-    logic [11:0] field_r[0:5];  // 4-bit code plus 8-bit sub-code
+    logic [15:0] field_r[0:5];  // 4-bit code plus 12 fractional bits
     logic [3:0] target_r[0:5];
-    logic [7:0] amp_r;
+    logic [15:0] amp_r; // Q12, 0..15; physical VOL glides per phoneme
     logic [11:0] pitch_glide_r;
     logic [11:0] pitch_target_r;
     logic [15:0] elapsed_fc_r;
@@ -145,20 +145,82 @@ module ssi263_p8_chip #(
     wire [15:0] desired_pitch_w=(16'd4096-combined_pitch_w)<<3;
     wire [11:0] desired_pitch_target_w=
         (mode_r==2'd3) ? {r1[7:3],6'b0} : {r1,3'b0};
-    wire [11:0] current_advance_w =
-        // Q8 sub-code per filter tick, adjusted for frame length.
-        (({8'd0,r3[6:4]}+12'd5) << 5) /
-        (12'd1+{8'd0,r2[7:4]}); // preliminary transition scaling
-    wire [11:0] slow_step_w =
-        (current_advance_w==0) ? 12'd1 : current_advance_w;
-    wire [11:0] fast_step_w=slow_step_w*6;
+    // Exact reference law per filter tick (Q12):
+    // step = art_codes_per_frame[ART] * (2*(256-FF)) /
+    //        (4096*(16-RATE)); VA/FA use the 6x amp multiplier.
+    // F1 alone uses the 2.25x field-speed factor from the pinned model.
+    // Use a small 16-entry 1/(16-RATE) table, no runtime divider.
+    function automatic [12:0] rate_inv_q12(input [3:0] rate);
+      case (rate)
+        4'd0: rate_inv_q12=13'd256;
+        4'd1: rate_inv_q12=13'd273;
+        4'd2: rate_inv_q12=13'd293;
+        4'd3: rate_inv_q12=13'd315;
+        4'd4: rate_inv_q12=13'd341;
+        4'd5: rate_inv_q12=13'd372;
+        4'd6: rate_inv_q12=13'd410;
+        4'd7: rate_inv_q12=13'd455;
+        4'd8: rate_inv_q12=13'd512;
+        4'd9: rate_inv_q12=13'd585;
+        4'd10:rate_inv_q12=13'd683;
+        4'd11:rate_inv_q12=13'd819;
+        4'd12:rate_inv_q12=13'd1024;
+        4'd13:rate_inv_q12=13'd1365;
+        4'd14:rate_inv_q12=13'd2048;
+        default:rate_inv_q12=13'd4096;
+      endcase
+    endfunction
+    function automatic [14:0] art_rate_q12(input [2:0] a);
+      case (a)
+        3'd0:art_rate_q12=15'd5734;
+        3'd1:art_rate_q12=15'd7373;
+        3'd2:art_rate_q12=15'd9421;
+        3'd3:art_rate_q12=15'd11878;
+        3'd4:art_rate_q12=15'd13926;
+        3'd5:art_rate_q12=15'd16384;
+        3'd6:art_rate_q12=15'd18842;
+        default:art_rate_q12=15'd20890;
+      endcase
+    endfunction
+    wire [63:0] step_product_w =
+       $unsigned(art_rate_q12(r3[6:4])) *
+       $unsigned(filter_period_w) *
+       $unsigned(rate_inv_q12(r2[7:4]));
+    wire [15:0] slow_step_w = (step_product_w + 64'd8388608) >> 24;
+    wire [15:0] f1_step_w = (slow_step_w * 16'd9) >> 2;
+    wire [15:0] fast_step_w = slow_step_w * 16'd6;
+    wire [2:0] duration_frames_w = (mode_r==2'd1) ? 3'd1 :
+                                  (3'd4 - {1'b0,r0[7:6]});
+    wire [63:0] amp_step_product_w =
+       64'd61440 * $unsigned(filter_period_w) *
+       $unsigned(rate_inv_q12(r2[7:4]));
+    wire [15:0] amp_step_base_w =
+       (amp_step_product_w + 64'd8388608) >> 24;
+    wire [15:0] amp_step_w =
+       (duration_frames_w == 3'd1) ? amp_step_base_w :
+       (duration_frames_w == 3'd2) ? (amp_step_base_w >> 1) :
+       (duration_frames_w == 3'd3) ?
+          ((amp_step_base_w * 16'd21845) >> 16) :
+       (amp_step_base_w >> 2);
+    function automatic [15:0] approach16(
+       input [15:0] value,input [15:0] dest,input [15:0] step
+    );
+      begin
+        if(value<dest)
+            approach16=(dest-value<=step)?dest:value+step;
+        else if(value>dest)
+            approach16=(value-dest<=step)?dest:value-step;
+        else
+            approach16=value;
+      end
+    endfunction
 
     // One shared section-processing slot, five passes per filter sample.
     // Avoid a five-biquad combinational DSP cascade on the 54 MHz path.
     wire [5:0] coeff_index_w =
-        (stage_r==3'd1) ? {2'b00,field_r[0][11:8]} :
-        (stage_r==3'd2) ? {2'b01,field_r[1][11:8]} :
-        (stage_r==3'd3) ? {2'b10,field_r[2][11:8]} :
+        (stage_r==3'd1) ? {2'b00,field_r[0][15:12]} :
+        (stage_r==3'd2) ? {2'b01,field_r[1][15:12]} :
+        (stage_r==3'd3) ? {2'b10,field_r[2][15:12]} :
         (stage_r==3'd4) ? 6'd48 : 6'd49;
     wire [55:0] coeff_w=coefficient_rom[coeff_index_w];
     wire signed [15:0] a1_w=coeff_w[55:40];
@@ -180,18 +242,18 @@ module ssi263_p8_chip #(
         $signed({8'b0,lfsr_r[7:0]})-16'sd128;
     wire signed [15:0] shaped_noise_w=noise_now_w-noise_prev_r;
     wire signed [15:0] glottal_w=glottal_rom[glottal_age_r];
-    wire [15:0] amplitude_w={8'd0,amp_r};
+    wire [15:0] amplitude_w={12'd0,amp_r[15:12]};
     // Both VA and R3 amplitude are encoded 0..15. Normalize by
     // 15*15=225, not 4096: the old >>>12 discarded ~25 dB and
     // forced a near-silent glottal excitation into the resonators.
     wire signed [31:0] voice_source_w=EXCITATION_VOICE_ENABLE ?
-        (($signed(glottal_w)*$signed({1'b0,field_r[4][11:8]})*
+        (($signed(glottal_w)*$signed({1'b0,field_r[4][15:12]})*
         $signed({1'b0,amplitude_w})) / 32'sd225) : 32'sd0;
     // First-order noise excitation remains distinct from the
     // missing calibrated band-pass. 0.012 * 32768 ~ 393 Q15.
     wire signed [31:0] noise_source_w=EXCITATION_NOISE_ENABLE ?
         (($signed(shaped_noise_w)*32'sd3*
-         $signed({1'b0,field_r[5][11:8]})*
+         $signed({1'b0,field_r[5][15:12]})*
          $signed({1'b0,amplitude_w})) / 32'sd225) : 32'sd0;
     wire signed [31:0] start_drive_w=
         (!powered_o || r0[5:0]==6'd0 || r0[5:0]==6'd63 ||
@@ -272,13 +334,13 @@ module ssi263_p8_chip #(
              target_r[2]<=f3_target_w;target_r[3]<=nas_target_w;
              target_r[4]<=va_target_w;target_r[5]<=fa_target_w;
              for(i=0;i<6;i=i+1) begin
-                 field_r[i]<=approach(field_r[i],
-                   {target_r[i],8'd0}, (i>=4)?fast_step_w:slow_step_w);
+                 field_r[i]<=approach16(field_r[i],
+                   {target_r[i],12'd0},
+                   (i==0)?f1_step_w:((i>=4)?fast_step_w:slow_step_w));
              end
              pitch_target_r<=desired_pitch_target_w;
              pitch_glide_r<=approach(pitch_glide_r,pitch_target_r,12'd4);
-             if(amp_r<{4'd0,r3[3:0]}) amp_r<=amp_r+1'b1;
-             else if(amp_r>{4'd0,r3[3:0]}) amp_r<=amp_r-1'b1;
+             amp_r<=approach16(amp_r,{r3[3:0],12'd0},amp_step_w);
              lfsr_r<={lfsr_r[14:0],
                        lfsr_r[15]^lfsr_r[13]^lfsr_r[12]^lfsr_r[10]};
              noise_prev_r<=noise_now_w;
