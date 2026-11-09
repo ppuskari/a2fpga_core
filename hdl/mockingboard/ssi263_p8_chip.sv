@@ -200,7 +200,7 @@ module ssi263_p8_chip #(
        (duration_frames_w == 3'd1) ? amp_step_base_w :
        (duration_frames_w == 3'd2) ? (amp_step_base_w >> 1) :
        (duration_frames_w == 3'd3) ?
-          ((amp_step_base_w * 16'd21845) >> 16) :
+          (($unsigned({16'd0,amp_step_base_w}) * 32'd21845) >> 16) :
        (amp_step_base_w >> 2);
     function automatic [15:0] approach16(
        input [15:0] value,input [15:0] dest,input [15:0] step
