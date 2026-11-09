@@ -22,7 +22,8 @@ module Mockingboard #(
     parameter bit ENABLE = 1'b1,
     parameter bit ENABLE_SSI263 = 1'b0,
     parameter integer SSI263_VOICE_PROFILE = 1,
-    parameter bit SSI263_FULL_CHIP_ENABLE = 1'b0
+    parameter bit SSI263_FULL_CHIP_ENABLE = 1'b0,
+    parameter bit SSI263_HYBRID_ENABLE = 1'b0
 ) (
     a2bus_if.slave a2bus_if,
     slot_if.card slot_if,
@@ -34,6 +35,12 @@ module Mockingboard #(
     output [9:0] audio_l_o,
     output [9:0] audio_r_o,
     output wire signed [15:0] speech_pcm_o,
+    input wire signed [15:0] hybrid_pcm_i,
+    output wire hybrid_event_valid_o,
+    output wire [2:0] hybrid_event_reg_o,
+    output wire [7:0] hybrid_event_data_o,
+    output wire hybrid_xck_tick_o,
+    output wire hybrid_powered_o,
 
     // Decoded AY writes for the exclusive MB-to-DOC bridge.
     // One pulse per completed AY data-write phase; left/right
@@ -75,7 +82,8 @@ module Mockingboard #(
     wire ssi_selected_w, ssi_read_w, ssi_ca1_w;
     wire [7:0] ssi_data_w;
     ssi263_slot #(.VOICE_PROFILE(SSI263_VOICE_PROFILE),
-                  .FULL_CHIP_ENABLE(SSI263_FULL_CHIP_ENABLE)) speech_socket (
+                  .FULL_CHIP_ENABLE(SSI263_FULL_CHIP_ENABLE),
+                  .HYBRID_ENABLE(SSI263_HYBRID_ENABLE)) speech_socket (
         .clk_i(a2bus_if.clk_logic),
         .reset_n_i(a2bus_if.system_reset_n),
         .enabled_i(card_enable && ENABLE_SSI263),
@@ -91,7 +99,13 @@ module Mockingboard #(
         .via_ca1_o(ssi_ca1_w),
         .powered_o(),
         .phoneme_o(),
-        .speech_pcm_o(speech_pcm_o)
+        .speech_pcm_o(speech_pcm_o),
+        .hybrid_pcm_i(hybrid_pcm_i),
+        .hybrid_event_valid_o(hybrid_event_valid_o),
+        .hybrid_event_reg_o(hybrid_event_reg_o),
+        .hybrid_event_data_o(hybrid_event_data_o),
+        .hybrid_xck_tick_o(hybrid_xck_tick_o),
+        .hybrid_powered_o(hybrid_powered_o)
     );
 
     wire [7:0] pb_l_o;
