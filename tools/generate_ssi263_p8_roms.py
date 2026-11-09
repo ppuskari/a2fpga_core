@@ -58,6 +58,23 @@ def coefficient_rows() -> list[str]:
         rows.append(f"{qa1&65535:04X}{qa2:04X}{qg:06X}")
     return rows
 
+def glottal_rows() -> list[str]:
+    """The MIT Pico C default has a 36-tick glottal wave, then 28 zeros."""
+    text=REF.read_text(encoding="utf-8")
+    match=re.search(
+        r"ssi263_default_params_d\\[SSI263_DEFAULT_PARAMS_N\\]\\s*=\\s*\\{(.*?)\\};",
+        text, re.S)
+    if not match:
+        raise RuntimeError("upstream chip parameter array missing")
+    numbers=[float(v) for v in re.findall(r"(?<![A-Za-z])[-+]?(?:\\d*\\.\\d+|\\d+\\.?\\d*)(?:[eE][-+]?\\d+)?",match.group(1))]
+    # 100 numbers before glottal_wave (99: glottal_n=36).
+    assert len(numbers)==166 and round(numbers[99])==36
+    wave=numbers[100:136]
+    assert len(wave)==36
+    area=math.fsum(wave)
+    assert abs(area-1.0)<1.e-9
+    return [f"{round(x/area*32768)&65535:04X}" for x in (wave+[0.0]*28)]
+
 def write_or_check(path: Path, rows: list[str], check: bool):
     contents="\n".join(rows)+"\n"
     if check:
@@ -75,3 +92,4 @@ if __name__=="__main__":
     opts=parser.parse_args()
     write_or_check(OUT/"ssi263_p8_params.mem",parameter_rows(),opts.check)
     write_or_check(OUT/"ssi263_p8_coefs.mem",coefficient_rows(),opts.check)
+    write_or_check(OUT/"ssi263_p8_glottal.mem",glottal_rows(),opts.check)
