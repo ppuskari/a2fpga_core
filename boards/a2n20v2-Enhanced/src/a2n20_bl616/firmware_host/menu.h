@@ -7,15 +7,17 @@
  *               CONSOLE  the boot/status log (osd_console)
  *               MENU     this menu system
  *
- * Controls (XInput gamepad or USB HID boot keyboard):
+ * Controls (XInput pad):
  *   SELECT (Back)  toggle APPLE <-> MCU (returns to the last MCU view)
  *   Y              in MCU: switch MENU <-> CONSOLE view
  *   D-PAD UP/DOWN  move the selection (hold to repeat)
  *   D-PAD L/R      change the highlighted choice/toggle value
  *   A              activate: enter submenu / run action / cycle choice
  *   B              back: leave submenu; at the root menu, back to APPLE
- *   HID TAB        bring up menu; ESC back; arrows move; Enter activates;
- *                  Y switches menu/console. USB HID never drives Apple keys.
+ *
+ * A USB HID keyboard or media remote works too (usbh_hidinput.c maps keys
+ * into the same button word): arrows/Enter/Esc navigate, Tab / the Menu key /
+ * AC Home toggle APPLE <-> MCU, Y switches view, Vol+/- = big +/- steps.
  *
  * The menu runs entirely in the xinput poll thread: main.c feeds the current
  * button state into menu_input() every poll tick (~20 ms), and the menu does
