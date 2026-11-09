@@ -1,0 +1,34 @@
+name: P8 SSI263 pinned silicon model reference checks
+on:
+  push:
+    branches:
+      - petar/ssi263-fullchip-p8-reference-20261109
+    paths:
+      - "reference/ssi263/**"
+      - ".github/workflows/ssi263-fullchip-p8.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-reference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile the exact Mockingboard Pico pinned MIT SSI263 model
+        run: |
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -Ireference/ssi263/pico-v1.0.1 reference/ssi263/p8_reference_gate.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/p8_ssi263_reference
+      - name: Exercise real model register, ROM and native PCM synthesis
+        run: |
+          /tmp/p8_ssi263_reference /tmp/p8_reference.pcm
+          test "$(stat -c%s /tmp/p8_reference.pcm)" -eq 307200
+          sha256sum /tmp/p8_reference.pcm
+      - name: Validate recovered die ROM provenance
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          t=Path('reference/ssi263/pico-v1.0.1/rom_bits.csv').read_text().splitlines()
+          assert len([s for s in t if s.startswith('0x')])==64
+          assert Path('reference/ssi263/pico-v1.0.1/LICENSE').exists()
+          assert Path('reference/ssi263/pico-v1.0.1/NOTICE.md').exists()
+          print('PASS: 64 physical die parameter rows and attribution present')
+          PY
