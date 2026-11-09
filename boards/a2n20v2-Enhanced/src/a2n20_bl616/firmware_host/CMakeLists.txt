@@ -55,7 +55,7 @@ target_sources(app PRIVATE
     ../firmware/ffunicode.c
     ../firmware/fpga_sd.c
 )
-target_link_libraries(app PRIVATE m)
+target_link_libraries(app m)
 sdk_set_main_file(main.c)
 
 project(a2n20_bl616_host)
