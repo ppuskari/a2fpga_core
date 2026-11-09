@@ -46,6 +46,7 @@ module ssi263_hybrid_bridge #(
     wire [PCM_AW:0] pcm_free_w=PCM_DEPTH-pcm_count_w;
     logic [7:0] pcm_lo_r;
     logic pcm_lo_valid_r,playing_r;
+    logic speech_power_prev_r;
     logic [15:0] underrun_r,overrun_r;
 
     logic [EVT_AW:0] evt_wrptr_r,evt_rdptr_r;
@@ -119,6 +120,7 @@ module ssi263_hybrid_bridge #(
         if (!reset_n_i) begin
             pcm_wrptr_r<=0;pcm_rdptr_r<=0;
             pcm_lo_r<=0;pcm_lo_valid_r<=0;
+            speech_power_prev_r<=0;
             speech_pcm_o<=0;playing_r<=0;
             underrun_r<=0;overrun_r<=0;
             evt_wrptr_r<=0;evt_rdptr_r<=0;
@@ -129,6 +131,7 @@ module ssi263_hybrid_bridge #(
             spi_rd_valid_o<=0;spi_rd_data_o<=8'hff;
         end else begin
             sample_sync_r<={sample_sync_r[1:0],audio_tick_pixel_i};
+            speech_power_prev_r<=speech_powered_i;
             spi_rd_valid_o<=0;
 
             if(xck_tick_i)xck_count_r<=xck_count_r+1'b1;
@@ -162,7 +165,9 @@ module ssi263_hybrid_bridge #(
                     status_byte(spi_rd_addr_i[4:0]) : 8'hff;
             end
 
-            if(pcm_reset_w)begin
+            // Never replay buffered old-phoneme PCM across CTL powerdown.
+            // Reset the FIFO even if the BL616 is delayed or absent.
+            if(pcm_reset_w || (speech_power_prev_r && !speech_powered_i))begin
                 pcm_wrptr_r<=0;pcm_rdptr_r<=0;
                 pcm_lo_valid_r<=0;playing_r<=0;
                 speech_pcm_o<=0;
