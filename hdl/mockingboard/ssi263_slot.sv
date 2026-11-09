@@ -102,6 +102,22 @@ module ssi263_slot #(
         .debug_r3_o(debug_r3_w)
     );
 
+    // Compile-time renderer profiles:
+    // 0 raw P4 waveform, 1 enhanced P5 waveform, 2 die-ROM formant R1.
+    // All profiles share the same validated Apple II bus/timer/CA1 state.
+    generate if (VOICE_PROFILE == 2) begin : gen_die_voice
+      ssi263_die_formant_voice voice (
+        .clk_i(clk_i),
+        .reset_n_i(reset_n_i && enabled_i),
+        .powered_i(powered_o),
+        .phoneme_start_i(phoneme_start_w),
+        .phoneme_i(phoneme_o),
+        .amplitude_i(amplitude_w),
+        .inflection_i(inflection_w),
+        .rate_i(rate_w),
+        .pcm_o(speech_pcm_o)
+      );
+    end else begin : gen_pcm_voice
     ssi263_voice #(.VOICE_PROFILE(VOICE_PROFILE)) voice (
         .clk_i(clk_i),
         .reset_n_i(reset_n_i && enabled_i),
@@ -113,6 +129,8 @@ module ssi263_slot #(
         .rate_i(rate_w),
         .pcm_o(speech_pcm_o)
     );
+
+    end endgenerate
 
     assign speech_selected_o = speech_sel_w;
     assign speech_read_o = speech_sel_w && rw_n_i;
