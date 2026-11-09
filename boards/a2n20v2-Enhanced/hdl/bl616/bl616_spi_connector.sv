@@ -84,8 +84,28 @@ module bl616_spi_connector #(
     // DEBUG: port-B (SPACE 3) write instrumentation from the card (regs 0x7B-0x7E)
     input  wire [15:0] w5100_dbg_wr_count,
     input  wire [15:0] w5100_dbg_last_addr,
-    input  wire [7:0]  w5100_dbg_last_wdata
+    input  wire [7:0]  w5100_dbg_last_wdata,
+
+    // P10 SSI event/PCM transport via XFER spaces 4/5.
+    output wire ssi_spi_wr_o,
+    output wire [2:0] ssi_spi_wr_space_o,
+    output wire [23:0] ssi_spi_wr_addr_o,
+    output wire [7:0] ssi_spi_wr_data_o,
+    output wire ssi_spi_rd_o,
+    output wire [2:0] ssi_spi_rd_space_o,
+    output wire [23:0] ssi_spi_rd_addr_o,
+    input wire ssi_spi_rd_valid_i,
+    input wire [7:0] ssi_spi_rd_data_i
 );
+
+    assign ssi_spi_wr_o=mem_wr_en && (mem_space==3'd4);
+    assign ssi_spi_wr_space_o=mem_space;
+    assign ssi_spi_wr_addr_o=mem_wr_addr;
+    assign ssi_spi_wr_data_o=mem_wr_data;
+    assign ssi_spi_rd_o=mem_rd_req &&
+        (mem_rd_space==3'd4 || mem_rd_space==3'd5);
+    assign ssi_spi_rd_space_o=mem_rd_space;
+    assign ssi_spi_rd_addr_o=mem_rd_addr;
 
     // -------------------------------------------------------
     // Proto processor wires
@@ -674,6 +694,9 @@ module bl616_spi_connector #(
         end else if (w5100_rd_valid_q) begin
             mem_rd_valid = 1'b1;
             mem_rd_data  = w5100_rd_data_q;
+        end else if (ssi_spi_rd_valid_i) begin
+            mem_rd_valid = 1'b1;
+            mem_rd_data  = ssi_spi_rd_data_i;
         end
     end
 
