@@ -7,7 +7,13 @@ module tb_ssi263_p8b_trace #(
 );
     logic clk=0;
     always #5 clk=~clk;
-    logic rst_n=0, xck=1,wr=0;
+    logic rst_n=0, xck=0,wr=0;
+    logic [3:0] xck_div=0;
+    always @(posedge clk) begin
+      if(!rst_n)begin xck<=0;xck_div<=0;end
+      else if(xck_div==11)begin xck<=1;xck_div<=0;end
+      else begin xck<=0;xck_div<=xck_div+1'b1;end
+    end
     logic [2:0] regno=0;
     logic [7:0] din=0;
     wire ar_n,powered;
@@ -19,7 +25,7 @@ module tb_ssi263_p8b_trace #(
     integer oldsample=0;
     integer current,absval,jump;
     ssi263_p8_chip #(
-       .LOGIC_HZ(1_000_000),
+       .LOGIC_HZ(12_000_000),
        .OUTPUT_HZ(50_000),
        .EXCITATION_VOICE_ENABLE(VOICE_ENABLE),
        .EXCITATION_NOISE_ENABLE(NOISE_ENABLE)
@@ -41,7 +47,7 @@ module tb_ssi263_p8b_trace #(
             while(got<n) begin
                 @(posedge clk);
                 #1;
-                if(dut.out_count_r==0) begin
+                if(dut.sample_valid_o) begin
                     if(^pcm===1'bx) $fatal(1,"Unknown PCM at sample %0d",samples);
                     $fwrite(fd,"%c%c",pcm[7:0],pcm[15:8]);
                     current=$signed(pcm);
@@ -88,5 +94,5 @@ module tb_ssi263_p8b_trace #(
                  VOICE_ENABLE,NOISE_ENABLE,samples,nonzero,peak,maxjump);
         $finish;
     end
-    initial begin #3000000; $fatal(1,"P8B trace timeout"); end
+    initial begin #80000000; $fatal(1,"P9 FIR trace timeout"); end
 endmodule
