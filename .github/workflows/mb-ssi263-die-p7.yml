@@ -1,0 +1,58 @@
+name: P7 SSI-263 die-formant FPGA voice checks
+on:
+  push:
+    branches:
+      - petar/mb-doc-p7-ssi263-die-formant-r1-20261108
+    paths:
+      - "hdl/mockingboard/**"
+      - "tools/generate_ssi263_die_formants.py"
+      - "tests/mb_ssi263/**"
+      - "boards/a2n20v2-Enhanced/hdl/top.sv"
+      - "boards/a2n20v2-Enhanced/hdl/ssi263_die_formants.mem"
+      - "boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj"
+      - ".github/workflows/mb-ssi263-die-p7.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  p7-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SystemVerilog tools
+        run: sudo apt-get update && sudo apt-get install -y iverilog verilator
+      - name: Rebuild die coefficients and compare to committed ROM
+        run: |
+          cp boards/a2n20v2-Enhanced/hdl/ssi263_die_formants.mem /tmp/p7-die-original.mem
+          python3 tools/generate_ssi263_die_formants.py
+          cmp /tmp/p7-die-original.mem boards/a2n20v2-Enhanced/hdl/ssi263_die_formants.mem
+          test "$(wc -l < boards/a2n20v2-Enhanced/hdl/ssi263_die_formants.mem)" -eq 64
+      - name: Build and simulate P7 die voice
+        run: |
+          iverilog -g2012 -s tb_ssi263_die_voice -o /tmp/p7_voice.vvp             hdl/mockingboard/ssi263_die_formant_voice.sv tests/mb_ssi263/tb_ssi263_die_voice.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/p7_voice.vvp)
+      - name: P6 SSI bus and phoneme demo regressions
+        run: |
+          python3 tools/generate_ssi263_voice.py
+          iverilog -g2012 -s tb_ssi263_slot -o /tmp/p7_slot.vvp             hdl/mockingboard/ssi263_control.sv             hdl/mockingboard/ssi263_voice.sv             hdl/mockingboard/ssi263_die_formant_voice.sv             hdl/mockingboard/ssi263_slot.sv             tests/mb_ssi263/tb_ssi263_slot.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/p7_slot.vvp)
+          iverilog -g2012 -s tb_ssi263_demo -o /tmp/p7_demo.vvp             hdl/mockingboard/ssi263_control.sv             hdl/mockingboard/ssi263_voice.sv             hdl/mockingboard/ssi263_die_formant_voice.sv             hdl/mockingboard/ssi263_slot.sv             tests/mb_ssi263/tb_ssi263_demo.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/p7_demo.vvp)
+      - name: Verilator syntax and integration sanity
+        run: |
+          (cd boards/a2n20v2-Enhanced && verilator --lint-only --timing -Wno-fatal --top-module ssi263_die_formant_voice ../../hdl/mockingboard/ssi263_die_formant_voice.sv)
+          python3 - <<'PY'
+          from pathlib import Path
+          top=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text()
+          gprj=Path('boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj').read_text()
+          slot=Path('hdl/mockingboard/ssi263_slot.sv').read_text()
+          mb=Path('hdl/mockingboard/mockingboard.sv').read_text()
+          assert 'MOCKINGBOARD_SSI263_VOICE_PROFILE = 2' in top
+          assert 'mb_doc_gain_minus_2db' in top and 'mb_speech_gain_w' in top
+          assert 'ssi263_die_formant_voice.sv' in gprj
+          assert 'ssi263_die_formants.mem' in gprj
+          assert 'VOICE_PROFILE == 2' in slot
+          assert 'data_in_strobe_i(a2bus_if.data_in_strobe)' in mb
+          assert ".ca1_i(ssi_ca1_w)" in mb.split('// Right Channel',1)[1]
+          print('PASS: P6 music, speech bus and new P7 renderer connected')
+          PY
