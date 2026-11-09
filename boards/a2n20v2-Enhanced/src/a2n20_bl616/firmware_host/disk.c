@@ -428,6 +428,16 @@ static volatile bool g_remounting  = false;   /* disk_remount() running */
  * 0 = nothing scheduled. */
 static uint32_t g_hide_console_at_us = 0;
 
+/* Show failures long enough to diagnose, but never trap the Apple II behind
+ * the USB disk console indefinitely. Successful mounts keep the fast 1.5 s
+ * handoff; missing/invalid media gets 15 s. Timer arithmetic handles wrap. */
+static void schedule_console_hide(uint32_t delay_us)
+{
+    g_hide_console_at_us = (uint32_t)bflb_mtimer_get_time_us() + delay_us;
+    if (!g_hide_console_at_us) g_hide_console_at_us = 1; /* zero = disabled */
+}
+
+
 void disk_request_remount(void)
 {
     g_remount_req = true;
@@ -440,7 +450,11 @@ void disk_request_remount(void)
  * can be read. */
 static void disk_remount(void)
 {
+    /* Reset the previous remount's deadline and guarantee every early-return
+     * path eventually reveals the Apple II display. */
+    g_hide_console_at_us = 0;
     osd_console_show();
+    schedule_console_hide(15000000u);
     osd_log("DISK II: SEARCHING FOR STORAGE...");
 
     /* Tear down the previous mount. */
@@ -516,10 +530,10 @@ static void disk_remount(void)
         /* Hand the screen back after a readable delay, WITHOUT blocking: a
          * msleep here would freeze the 2 ms disk task and hang a boot that
          * seeks during the delay (observed as a ~1.54 s poll gap). */
-        g_hide_console_at_us = (uint32_t)bflb_mtimer_get_time_us() + 1500000u;
+        schedule_console_hide(1500000u);
     } else {
         osd_log("DISK II: NO DISK IMAGES ON VOLUME");
-        /* leave the console up so the message is visible */
+        /* The 15-second failure deadline remains armed. */
     }
 }
 
@@ -831,7 +845,7 @@ void disk_poll(void)
         g_remounting  = false;
     }
 
-    /* Non-blocking console hide (scheduled by disk_remount on a good mount). */
+    /* Non-blocking console hide: 1.5 s on a good mount, 15 s on failure. */
     if (g_hide_console_at_us &&
         (int32_t)((uint32_t)bflb_mtimer_get_time_us() - g_hide_console_at_us) >= 0) {
         g_hide_console_at_us = 0;
