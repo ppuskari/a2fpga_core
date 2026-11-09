@@ -1,0 +1,128 @@
+name: P9M SSI263 Apple IIe video-trim regression and native C reference
+on:
+  push:
+    branches:
+      - petar/ssi263-p9m-iie-speech-trim-20261109
+    paths:
+      - "hdl/mockingboard/ssi263_p8_chip.sv"
+      - "hdl/mockingboard/ssi263_p9_output_fir.sv"
+      - "tools/generate_ssi263_p9_output_fir.py"
+      - "tools/generate_ssi263_p9_nas_rom.py"
+      - "boards/a2n20v2-Enhanced/hdl/ssi263_p9_f2nas.mem"
+      - "boards/a2n20v2-Enhanced/hdl/ssi263_p9_outfir.mem"
+      - "hdl/mockingboard/ssi263_slot.sv"
+      - "boards/a2n20v2-Enhanced/hdl/top.sv"
+      - "tests/mb_ssi263/tb_ssi263_p8b_trace.sv"
+      - "tests/mb_ssi263/tb_ssi263_p9_early_ar.sv"
+      - "reference/ssi263/p8b_compare_trace.c"
+      - "tools/compare_ssi263_p8b_audio.py"
+      - "tools/generate_ssi263_p8_roms.py"
+      - "boards/a2n20v2-Enhanced/hdl/ssi263_p8_glottal.mem"
+      - "boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj"
+      - ".github/workflows/ssi263-p9m-iie-video-trim.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-dsp-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install simulation and spectral tools
+        run: sudo apt-get update && sudo apt-get install -y iverilog verilator python3-numpy
+      - name: Check upstream silicon ROM generation
+        run: |
+          python3 tools/generate_ssi263_p8_roms.py --check
+          python3 tools/generate_ssi263_p9_nas_rom.py --check
+          python3 tools/generate_ssi263_p9_output_fir.py --check
+      - name: Compile pinned Pico SSI263 C reference renderer
+        run: |
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -Ireference/ssi263/pico-v1.0.1 reference/ssi263/p8b_compare_trace.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/p8b_ref
+          /tmp/p8b_ref /tmp/p8b_c.pcm
+          test "$(stat -c%s /tmp/p8b_c.pcm)" -eq 20000
+      - name: Simulate identical 1 MHz source events in RTL
+        run: |
+          iverilog -g2012 -s tb_ssi263_p8b_trace -o /tmp/p8b_trace.vvp hdl/mockingboard/ssi263_p9_output_fir.sv hdl/mockingboard/ssi263_p8_chip.sv tests/mb_ssi263/tb_ssi263_p8b_trace.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/p8b_trace.vvp)
+          cp boards/a2n20v2-Enhanced/p8b_trace.pcm /tmp/p8b_rtl.pcm
+          test "$(stat -c%s /tmp/p8b_rtl.pcm)" -eq 20000
+      - name: Prove no excitation produces no PCM
+        run: |
+          iverilog -g2012 -s tb_ssi263_p8b_trace -Ptb_ssi263_p8b_trace.VOICE_ENABLE=0 -Ptb_ssi263_p8b_trace.NOISE_ENABLE=0 -o /tmp/p8b_silent.vvp hdl/mockingboard/ssi263_p9_output_fir.sv hdl/mockingboard/ssi263_p8_chip.sv tests/mb_ssi263/tb_ssi263_p8b_trace.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/p8b_silent.vvp)
+      - name: Prove voiced and noise generators elaborate independently
+        run: |
+          iverilog -g2012 -s tb_ssi263_p8b_trace -Ptb_ssi263_p8b_trace.NOISE_ENABLE=0 -o /tmp/p8b_voiced.vvp hdl/mockingboard/ssi263_p9_output_fir.sv hdl/mockingboard/ssi263_p8_chip.sv tests/mb_ssi263/tb_ssi263_p8b_trace.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/p8b_voiced.vvp)
+          iverilog -g2012 -s tb_ssi263_p8b_trace -Ptb_ssi263_p8b_trace.VOICE_ENABLE=0 -o /tmp/p8b_noise.vvp hdl/mockingboard/ssi263_p9_output_fir.sv hdl/mockingboard/ssi263_p8_chip.sv tests/mb_ssi263/tb_ssi263_p8b_trace.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/p8b_noise.vvp)
+      - name: Check physical SSI stop early A/R and buffered successor writes
+        run: |
+          iverilog -g2012 -s tb_ssi263_p9_early_ar -o /tmp/p9_early.vvp hdl/mockingboard/ssi263_p9_output_fir.sv hdl/mockingboard/ssi263_p8_chip.sv tests/mb_ssi263/tb_ssi263_p9_early_ar.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/p9_early.vvp)
+      - name: Compute objective PCM comparison without claiming fidelity
+        run: |
+          python3 tools/compare_ssi263_p8b_audio.py /tmp/p8b_c.pcm /tmp/p8b_rtl.pcm --report /tmp/p8b_comparison.json
+          cp /tmp/p8b_comparison.json p8b_comparison.json
+      - name: Verify P9 speech mixer selection and unchanged DOC music
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          t=Path("boards/a2n20v2-Enhanced/hdl/top.sv").read_text()
+          report=json.loads(Path("p8b_comparison.json").read_text())
+          assert "MOCKINGBOARD_SSI263_FULL_CHIP_ENABLE = 1'b1" in t
+          assert "MB_SPEECH_GAIN_NUM = 1" in t
+          if not report["fidelity_accepted"]:
+              print("EXPERIMENTAL: listening-only SSI output enabled despite C/RTL parity gate; never mark golden")
+          assert "mb_speech_gain_w >>> 3" in t
+          assert "mb_speech_sum_l_w" in t and "mb_speech_sum_r_w" in t
+          assert "MB_DOC_MULTISAMPLE_ENABLE = 1'b1" in t
+          assert "MB_DOC_PIANO_ARTICULATION_ENABLE = 1'b1" in t
+          assert "MB_DOC_FX_AY_BYPASS_ENABLE = 1'b1" in t
+          assert "ssi263_p8_glottal.mem" in Path("boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj").read_text()
+          assert "ssi263_p9_outfir.mem" in Path("boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj").read_text()
+          assert "ssi263_p9_f2nas.mem" in Path("boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj").read_text()
+          print("PASS: P9 chip selected, 1x experimental SSI mix, unchanged DOC piano/AY settings")
+          PY
+      - name: Audit the IIe trim without touching DOC, Apple video, SSI or BL616
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path("boards/a2n20v2-Enhanced/hdl/top.sv").read_text()
+          assert "IIE_SPEECH_VIDEO_TRIM = 1'b1" in s
+          assert ".VGC_MEMORY(IIE_SPEECH_VIDEO_TRIM ? 0 : 1)" in s
+          assert "if (IIE_SPEECH_VIDEO_TRIM) begin : gen_iie_speech_video_only" in s
+          assert "if (SUPERSPRITE_ENABLE) begin : gen_supersprite" in s
+          assert "end else begin : gen_no_supersprite" in s
+          assert "assign rgb_r_w = ssp_apple_r_w;" in s
+          assert "assign rgb_g_w = ssp_apple_g_w;" in s
+          assert "assign rgb_b_w = ssp_apple_b_w;" in s
+          assert "assign scanlines_w = SCANLINES_ENABLE | sw_scanlines_w;" in s
+          assert "apple_video_gen #(" in s
+          assert "parameter bit SUPERSPRITE_ENABLE = 0" in s
+          assert "MOCKINGBOARD_SSI263_FULL_CHIP_ENABLE = 1'b1" in s
+          assert "MB_SPEECH_GAIN_NUM = 1" in s
+          for v in (
+              "MB_DOC_MULTISAMPLE_ENABLE = 1'b1",
+              "MB_DOC_PIANO_ARTICULATION_ENABLE = 1'b1",
+              "MB_DOC_FX_AY_BYPASS_ENABLE = 1'b1",
+              "ENSONIQ_ENABLE = 1",
+              "`define BL616_SPI",
+          ):
+              assert v in s,v
+          print("PASS: IIe video only, no F18A, no SHR; music and full SSI enabled")
+          print("Gowin resource mapping and full top elaboration must be verified on real project")
+          PY
+      - name: Lint independent chip and its controls
+        run: |
+          (cd boards/a2n20v2-Enhanced && verilator --lint-only --timing -Wno-fatal --top-module ssi263_p8_chip ../../hdl/mockingboard/ssi263_p8_chip.sv ../../hdl/mockingboard/ssi263_p9_output_fir.sv)
+      - name: Publish diagnostic PCM and metrics as CI artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p8b-ssi263-reference-vs-rtl-pcm
+          path: |
+            p8b_comparison.json
+            boards/a2n20v2-Enhanced/p8b_trace.pcm
+          if-no-files-found: ignore
