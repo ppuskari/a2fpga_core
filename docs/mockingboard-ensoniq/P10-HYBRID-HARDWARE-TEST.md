@@ -6,6 +6,55 @@
 **Gowin fitting and BL616 SDK build are NOT yet hardware-verified.**
 This is a test candidate, **not** the new golden baseline.
 
+## User-verified Windows builds — 2026-11-09
+
+The first native Windows builds have now succeeded, after fixing the
+Bouffalo SDK 2.3.27 CMake plain-signature `target_link_libraries(app m)`.
+
+**Actual Gowin synthesis, full IIgs Super Hi-Res enabled:**
+
+| Resource | Used | Available | Utilization |
+|---|---:|---:|---:|
+| Logic | 10,361 | 20,736 | 50% |
+| Registers | 5,886 | 15,915 | 37% |
+| BSRAM | 40 | 46 | 87% |
+| LUT | 8,463 | — | — |
+| ALU | 1,441 | — | — |
+
+Synthesis, placement, routing, bitstream creation and power analysis all
+completed. `VGC_MEMORY=1` and `vgc_gen` are actually elaborated;
+`ssi263_slot(HYBRID_ENABLE=1)`, `ssi263_control` and
+`ssi263_hybrid_bridge` are actually elaborated. The full P9 DSP
+is *not* elaborated. P10's 10,361 logic is 12,336 below P9M's
+22,697, even after restoring IIgs graphics. Future work should watch
+BSRAM usage carefully; only 6 physical blocks remain.
+
+**Actual Bouffalo SDK v2.3.27 / GCC 10.4 Windows cross-build:**
+`a2n20_bl616_host_bl616.elf` linked and
+`build/build_out/a2n20_bl616_host_bl616.bin` generated successfully;
+SDK firmware postprocessing and OTA generation completed.
+The MCU RAM region consumed 153,936 / 425,000-ish bytes
+(36.22% as reported); `ram_wifi` consumed 40,304 / 64 KiB
+(61.50%). The C speech engine was compiled into the real firmware,
+not only CI host stubs.
+
+**Outstanding verification:** Synthesis timing reports **negative
+slack** around −5.63 ns between `sg/doc5503` and
+`debug_overlay` crossing logic/pixel clocks, and approximately
+−5.08 ns at `bl616_spi/proto` clock crossings. Synthesis
+also reports `clk_pixel_w` constrained at 100 MHz while the
+PLL/pixel design runs at 27 MHz. These synthesis estimates do **not**
+prove a real failure or actual routed timing closure. Inspect
+`impl/pnr/a2n20v2_enhanced.rpt.txt` and the .tr.html timing report
+before hardware validation. Gowin also warns about generic clock
+routes for `clk_d` and `spi_sclk_d`.
+
+There were no compiler/linker errors, but repeated pre-existing SDK
+warnings include FreeRTOS CLINT register redefinitions and lwIP
+errno redefinitions. The two `make flash` override warnings
+are intentional safety behavior. Firmware is compiled and ready,
+but **has not been flashed or acoustically tested**.
+
 ## Why the hybrid is necessary
 
 P9M synthesis: 22,697 mapped logic units; device limit 20,736
