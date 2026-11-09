@@ -77,12 +77,20 @@ The pinned C code is not the physical SSI263 silicon itself, and
 real recordings from https://www.youtube.com/watch?v=Gciw3PYCVok
 are the additional acoustic benchmark.
 
-**Known deviations:** 15-bit ROM decoded parameters are rounded,
+**Known deviations:** the original 29-bit-per-phoneme die ROM is decoded into six 4-bit controls and three flags; fixed-point formant coefficients are quantized,
 fractional glottal pulse placement is approximate, and early A/R
 pending-write semantics/timing need more real-hardware corroboration.
-Filter-band spectra and waveform correlation remain below strict
-C-reference parity; P9 is a listening test, not an assertion of
-faithful recreation.
+Latest validated 4-phoneme (1 MHz XCK, 50 kHz PCM) comparison:
+Pico C RMS -16.03 dBFS, P9 RTL RMS -17.56 dBFS;
+P9 RTL peak -2.87 dBFS and 0% clipping;
+maximum short-trace waveform correlation ~0.598.
+The 50 kHz accelerated test uses the FIR coefficients tuned for the
+44.1 kHz hardware output, so it is a diagnostic rather than a final
+absolute analog-fidelity assessment. Filter-band spectra and waveform
+correlation remain below strict C-reference parity; P9 is a listening
+test, not an assertion of faithful recreation.
+
+All tests in https://github.com/ppuskari/a2fpga_core/actions/runs/42582799841 passed; this includes early A/R and the enabled 1x mixer configuration.
 
 ## PowerShell 5.1 (paste one command at a time)
 
