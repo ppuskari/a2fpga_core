@@ -80,6 +80,11 @@ module ssi263_p8_chip #(
     logic [15:0] elapsed_fc_r;
     logic [15:0] frame_fc_r;
     logic [7:0] closure_level_r;
+    logic closing_r, release_allowed_r, release_open_r;
+    logic [19:0] elapsed_xck_r;
+    logic [19:0] close_delay_xck_r, release_window_xck_r;
+    logic [15:0] noise_f2_gain_r, noise_f5_gain_r;
+    logic signed [31:0] noise_hp_x_r,noise_hp_y_r;
 
     logic [31:0] die_rom[0:63];
     logic [55:0] coefficient_rom[0:49];
@@ -306,6 +311,10 @@ module ssi263_p8_chip #(
           stage_r<=0; tract_r<=0;
           amp_r<=0; pitch_glide_r<=0; pitch_target_r<=0;
           elapsed_fc_r<=0; frame_fc_r<=0; closure_level_r<=8'hff;
+          closing_r<=0;release_allowed_r<=0;release_open_r<=0;
+          elapsed_xck_r<=0;close_delay_xck_r<=0;release_window_xck_r<=0;
+          noise_f2_gain_r<=0;noise_f5_gain_r<=0;
+          noise_hp_x_r<=0;noise_hp_y_r<=0;
           for(i=0;i<6;i=i+1) begin field_r[i]<=0;target_r[i]<=0; end
           for(i=0;i<5;i=i+1) begin
             tract_y1_r[i]<=0;tract_y2_r[i]<=0;
@@ -323,6 +332,13 @@ module ssi263_p8_chip #(
                     request_r<=0;
                     elapsed_fc_r<=0;
                     closure_level_r<=8'hff;
+                    closing_r<=!die_rom[data_i[5:0]][2];
+                    release_allowed_r<=!die_rom[data_i[5:0]][2] && die_rom[data_i[5:0]][1];
+                    release_open_r<=0;elapsed_xck_r<=0;
+                    close_delay_xck_r<=duration_ticks(data_i,r2,mode_r)>>2;
+                    release_window_xck_r<=
+                        (duration_ticks(data_i,r2,mode_r)>>2)+
+                        (duration_ticks(data_i,r2,mode_r)>>4);
                   end
                end
                3'd1: r1<=data_i;
@@ -336,6 +352,13 @@ module ssi263_p8_chip #(
                     remain_xck_r<=duration_ticks(r0,r2,r0[7:6]);
                     duration_xck_r<=duration_ticks(r0,r2,r0[7:6]);
                     request_r<=0;
+                    closing_r<=!die_w[2];
+                    release_allowed_r<=!die_w[2] && die_w[1];
+                    release_open_r<=0;elapsed_xck_r<=0;
+                    close_delay_xck_r<=duration_ticks(r0,r2,r0[7:6])>>2;
+                    release_window_xck_r<=
+                       (duration_ticks(r0,r2,r0[7:6])>>2)+
+                       (duration_ticks(r0,r2,r0[7:6])>>4);
                   end
                end
                default: r4<=data_i;
@@ -343,7 +366,12 @@ module ssi263_p8_chip #(
           end
           if(xck_tick_i) begin
              if(powered_o && !write_i) begin
-                if(remain_xck_r>1) remain_xck_r<=remain_xck_r-1'b1;
+                if(remain_xck_r>1) begin
+                   remain_xck_r<=remain_xck_r-1'b1;
+                   elapsed_xck_r<=elapsed_xck_r+1'b1;
+                   if(release_allowed_r && remain_xck_r<=release_window_xck_r)
+                       release_open_r<=1;
+                end
                 else if(remain_xck_r==1) begin
                    remain_xck_r<=0;request_r<=mode_r!=0;
                 end
@@ -383,11 +411,14 @@ module ssi263_p8_chip #(
                  pulse_pending_r<=0;
              end else if(glottal_age_r<6'd63)
                 glottal_age_r<=glottal_age_r+1'b1;
-             if(!closure_clear_w) begin
-                if(closure_level_r>4) closure_level_r<=closure_level_r-4;
+             // Close after one frame scaled to phoneme length, release
+             // approximately 1.25 frames before its original end.
+             if(closing_r && elapsed_xck_r>=close_delay_xck_r &&
+                !release_open_r) begin
+                if(closure_level_r>8'd8) closure_level_r<=closure_level_r-8'd8;
                 else closure_level_r<=0;
-             end else if(closure_level_r<8'hfb)
-                closure_level_r<=closure_level_r+4;
+             end else if(closure_level_r<8'd247)
+                closure_level_r<=closure_level_r+8'd8;
              else closure_level_r<=8'hff;
              // start the filter-clock sample's five stage microsequence.
              tract_r<=start_drive_w;
@@ -411,7 +442,8 @@ module ssi263_p8_chip #(
                  hp_y_r<=hp_next_w;
                  // Scale to PCM at the chip output, never boost an
                  // already contaminated shared HDMI music bus.
-                 held_pcm_r<=clip16($signed(hp_next_w) * OUTPUT_GAIN_NUM);
+                 held_pcm_r<=clip16((($signed(hp_next_w) *
+                      OUTPUT_GAIN_NUM) * $signed({1'b0,closure_level_r})) >>> 8);
              end else stage_r<=stage_r+1'b1;
           end
           if(out_count_r == OUTPUT_DIV-1) begin
