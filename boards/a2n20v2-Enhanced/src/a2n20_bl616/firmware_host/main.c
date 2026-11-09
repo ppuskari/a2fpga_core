@@ -1194,7 +1194,7 @@ int main(void)
     // Run once pre-RTOS and record results on OSD/console.
     if (ready) {
         ssi263_spi_bench_result br=ssi263_spi_bench_run();
-        printf("P10 SPI W=%lu B/s R=%lu B/s total=%lu B/s mismatches=%lu\\r\\n",
+        printf("P10 SPI W=%lu B/s R=%lu B/s total=%lu B/s mismatches=%lu\r\n",
             (unsigned long)br.write_bytes_per_sec,
             (unsigned long)br.read_bytes_per_sec,
             (unsigned long)br.total_bytes_per_sec,
