@@ -83,6 +83,9 @@ void ssi263_hybrid_task(void *arg)
     uint32_t total_blocks=0,slow_blocks=0,late_events=0,last_report_ms=0;
     uint32_t rendered_samples=0;
     uint32_t last_stamp=0;
+    uint32_t prev_blocks=0,peak_model_us=0,peak_spi_us=0;
+    uint32_t over_budget_blocks=0,prev_over_budget=0;
+    uint32_t report_interval_ms=10000u;
 
     while(!read_status())vTaskDelay(pdMS_TO_TICKS(100));
     ring_reset();
@@ -152,24 +155,51 @@ void ssi263_hybrid_task(void *arg)
                 pcm_buf[j*2]=(uint8_t)v;
                 pcm_buf[j*2+1]=(uint8_t)(v>>8);
             }
+            uint64_t end_model=bflb_mtimer_get_time_us();
             fpga_spi_xfer_write(SSI_PCM_SPACE,0,pcm_buf,BLOCK_BYTES);
+            uint64_t end_spi=bflb_mtimer_get_time_us();
+            uint32_t model_us=(uint32_t)(end_model-begin);
+            uint32_t spi_us=(uint32_t)(end_spi-end_model);
+            uint32_t total_us=(uint32_t)(end_spi-begin);
+            if(model_us>peak_model_us)peak_model_us=model_us;
+            if(spi_us>peak_spi_us)peak_spi_us=spi_us;
             ++total_blocks;
             rendered_samples+=BLOCK_SAMPLES;
-            if(bflb_mtimer_get_time_us()-begin>2500u)
-                ++slow_blocks;
+            /* 128 / 44100 = 2.902 ms per block. Preserve the original
+             * 2.5 ms SLOW threshold, and separately count true overruns. */
+            if(total_us>2500u)++slow_blocks;
+            if(total_us>2902u)++over_budget_blocks;
         } else {
             // Yield voluntarily even under high-priority audio service;
             // leave USB/SD/virtual-disk network firmware responsive.
             vTaskDelay(pdMS_TO_TICKS(1));
         }
         uint32_t ms=(uint32_t)bflb_mtimer_get_time_ms();
-        if(ms-last_report_ms>=3000u) {
+        if((uint32_t)(ms-last_report_ms)>=report_interval_ms) {
+            uint32_t elapsed_ms=(uint32_t)(ms-last_report_ms);
+            uint32_t window_blocks=total_blocks-prev_blocks;
+            uint32_t window_over=over_budget_blocks-prev_over_budget;
+            uint32_t rate=elapsed_ms ?
+                (uint32_t)((uint64_t)window_blocks*BLOCK_SAMPLES*1000u/
+                           elapsed_ms) : 0;
             last_report_ms=ms;
-            osd_log("P10 speech blocks=%lu slow=%lu seqgap=%lu fifo=%u",
+            prev_blocks=total_blocks;
+            prev_over_budget=over_budget_blocks;
+            // Keep lines below 39 columns; old format cut SEQGAP off.
+            osd_log("P10 B=%lu S=%lu G=%lu",
                     (unsigned long)total_blocks,
                     (unsigned long)slow_blocks,
-                    (unsigned long)late_events,
+                    (unsigned long)late_events);
+            osd_log("P10 RATE=%lu/S OVR=%lu FIFO=%u",
+                    (unsigned long)rate,
+                    (unsigned long)window_over,
                     (unsigned)read16(status_buf+4));
+            osd_log("P10 CPU=%luUS SPI=%luUS UND=%lu",
+                    (unsigned long)peak_model_us,
+                    (unsigned long)peak_spi_us,
+                    (unsigned long)read16(status_buf+10));
+            peak_model_us=0;
+            peak_spi_us=0;
             (void)rendered_samples;(void)last_stamp;
         }
     }
