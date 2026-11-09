@@ -25,6 +25,7 @@
 #include "osd_console.h"
 #include "ssi263.h"
 #include "ssi263_hybrid.h"
+#include "ssi263_audio_edges.h"
 
 #define SSI_PCM_SPACE      4u
 #define SSI_EVENTS_SPACE   5u
@@ -42,6 +43,26 @@
 #define STATUS_LEN         26u /* legacy 24 bytes plus R6 capability/rate */
 #define TARGET_BUFFER      1024u
 #define XCK_HZ             1020000.0f
+/* Optional, controlled R7 A/B knobs. The Pico model and phoneme ROM
+ * remain intact. Do not globally low-pass or suppress all noise. */
+#ifndef SSI263_R7_ATTACK_US
+#define SSI263_R7_ATTACK_US 2500u
+#endif
+#ifndef SSI263_R7_PREQUIET_MS
+#define SSI263_R7_PREQUIET_MS 18u
+#endif
+#ifndef SSI263_R7_PREQUIET_ABS
+#define SSI263_R7_PREQUIET_ABS 16u
+#endif
+#ifndef SSI263_R7_IDLE_ZERO_MS
+#define SSI263_R7_IDLE_ZERO_MS 2500u
+#endif
+#ifndef SSI263_R7_NOISE_PERCENT
+#define SSI263_R7_NOISE_PERCENT 100u /* 100=unaltered; 85/70 A/B only */
+#endif
+#if SSI263_R7_NOISE_PERCENT > 100u
+#error "R7 noise-percent knob must be 0..100"
+#endif
 
 static uint8_t status_buf[STATUS_LEN];
 static uint8_t events_buf[EVENTS_PER_BURST*8u];
@@ -104,6 +125,7 @@ void ssi263_hybrid_task(void *arg)
     ssi263_params params;
     ssi263_default_params(&params);
     params.xck_hz=XCK_HZ;
+    params.noise_gain *= (real)SSI263_R7_NOISE_PERCENT/100.0f;
     while(!read_status())vTaskDelay(pdMS_TO_TICKS(100));
     const unsigned pcm_rate_div=configure_pcm_rate();
     if(!pcm_rate_div) {
@@ -128,6 +150,13 @@ void ssi263_hybrid_task(void *arg)
     uint32_t prev_blocks=0,peak_model_us=0,peak_spi_us=0;
     uint32_t over_budget_blocks=0,prev_over_budget=0;
     uint32_t report_interval_ms=10000u;
+    ssi263_audio_edges edges;
+    ssi263_audio_edges_init(&edges,pcm_hz,SSI263_R7_PREQUIET_MS,
+                            SSI263_R7_ATTACK_US,SSI263_R7_PREQUIET_ABS);
+    const uint32_t idle_zero_samples=(uint32_t)
+        ((uint64_t)pcm_hz*SSI263_R7_IDLE_ZERO_MS/1000u);
+    uint32_t silent_samples=0u,idle_blocks=0u;
+    bool idle_fastpath=false;
 
     ring_reset();
     osd_log("P10 SSI263: Pico C hybrid online");
@@ -135,6 +164,7 @@ void ssi263_hybrid_task(void *arg)
     for(;;) {
         if(!read_status()) {
             active=false;seq_valid=false;fault=true;
+            silent_samples=0u;idle_fastpath=false;
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
@@ -144,6 +174,10 @@ void ssi263_hybrid_task(void *arg)
                EVENTS_PER_BURST : event_count;
 
         if(burst) {
+            /* Any SSI write wakes the model before the new command lands.
+             * No time-based gating of sustained or noise-only phonemes. */
+            silent_samples=0u;
+            idle_fastpath=false;
             fpga_spi_xfer_read(SSI_EVENTS_SPACE,0,events_buf,
                                 (uint16_t)(burst*8u));
             for(unsigned i=0;i<burst;i++) {
@@ -165,6 +199,9 @@ void ssi263_hybrid_task(void *arg)
                     if(!active) {
                         ring_reset();
                         rendered_samples=0;
+                        ssi263_audio_edges_rearm(&edges);
+                        silent_samples=0u;
+                        idle_fastpath=false;
                     }
                 }
             }
@@ -175,6 +212,7 @@ void ssi263_hybrid_task(void *arg)
             // from an unknown/dropped phoneme sequence.
             ring_reset();
             active=false;
+            silent_samples=0u;idle_fastpath=false;
             if(read16(status_buf+14)==0)
                 fault=false; // clear after reset; next CTL re-arms speech
             vTaskDelay(pdMS_TO_TICKS(5));
@@ -185,15 +223,41 @@ void ssi263_hybrid_task(void *arg)
         if(active && buffered<TARGET_BUFFER &&
            free_space>=BLOCK_SAMPLES) {
             uint64_t begin=bflb_mtimer_get_time_us();
-            long count=ssi263_run(chip,BLOCK_SAMPLES,float_samples);
-            if(count!=BLOCK_SAMPLES) {
-                fault=true;
-                continue;
+            if(idle_fastpath && ssi263_request(chip)) {
+                /* Safe only after >=2.5s of exact PCM16 zeros and model
+                 * A/R asserted. Advance model time, but don't synthesize
+                 * a sample-by-sample idle waveform. This saves MCU FPU
+                 * cycles; it does NOT yet save SPI bytes. */
+                ssi263_skip(chip,(real)BLOCK_SAMPLES/(real)pcm_hz);
+                memset(signed_samples,0,sizeof(signed_samples));
+                ++idle_blocks;
+            } else {
+                idle_fastpath=false;
+                long count=ssi263_run(chip,BLOCK_SAMPLES,float_samples);
+                if(count!=BLOCK_SAMPLES) {
+                    fault=true;
+                    continue;
+                }
+                ssi_pcm16(float_samples,BLOCK_SAMPLES,
+                          params.output_gain,signed_samples);
+                /* Unlike an input-write timeout, this can never mute a
+                 * sustained nonzero vowel, breath or fricative. */
+                bool all_zero=true;
+                for(unsigned j=0;j<BLOCK_SAMPLES;j++)
+                    if(signed_samples[j]!=0) { all_zero=false; break; }
+                if(all_zero && ssi263_request(chip)) {
+                    if(silent_samples<idle_zero_samples)
+                        silent_samples+=BLOCK_SAMPLES;
+                    if(silent_samples>=idle_zero_samples)
+                        idle_fastpath=true;
+                } else {
+                    silent_samples=0u;
+                }
             }
-            ssi_pcm16(float_samples,BLOCK_SAMPLES,
-                      params.output_gain,signed_samples);
             for(unsigned j=0;j<BLOCK_SAMPLES;j++) {
-                uint16_t v=(uint16_t)signed_samples[j];
+                int16_t shaped=ssi263_audio_edges_sample(&edges,
+                                         signed_samples[j]);
+                uint16_t v=(uint16_t)shaped;
                 pcm_buf[j*2]=(uint8_t)v;
                 pcm_buf[j*2+1]=(uint8_t)(v>>8);
             }
@@ -241,6 +305,10 @@ void ssi263_hybrid_task(void *arg)
                     (unsigned long)peak_model_us,
                     (unsigned long)peak_spi_us,
                     (unsigned long)read16(status_buf+10));
+            osd_log("P10 R7 E=%lu IDLE=%lu Q=%u",
+                    (unsigned long)edges.attacks,
+                    (unsigned long)idle_blocks,
+                    (unsigned)idle_fastpath);
             peak_model_us=0;
             peak_spi_us=0;
             (void)rendered_samples;(void)last_stamp;
