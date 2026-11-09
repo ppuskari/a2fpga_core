@@ -9,8 +9,11 @@
 // five serial vocal-tract stages, and the output. No old ssi263_voice inside.
 module ssi263_p8_chip #(
     parameter integer LOGIC_HZ = 54_000_000,
-    parameter integer OUTPUT_HZ = 16_000,
-    parameter integer FRAME_XCK = 4096
+    parameter integer OUTPUT_HZ = 44_100,
+    parameter integer FRAME_XCK = 4096,
+    // DSP diagnostic controls: enable/disable inputs to isolate hiss.
+    parameter bit EXCITATION_VOICE_ENABLE = 1'b1,
+    parameter bit EXCITATION_NOISE_ENABLE = 1'b1
 )(
     input wire clk_i,
     input wire reset_n_i,
@@ -39,12 +42,23 @@ module ssi263_p8_chip #(
     logic [3:0] glottal_age_r;
     logic [15:0] lfsr_r;
     logic signed [15:0] noise_prev_r;
-    logic [7:0] output_div_r;
+    // Symmetric finite-impulse-response output anti-image filter.
+    // Unlike P8's direct asynchronous held-sample capture, the 44.1 kHz
+    // 5-tap [1 4 6 4 1]/16 FIR attenuates switched-capacitor images.
+    logic signed [15:0] fir0_r,fir1_r,fir2_r,fir3_r;
     localparam integer OUTPUT_DIV=LOGIC_HZ/OUTPUT_HZ;
     localparam integer OUTCW=$clog2(OUTPUT_DIV);
     logic [OUTCW-1:0] out_count_r;
     logic signed [15:0] held_pcm_r;
     logic signed [31:0] hp_x_r,hp_y_r;
+    wire signed [63:0] hp_fb_w = ($signed(hp_y_r) * 64'sd32100) >>> 15;
+    wire signed [63:0] hp_acc_w =
+        $signed(next_filter_w) - $signed(hp_x_r) + hp_fb_w;
+    wire signed [31:0] hp_next_w = clip32(hp_acc_w);
+    wire signed [63:0] fir_sum_w =
+        $signed(held_pcm_r) + ($signed(fir0_r) <<< 2) +
+        ($signed(fir1_r) * 64'sd6) + ($signed(fir2_r) <<< 2) +
+        $signed(fir3_r);
     logic [2:0] stage_r;
     logic signed [31:0] tract_r;
     logic signed [31:0] tract_y1_r[0:4],tract_y2_r[0:4];
@@ -174,12 +188,12 @@ module ssi263_p8_chip #(
         (glottal_age_r==4'd13) ? 16'sd745 :
         (glottal_age_r==4'd14) ? 16'sd391 : 16'sd0;
     wire [15:0] amplitude_w={8'd0,amp_r};
-    wire signed [31:0] voice_source_w=
+    wire signed [31:0] voice_source_w=EXCITATION_VOICE_ENABLE ?
         ($signed(glottal_w)*$signed({1'b0,field_r[4][11:8]})*
-        $signed({1'b0,amplitude_w}))>>>12;
-    wire signed [31:0] noise_source_w=
+        $signed({1'b0,amplitude_w}))>>>12 : 32'sd0;
+    wire signed [31:0] noise_source_w=EXCITATION_NOISE_ENABLE ?
         ($signed(shaped_noise_w)*$signed({1'b0,field_r[5][11:8]})*
-         $signed({1'b0,amplitude_w}))>>>8;
+         $signed({1'b0,amplitude_w}))>>>8 : 32'sd0;
     wire signed [31:0] start_drive_w=
         (!powered_o || r0[5:0]==6'd0 || r0[5:0]==6'd63 ||
          (!closure_clear_w && closure_level_r==0)) ? 32'sd0 :
@@ -197,6 +211,7 @@ module ssi263_p8_chip #(
           glottal_age_r<=4'hf; lfsr_r<=16'hace1;
           noise_prev_r<=0;
           out_count_r<=0; held_pcm_r<=0; pcm_o<=0;
+          fir0_r<=0;fir1_r<=0;fir2_r<=0;fir3_r<=0;
           hp_x_r<=0; hp_y_r<=0;
           stage_r<=0; tract_r<=0;
           amp_r<=0; pitch_glide_r<=0; pitch_target_r<=0;
@@ -295,18 +310,26 @@ module ssi263_p8_chip #(
                  // high-pass output. The output divider provides the
                  // host PCM clock; this held signal can be resampled.
                  hp_x_r<=next_filter_w;
-                 hp_y_r<=next_filter_w-hp_x_r+
-                         ((hp_y_r*32'sd32100)>>>15);
-                 held_pcm_r<=clip16((next_filter_w-hp_x_r+
-                          ((hp_y_r*32'sd32100)>>>15))>>>2);
+                 // Explicit 64-bit signed feedback and saturating 32-bit
+                 // state. Never let the high-pass pole wrap modulo 2^32.
+                 hp_y_r<=hp_next_w;
+                 held_pcm_r<=clip16($signed(hp_next_w) >>> 2);
              end else stage_r<=stage_r+1'b1;
           end
           if(out_count_r == OUTPUT_DIV-1) begin
              out_count_r<=0;
-             pcm_o<=powered_o ? held_pcm_r : 16'sd0;
+             // Four retained samples plus current sample, 5-tap FIR.
+             // Round towards zero via fixed signed arithmetic shift.
+             fir3_r<=fir2_r;
+             fir2_r<=fir1_r;
+             fir1_r<=fir0_r;
+             fir0_r<=held_pcm_r;
+             pcm_o<=powered_o ? clip16(fir_sum_w >>> 4) : 16'sd0;
           end else out_count_r<=out_count_r+1'b1;
           if(!powered_o) begin
              pcm_o<=0;held_pcm_r<=0;
+             fir0_r<=0;fir1_r<=0;fir2_r<=0;fir3_r<=0;
+             hp_x_r<=0;hp_y_r<=0;
              stage_r<=0;pitch_div_r<=0;glottal_age_r<=4'hf;
           end
        end
