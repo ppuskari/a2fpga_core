@@ -134,21 +134,25 @@ module ssi263_p8_chip #(
     // One shared section-processing slot, five passes per filter sample.
     // Avoid a five-biquad combinational DSP cascade on the 54 MHz path.
     wire [5:0] coeff_index_w =
-        (stage_r==3'd0) ? {2'b00,field_r[0][11:8]} :
-        (stage_r==3'd1) ? {2'b01,field_r[1][11:8]} :
-        (stage_r==3'd2) ? {2'b10,field_r[2][11:8]} :
-        (stage_r==3'd3) ? 6'd48 : 6'd49;
+        (stage_r==3'd1) ? {2'b00,field_r[0][11:8]} :
+        (stage_r==3'd2) ? {2'b01,field_r[1][11:8]} :
+        (stage_r==3'd3) ? {2'b10,field_r[2][11:8]} :
+        (stage_r==3'd4) ? 6'd48 : 6'd49;
     wire [55:0] coeff_w=coefficient_rom[coeff_index_w];
     wire signed [15:0] a1_w=coeff_w[55:40];
     wire signed [15:0] a2_w=coeff_w[39:24];
-    wire signed [23:0] gain_w={1'b0,coeff_w[22:0]};
+    wire signed [24:0] gain_w={1'b0,coeff_w[23:0]};
+    wire signed [31:0] drive_w =
+        (stage_r==3'd2 && route_f2_w) ? tract_r+noise_source_w :
+        (stage_r==3'd5 && !route_f2_w) ? tract_r+noise_source_w :
+        tract_r;
     wire signed [63:0] bilinear_input_w=
-        $signed(tract_r)+($signed(tract_x1_r[stage_r])<<<1)+
-        $signed(tract_x2_r[stage_r]);
+        $signed(drive_w)+($signed(tract_x1_r[stage_r-1])<<<1)+
+        $signed(tract_x2_r[stage_r-1]);
     wire signed [63:0] filter_sum_w=
         (($signed(gain_w)*bilinear_input_w) >>> 24)+
-        (($signed(a1_w)*$signed(tract_y1_r[stage_r]))>>>14)-
-        (($signed(a2_w)*$signed(tract_y2_r[stage_r]))>>>14);
+        (($signed(a1_w)*$signed(tract_y1_r[stage_r-1]))>>>14)-
+        (($signed(a2_w)*$signed(tract_y2_r[stage_r-1]))>>>14);
     wire signed [31:0] next_filter_w=clip32(filter_sum_w);
     wire signed [15:0] noise_now_w=
         $signed({8'b0,lfsr_r[7:0]})-16'sd128;
@@ -180,10 +184,6 @@ module ssi263_p8_chip #(
         (!powered_o || r0[5:0]==6'd0 || r0[5:0]==6'd63 ||
          (!closure_clear_w && closure_level_r==0)) ? 32'sd0 :
         voice_source_w;
-    wire signed [31:0] filter_drive_w =
-        (stage_r==3'd1 && route_f2_w) ? tract_r+noise_source_w :
-        (stage_r==3'd4 && !route_f2_w) ? tract_r+noise_source_w :
-        tract_r;
 
     integer i;
     always_ff @(posedge clk_i) begin
@@ -287,7 +287,7 @@ module ssi263_p8_chip #(
              // Synthesis will reuse the arithmetic across five logic cycles.
              tract_r<=next_filter_w;
              tract_x2_r[stage_r-1]<=tract_x1_r[stage_r-1];
-             tract_x1_r[stage_r-1]<=tract_r;
+             tract_x1_r[stage_r-1]<=drive_w;
              tract_y2_r[stage_r-1]<=tract_y1_r[stage_r-1];
              tract_y1_r[stage_r-1]<=next_filter_w;
              if(stage_r==5) begin
