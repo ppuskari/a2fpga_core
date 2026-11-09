@@ -24,6 +24,7 @@
 #include "bflb_mtimer.h"
 
 #include "fpga_spi.h"
+#include "ssi263_hybrid.h"
 #ifdef SSI263_HYBRID_SPI_BENCH
 #include "ssi263_spi_bench.h"
 #endif
@@ -1231,6 +1232,10 @@ int main(void)
 
     /* Disk II image serving: mount SD, serve track-on-demand requests. */
     usb_osal_thread_create("disk", 3072, CONFIG_USBHOST_PSC_PRIO + 1, disk_thread, NULL);
+
+    // P10 native SSI speech service. FPGA retains A/R and Apple bus timing.
+    usb_osal_thread_create("ssi263", 6144, CONFIG_USBHOST_PSC_PRIO + 2,
+                           ssi263_hybrid_task, NULL);
 
     /* Remote console/menu mirror on TCP port 23. */
     telnetd_init();
