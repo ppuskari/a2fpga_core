@@ -47,8 +47,8 @@ int main(int argc,char **argv) {
     ssi263_write(c,0,0x44);
     emit(c,out,&p,2500);
     // The SSI-263 die ROM marks code $28 as an unvoiced high-noise
-    // phoneme (VA=0, FA=15), to exercise F5 frication separately.
-    ssi263_write(c,0,0x28);
+    // phoneme (VA=0, FA=15, closure-clear), to exercise open frication.
+    ssi263_write(c,0,0x30);
     emit(c,out,&p,2500);
     ssi263_write(c,3,0x80);
     fclose(out);ssi263_free(c);
