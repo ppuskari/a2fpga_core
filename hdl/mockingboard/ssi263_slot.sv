@@ -8,7 +8,10 @@
 // experimental FPGA-only formant wavetable speech approximation. It is not
 // a transistor-accurate voice reproduction; verify on physical hardware.
 module ssi263_slot #(
-    parameter integer VOICE_PROFILE = 1
+    parameter integer VOICE_PROFILE = 1,
+    // Independent P8 chip replacing BOTH legacy controller and renderer.
+    // Disabled until C-reference parity, timing, and audio fidelity gates pass.
+    parameter bit FULL_CHIP_ENABLE = 1'b0
 ) (
     input  wire       clk_i,
     input  wire       reset_n_i,
@@ -84,6 +87,22 @@ module ssi263_slot #(
         end
     end
 
+    generate if (FULL_CHIP_ENABLE) begin : gen_p8_full_chip
+        ssi263_p8_chip chip (
+            .clk_i(clk_i),
+            .reset_n_i(reset_n_i && enabled_i),
+            .xck_tick_i(xck_tick_i && enabled_i),
+            .write_i(wr_pulse_r),
+            .reg_i(wr_reg_r),
+            .data_i(wr_data_r),
+            .ar_n_o(ar_n_w),
+            .powered_o(powered_o),
+            .phoneme_o(phoneme_o),
+            .r3_debug_o(debug_r3_w),
+            .pcm_o(speech_pcm_o)
+        );
+        assign ar_status_w = ~ar_n_w;
+    end else begin : gen_p6_legacy
     ssi263_control core (
         .clk_i(clk_i),
         .reset_n_i(reset_n_i && enabled_i),
@@ -113,6 +132,7 @@ module ssi263_slot #(
         .rate_i(rate_w),
         .pcm_o(speech_pcm_o)
     );
+    end endgenerate
 
     assign speech_selected_o = speech_sel_w;
     assign speech_read_o = speech_sel_w && rw_n_i;
