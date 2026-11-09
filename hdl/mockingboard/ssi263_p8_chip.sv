@@ -338,21 +338,36 @@ module ssi263_p8_chip #(
     wire signed [15:0] shaped_noise_w=noise_now_w-noise_prev_r;
     wire signed [15:0] glottal_w=glottal_rom[glottal_age_r];
     wire [15:0] amplitude_w={12'd0,amp_r[15:12]};
+    // Merge R3 amplitude (1/15) and stop closure (1/256) into
+    // a 12-bit Q12 control coefficient; no 64-bit signed divider.
+    wire [23:0] vol_product_w =
+       $unsigned(amplitude_w) * $unsigned({1'b0,closure_level_r}) *
+       12'd273;
+    wire [11:0] vol_factor_w = vol_product_w[19:8];
+    wire signed [44:0] vol_pcm_product_w =
+       $signed(hp_next_w) * $signed({1'b0,vol_factor_w});
+    wire signed [48:0] chip_gain_w =
+       $signed(vol_pcm_product_w) * OUTPUT_GAIN_NUM;
     // Both VA and R3 amplitude are encoded 0..15. Normalize by
     // 15*15=225, not 4096: the old >>>12 discarded ~25 dB and
     // forced a near-silent glottal excitation into the resonators.
+    // Signed reciprocal Q15 for 1/15, 2185/32768, no divider.
+    wire signed [20:0] voice_product_w =
+        $signed(glottal_w) * $signed({1'b0,field_r[4][15:12]});
+    wire signed [36:0] voice_recip_w =
+        $signed(voice_product_w) * 16'sd2185;
     wire signed [31:0] voice_source_w=EXCITATION_VOICE_ENABLE ?
-        (($signed(glottal_w)*
-          $signed({1'b0,field_r[4][15:12]})) / 32'sd15) : 32'sd0;
+        $signed(voice_recip_w >>> 15) : 32'sd0;
     // First-order noise excitation remains distinct from the
     // missing calibrated band-pass. 0.012 * 32768 ~ 393 Q15.
     // Source equivalent in the C model: nz=noise*0.012/15,
     // subsequently scaled by the per-path FA transition and VOL.
     // In Q15 this is 393/15 before the F2/F5 injection gains.
-    wire signed [63:0] noise_product_w =
-        $signed(ns_next_w) * 64'sd393;
+    // 393/491520 ~= 839/1048576 (Q20): constant product/shift.
+    wire signed [47:0] noise_recip_w =
+        $signed(ns_next_w) * 16'sd839;
     wire signed [31:0] noise_source_w=EXCITATION_NOISE_ENABLE ?
-        clip32(noise_product_w / 64'sd491520) : 32'sd0;
+        $signed(noise_recip_w >>> 20) : 32'sd0;
     wire [15:0] noise_f2_target_w =
         (!closing_r || release_open_r) && route_f2_w ?
         field_r[5] : 16'd0;
@@ -571,9 +586,7 @@ module ssi263_p8_chip #(
                  // The C engine applies VOL and stop closure AFTER the
                  // high-pass. Do not multiply the resonator *input* by
                  // the external R3 amplitude; that corrupts the filter state.
-                 held_pcm_r<=clip16((($signed(hp_next_w) *
-                      OUTPUT_GAIN_NUM * $signed({1'b0,amplitude_w})) /
-                      64'sd15 * $signed({1'b0,closure_level_r})) >>> 8);
+                 held_pcm_r<=clip16($signed(chip_gain_w) >>> 12);
              end else stage_r<=stage_r+1'b1;
           end
           if(out_count_r == OUTPUT_DIV-1) begin
