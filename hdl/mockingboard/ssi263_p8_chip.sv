@@ -48,7 +48,7 @@ module ssi263_p8_chip #(
     // Full 36-filter-tick glottal impulse response from pinned Pico C.
     logic signed [15:0] glottal_rom[0:63];
     initial $readmemh("hdl/ssi263_p8_glottal.mem",glottal_rom);
-    logic [15:0] lfsr_r;
+    logic [14:0] lfsr_r;
     logic signed [15:0] noise_prev_r;
     // Symmetric finite-impulse-response output anti-image filter.
     // Unlike P8's direct asynchronous held-sample capture, the 44.1 kHz
@@ -105,7 +105,9 @@ module ssi263_p8_chip #(
     // Pinned Pico default: 2-pole band-pass at .28*fc, BW .15*fc;
     // Q14: a1=-3833, a2=6384, peak-normalized g=5005.
     logic signed [31:0] ns_x1_r,ns_x2_r,ns_y1_r,ns_y2_r;
-    wire signed [15:0] noise_bit_w = lfsr_r[14] ? 16'sd32767 : -16'sd32767;
+    wire noise_feedback_w=lfsr_r[14] ^ lfsr_r[13];
+    wire signed [15:0] noise_bit_w = noise_feedback_w ?
+        16'sd32767 : -16'sd32767;
     wire signed [63:0] ns_sum_w =
        (64'sd5005 * ($signed(noise_bit_w)-$signed(ns_x2_r)) -
         64'sd3833 * $signed(ns_y1_r) -
@@ -315,28 +317,25 @@ module ssi263_p8_chip #(
     // 15*15=225, not 4096: the old >>>12 discarded ~25 dB and
     // forced a near-silent glottal excitation into the resonators.
     wire signed [31:0] voice_source_w=EXCITATION_VOICE_ENABLE ?
-        (($signed(glottal_w)*$signed({1'b0,field_r[4][15:12]})*
-        $signed({1'b0,amplitude_w})) / 32'sd225) : 32'sd0;
+        (($signed(glottal_w)*
+          $signed({1'b0,field_r[4][15:12]})) / 32'sd15) : 32'sd0;
     // First-order noise excitation remains distinct from the
     // missing calibrated band-pass. 0.012 * 32768 ~ 393 Q15.
     // Source equivalent in the C model: nz=noise*0.012/15,
     // subsequently scaled by the per-path FA transition and VOL.
     // In Q15 this is 393/15 before the F2/F5 injection gains.
     wire signed [63:0] noise_product_w =
-        $signed(ns_next_w) * 64'sd393 *
-        $signed({1'b0,amplitude_w});
+        $signed(ns_next_w) * 64'sd393;
     wire signed [31:0] noise_source_w=EXCITATION_NOISE_ENABLE ?
-        clip32(noise_product_w / 64'sd7372800) : 32'sd0;
+        clip32(noise_product_w / 64'sd491520) : 32'sd0;
     wire [15:0] noise_f2_target_w =
         (!closing_r || release_open_r) && route_f2_w ?
         field_r[5] : 16'd0;
     wire [15:0] noise_f5_target_w =
         (!closing_r || release_open_r) ?
         (route_f2_w ? (field_r[5]>>2) : field_r[5]) : 16'd0;
-    wire signed [31:0] start_drive_w=
-        (!powered_o || r0[5:0]==6'd0 || r0[5:0]==6'd63 ||
-         (!closure_clear_w && closure_level_r==0)) ? 32'sd0 :
-        voice_source_w;
+    wire signed [31:0] start_drive_w = powered_o ?
+        voice_source_w : 32'sd0;
 
     integer i;
     always_ff @(posedge clk_i) begin
@@ -347,7 +346,7 @@ module ssi263_p8_chip #(
           frame_xck_r<=0; filter_xck_r<=0;
           fc_div_r<=0; fc_start_r<=0;
           pitch_xck_r<=0; pitch_div_r<=0; pulse_pending_r<=0;
-          glottal_age_r<=6'd63; lfsr_r<=16'hace1;
+          glottal_age_r<=6'd63; lfsr_r<=15'd1;
           noise_prev_r<=0;
           out_count_r<=0; held_pcm_r<=0; pcm_o<=0;
           area_acc_r<=0;
@@ -498,8 +497,8 @@ module ssi263_p8_chip #(
                    {desired_pitch_target_w,12'd0},glide_step_w) :
                 {desired_pitch_target_w,12'd0};
              amp_r<=approach16(amp_r,{r3[3:0],12'd0},amp_step_w);
-             lfsr_r<={lfsr_r[14:0],
-                       lfsr_r[15]^lfsr_r[13]^lfsr_r[12]^lfsr_r[10]};
+             // Pico reference: 15-bit LFSR, feedback from bits 14/13.
+             lfsr_r<={lfsr_r[13:0],noise_feedback_w};
              noise_prev_r<=noise_now_w;
              ns_x2_r<=ns_x1_r;ns_x1_r<=noise_bit_w;
              ns_y2_r<=ns_y1_r;ns_y1_r<=ns_next_w;
@@ -544,8 +543,12 @@ module ssi263_p8_chip #(
                  hp_y_r<=hp_next_w;
                  // Scale to PCM at the chip output, never boost an
                  // already contaminated shared HDMI music bus.
+                 // The C engine applies VOL and stop closure AFTER the
+                 // high-pass. Do not multiply the resonator *input* by
+                 // the external R3 amplitude; that corrupts the filter state.
                  held_pcm_r<=clip16((($signed(hp_next_w) *
-                      OUTPUT_GAIN_NUM) * $signed({1'b0,closure_level_r})) >>> 8);
+                      OUTPUT_GAIN_NUM * $signed({1'b0,amplitude_w})) /
+                      64'sd15 * $signed({1'b0,closure_level_r})) >>> 8);
              end else stage_r<=stage_r+1'b1;
           end
           if(out_count_r == OUTPUT_DIV-1) begin
