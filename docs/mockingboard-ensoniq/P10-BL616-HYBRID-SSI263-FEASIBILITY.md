@@ -1,8 +1,11 @@
 # P10 — BL616/FPGA hybrid SSI-263 feasibility and transport specification
 
-**Status: feasibility design + opt-in MCU SPI benchmark only.**
-**There is NO hybrid bitstream yet and NO MCU audio firmware yet.**
-Do not flash P10 expecting audible speech. P9M remains unchanged.
+**Historical feasibility design (superseded by the implemented P10-R1 hybrid).**
+The FPGA PCM/event queues, connected BL616/Pico C renderer, and
+independent CI tests now exist on this branch. See
+[P10-HYBRID-HARDWARE-TEST.md](P10-HYBRID-HARDWARE-TEST.md) for the
+current source, build, Stage2 flash safety and hardware test instructions.
+P9M remains a separate untouched rollback baseline.
 
 ## Why move complete acoustic synthesis to BL616
 
