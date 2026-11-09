@@ -1,0 +1,73 @@
+name: P10-R6 BL616 multirate SSI speech
+on:
+  push:
+    branches:
+      - petar/ssi263-p10r6-multirate-speech-20261109
+    paths:
+      - "boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv"
+      - "boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c"
+      - "tests/ssi263_hybrid/**"
+      - ".github/workflows/ssi263-p10r6-multirate-speech.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Icarus and Verilator
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iverilog verilator
+      - name: Existing P10 44.1 kHz transport regression
+        run: |
+          iverilog -g2012 -Wall -s tb_ssi263_hybrid_bridge \
+            -o /tmp/old.vvp boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv \
+            tests/ssi263_hybrid/tb_ssi263_hybrid_bridge.sv
+          vvp /tmp/old.vvp
+      - name: R6 22.05 and 11.025 kHz ring/status/sample-hold simulation
+        run: |
+          iverilog -g2012 -Wall -s tb_ssi263_p10r6_multirate \
+            -o /tmp/r6.vvp boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv \
+            tests/ssi263_hybrid/tb_ssi263_p10r6_multirate.sv
+          vvp /tmp/r6.vvp
+      - name: Synthesizable Verilog lint
+        run: verilator --lint-only --timing -Wno-fatal --top-module ssi263_hybrid_bridge boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv
+      - name: Compile MCU speech task at all three source rates
+        run: |
+          for div in 1 2 4; do
+            gcc -std=c99 -O2 -Wall -Wextra -Werror -fsyntax-only \
+              -DSSI263_PCM_RATE_DIV=$div \
+              -Itests/ssi263_hybrid/stubs \
+              -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host \
+              -Ireference/ssi263/pico-v1.0.1 \
+              boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c
+          done
+      - name: Native Pico synthesis at 44.1, 22.05 and 11.025 kHz
+        run: |
+          gcc -std=c99 -O3 -fsingle-precision-constant -Wall -Wextra -Werror \
+            -Ireference/ssi263/pico-v1.0.1 tests/ssi263_hybrid/test_pico_multirate.c \
+            reference/ssi263/pico-v1.0.1/ssi263.c \
+            reference/ssi263/pico-v1.0.1/ssi263dsp.c \
+            -lm -o /tmp/r6-voice
+          /tmp/r6-voice
+      - name: Assert compatibility with working Enhanced board and DOC piano
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          base=Path("boards/a2n20v2-Enhanced")
+          s=(base/"src/a2n20_bl616/firmware_host/ssi263_hybrid.c").read_text()
+          h=(base/"hdl/ssi263_hybrid_bridge.sv").read_text()
+          usb=(base/"src/a2n20_bl616/firmware_host/usb_config.h").read_text()
+          main=(base/"src/a2n20_bl616/firmware_host/main.c").read_text()
+          top=(base/"hdl/top.sv").read_text()
+          assert "#define SSI263_PCM_RATE_DIV 2u" in s
+          assert "SSI_RATE_ADDR" in s and "status_buf[24]==0xA6u" in s
+          assert "status_byte=8'hA6" in h and "pcm_consume_tick_w" in h
+          assert "CONFIG_USBHOST_MAX_EHPORTS          8" in usb
+          assert "CONFIG_USBHOST_REQUEST_BUFFER_LEN 1024" in usb
+          assert "usbh_hidinput_buttons()" in main
+          assert "MOCKINGBOARD_SSI263_HYBRID_ENABLE = 1'b1" in top
+          assert "IIE_SPEECH_VIDEO_TRIM = 1'b0" in top
+          assert "MB_DOC_MULTISAMPLE_ENABLE = 1'b1" in top
+          print("PASS: source-rate handshake, Enhanced HID, IIgs VGC, DOC piano, AY untouched")
+          PY
