@@ -73,13 +73,15 @@ module tb_ssi263_p8b_trace #(
         capture(2500);
         write_reg(3'd0,8'h44);
         capture(2500);
+        write_reg(3'd0,8'h28); // unvoiced FA=15, isolated fricative noise
+        capture(2500);
         write_reg(3'd3,8'h80);
         repeat(5) @(negedge clk);
         if(powered || !ar_n || pcm!==0) $fatal(1,"P8B poweroff mute/IRQ failed");
-        if(samples!=7500) $fatal(1,"Wrong sample count");
+        if(samples!=10000) $fatal(1,"Wrong sample count");
         if(!VOICE_ENABLE && !NOISE_ENABLE && nonzero!=0)
             $fatal(1,"Audio without excitation: %0d samples",nonzero);
-        if(VOICE_ENABLE && nonzero<50)
+        if((VOICE_ENABLE || NOISE_ENABLE) && nonzero<50)
             $fatal(1,"Voice excitation failed: %0d nonzero",nonzero);
         $fclose(fd);
         $display("P8B TRACE PASS: voice=%0d noise=%0d samples=%0d nonzero=%0d peak=%0d maxjump=%0d",
