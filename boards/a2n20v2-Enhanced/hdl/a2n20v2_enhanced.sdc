@@ -11,8 +11,10 @@ create_generated_clock -name clk_logic -source [get_ports {clk}] -master_clock c
 create_generated_clock -name clk_pixel -source [get_pins {clk_logic_inst/rpll_inst/CLKOUT}] -master_clock clk_logic -divide_by 2 -multiply_by 1 -add [get_pins {clk_logic_inst/rpll_inst/CLKOUTD}]
 create_generated_clock -name clk_hdmi -source [get_pins {clk_logic_inst/rpll_inst/CLKOUTD}] -master_clock clk_pixel -divide_by 1 -multiply_by 5 -add [get_pins {clk_hdmi_inst/rpll_inst/CLKOUT}]
 
-// SPI clock from BL616 MCU (4 MHz, used as direct clock for SPI shift registers)
-create_clock -name spi_sclk -period 250.000 [get_ports {spi_sclk}]
+// BL616 host firmware configures SPI0 to 20 MHz (SPI_MODE1).
+// Analyze the SPI shift-register domain at its actual operating clock.
+// CDC exemptions below require separately verified toggle synchronizers.
+create_clock -name spi_sclk -period 50.000 [get_ports {spi_sclk}]
 
 // CDC between SPI clock domain and system clock domain uses toggle synchronizer.
 // These cross-domain paths are safe by design -- false path both directions.
