@@ -8,7 +8,9 @@
 // experimental FPGA-only formant wavetable speech approximation. It is not
 // a transistor-accurate voice reproduction; verify on physical hardware.
 module ssi263_slot #(
-    parameter integer VOICE_PROFILE = 1
+    parameter integer VOICE_PROFILE = 1,
+    // Override only in accelerated iverilog tests; hardware uses 54 MHz.
+    parameter integer VOICE_CLK_HZ = 54_000_000
 ) (
     input  wire       clk_i,
     input  wire       reset_n_i,
@@ -106,7 +108,7 @@ module ssi263_slot #(
     // 0 raw P4 waveform, 1 enhanced P5 waveform, 2 die-ROM formant R1.
     // All profiles share the same validated Apple II bus/timer/CA1 state.
     generate if (VOICE_PROFILE == 2) begin : gen_die_voice
-      ssi263_die_formant_voice voice (
+      ssi263_die_formant_voice #(.CLK_HZ(VOICE_CLK_HZ)) voice (
         .clk_i(clk_i),
         .reset_n_i(reset_n_i && enabled_i),
         .powered_i(powered_o),
