@@ -13,7 +13,10 @@ module ssi263_p8_chip #(
     parameter integer FRAME_XCK = 4096,
     // DSP diagnostic controls: enable/disable inputs to isolate hiss.
     parameter bit EXCITATION_VOICE_ENABLE = 1'b1,
-    parameter bit EXCITATION_NOISE_ENABLE = 1'b1
+    parameter bit EXCITATION_NOISE_ENABLE = 1'b1,
+    // Pinned software reference applies output_gain in chip_run and PCM16.
+    // Both are 3 in the pinned defaults: 9x output conversion total.
+    parameter integer OUTPUT_GAIN_NUM = 9
 )(
     input wire clk_i,
     input wire reset_n_i,
@@ -188,12 +191,18 @@ module ssi263_p8_chip #(
         (glottal_age_r==4'd13) ? 16'sd745 :
         (glottal_age_r==4'd14) ? 16'sd391 : 16'sd0;
     wire [15:0] amplitude_w={8'd0,amp_r};
+    // Both VA and R3 amplitude are encoded 0..15. Normalize by
+    // 15*15=225, not 4096: the old >>>12 discarded ~25 dB and
+    // forced a near-silent glottal excitation into the resonators.
     wire signed [31:0] voice_source_w=EXCITATION_VOICE_ENABLE ?
-        ($signed(glottal_w)*$signed({1'b0,field_r[4][11:8]})*
-        $signed({1'b0,amplitude_w}))>>>12 : 32'sd0;
+        (($signed(glottal_w)*$signed({1'b0,field_r[4][11:8]})*
+        $signed({1'b0,amplitude_w})) / 32'sd225) : 32'sd0;
+    // First-order noise excitation remains distinct from the
+    // missing calibrated band-pass. 0.012 * 32768 ~ 393 Q15.
     wire signed [31:0] noise_source_w=EXCITATION_NOISE_ENABLE ?
-        ($signed(shaped_noise_w)*$signed({1'b0,field_r[5][11:8]})*
-         $signed({1'b0,amplitude_w}))>>>8 : 32'sd0;
+        (($signed(shaped_noise_w)*32'sd3*
+         $signed({1'b0,field_r[5][11:8]})*
+         $signed({1'b0,amplitude_w})) / 32'sd225) : 32'sd0;
     wire signed [31:0] start_drive_w=
         (!powered_o || r0[5:0]==6'd0 || r0[5:0]==6'd63 ||
          (!closure_clear_w && closure_level_r==0)) ? 32'sd0 :
@@ -313,7 +322,9 @@ module ssi263_p8_chip #(
                  // Explicit 64-bit signed feedback and saturating 32-bit
                  // state. Never let the high-pass pole wrap modulo 2^32.
                  hp_y_r<=hp_next_w;
-                 held_pcm_r<=clip16($signed(hp_next_w) >>> 2);
+                 // Scale to PCM at the chip output, never boost an
+                 // already contaminated shared HDMI music bus.
+                 held_pcm_r<=clip16($signed(hp_next_w) * OUTPUT_GAIN_NUM);
              end else stage_r<=stage_r+1'b1;
           end
           if(out_count_r == OUTPUT_DIV-1) begin
