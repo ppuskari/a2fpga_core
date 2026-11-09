@@ -59,9 +59,11 @@ module top #(
     parameter bit MOCKINGBOARD_SSI263_FULL_CHIP_ENABLE = 1'b1,
     // P6: speech-only output gain. 3/1 ~= +9.54dB in normal MB-DOC mode.
     // Music's existing HDMI gain/limiter remains unchanged.
-    // P8B isolation baseline: full chip runs, audio is NOT added to music.
-    // No unmute until C reference waveform and Gowin audio checks pass.
-    parameter integer MB_SPEECH_GAIN_NUM = 0,
+    // P9 hardware-listening experiment: SSI263 full chip uses a separately
+    // bounded signed path into the existing stereo mixer, no changes to
+    // DOC piano or AY effects. Lowest nonzero gain = 1 (not P6's 3).
+    // Set to 0 for exact music-isolation fallback without changing cores.
+    parameter integer MB_SPEECH_GAIN_NUM = 1,
     parameter bit [7:0] MOCKINGBOARD_ID = 2,
 
     parameter bit SUPERSERIAL_ENABLE = 0,
