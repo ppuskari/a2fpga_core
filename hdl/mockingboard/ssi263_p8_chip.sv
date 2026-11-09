@@ -92,6 +92,15 @@ module ssi263_p8_chip #(
     logic closing_r, release_allowed_r, release_open_r;
     logic [19:0] elapsed_xck_r;
     logic [19:0] close_delay_xck_r, release_window_xck_r;
+    logic early_req_r;
+    logic [4:0] pending_mask_r;
+    logic [7:0] pending_r0_r,pending_r1_r,pending_r2_r,pending_r3_r,pending_r4_r;
+    wire [31:0] pending_die_w=die_rom[pending_r0_r[5:0]];
+    wire pending_open_w = pending_mask_r[0] && pending_die_w[2] &&
+                          (pending_die_w[15:12]!=0) && (pending_die_w[11:8]==0);
+    wire [19:0] early_window_w=release_window_xck_r+(duration_xck_r>>3);
+    wire [19:0] pending_duration_w=duration_ticks(pending_r0_r,
+            pending_mask_r[2] ? pending_r2_r : r2,mode_r);
     logic [15:0] noise_f2_gain_r, noise_f5_gain_r;
     // Pinned Pico default: 2-pole band-pass at .28*fc, BW .15*fc;
     // Q14: a1=-3833, a2=6384, peak-normalized g=5005.
@@ -119,7 +128,7 @@ module ssi263_p8_chip #(
     wire closure_clear_w=die_w[2];
     wire release_allowed_w=die_w[1];
     wire route_f2_w=die_w[0];
-    assign ar_n_o=~request_r;
+    assign ar_n_o=~(request_r && !pending_mask_r[0]);
     assign powered_o=mode_valid_r && !r3[7];
     assign phoneme_o=r0[5:0];
     assign r3_debug_o=r3;
@@ -348,6 +357,9 @@ module ssi263_p8_chip #(
           amp_r<=0; pitch_glide_r<=0; pitch_target_r<=0;
           elapsed_fc_r<=0; frame_fc_r<=0; closure_level_r<=8'hff;
           closing_r<=0;release_allowed_r<=0;release_open_r<=0;
+          early_req_r<=0;pending_mask_r<=0;
+          pending_r0_r<=0;pending_r1_r<=0;pending_r2_r<=0;
+          pending_r3_r<=0;pending_r4_r<=0;
           elapsed_xck_r<=0;close_delay_xck_r<=0;release_window_xck_r<=0;
           noise_f2_gain_r<=0;noise_f5_gain_r<=0;
           ns_x1_r<=0;ns_x2_r<=0;ns_y1_r<=0;ns_y2_r<=0;
@@ -358,7 +370,17 @@ module ssi263_p8_chip #(
           end
        end else begin
           fc_start_r<=1'b0;
-          if(write_i) begin
+          if(write_i && early_req_r && !r3[7] &&
+              !(reg_i==3'd3 && data_i[7])) begin
+              // Buffer successor writes until original stop completion.
+              case(reg_i)
+                3'd0:begin pending_r0_r<=data_i;pending_mask_r[0]<=1;end
+                3'd1:begin pending_r1_r<=data_i;pending_mask_r[1]<=1;end
+                3'd2:begin pending_r2_r<=data_i;pending_mask_r[2]<=1;end
+                3'd3:begin pending_r3_r<=data_i;pending_mask_r[3]<=1;end
+                default:begin pending_r4_r<=data_i;pending_mask_r[4]<=1;end
+              endcase
+          end else if(write_i) begin
              case(reg_i)
                3'd0: begin
                   r0<=data_i;
@@ -367,11 +389,13 @@ module ssi263_p8_chip #(
                     duration_xck_r<=duration_ticks(data_i,r2,mode_r);
                     request_r<=0;
                     elapsed_fc_r<=0;
-                    closure_level_r<=8'hff;
                     closing_r<=!die_rom[data_i[5:0]][2];
                     release_allowed_r<=!die_rom[data_i[5:0]][2] && die_rom[data_i[5:0]][1];
-                    release_open_r<=0;elapsed_xck_r<=0;
-                    close_delay_xck_r<=duration_ticks(data_i,r2,mode_r)>>2;
+                    release_open_r<=0;early_req_r<=0;
+                    pending_mask_r<=0;elapsed_xck_r<=0;
+                    close_delay_xck_r<=
+                        (amp_r<16'd2048 || !die_rom[data_i[5:0]][1]) ?
+                        20'd0 : (duration_ticks(data_i,r2,mode_r)>>2);
                     release_window_xck_r<=
                         (duration_ticks(data_i,r2,mode_r)>>2)+
                         (duration_ticks(data_i,r2,mode_r)>>4);
@@ -391,7 +415,9 @@ module ssi263_p8_chip #(
                     closing_r<=!die_w[2];
                     release_allowed_r<=!die_w[2] && die_w[1];
                     release_open_r<=0;elapsed_xck_r<=0;
-                    close_delay_xck_r<=duration_ticks(r0,r2,r0[7:6])>>2;
+                    close_delay_xck_r<=
+                        (amp_r<16'd2048 || !die_w[1]) ?
+                        20'd0 : (duration_ticks(r0,r2,r0[7:6])>>2);
                     release_window_xck_r<=
                        (duration_ticks(r0,r2,r0[7:6])>>2)+
                        (duration_ticks(r0,r2,r0[7:6])>>4);
