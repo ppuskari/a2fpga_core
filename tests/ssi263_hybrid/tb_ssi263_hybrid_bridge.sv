@@ -77,7 +77,8 @@ module tb_ssi263_hybrid_bridge;
       rd(3'd4,24'h800004,v);if(v!==8)$fatal(1,"8 PCM samples missing");
       sample_tick();sample_tick();
       if(pcm!==16'h1201)$fatal(1,"first audio frame %h",pcm);
-      for(i=0;i<7;i++)sample_tick();
+      // Eight additional ticks: seven remaining samples then one underrun.
+      for(i=0;i<8;i++)sample_tick();
       if(pcm!==0)$fatal(1,"underrun did not mute");
       rd(3'd4,24'h80000A,v);if(v!==1)$fatal(1,"underrun not counted");
       wr(3'd4,24'h800000,8'h01);
