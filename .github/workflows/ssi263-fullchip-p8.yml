@@ -5,6 +5,7 @@ on:
       - petar/ssi263-fullchip-p8-reference-20261109
     paths:
       - "reference/ssi263/**"
+      - "tools/generate_ssi263_p8_roms.py"
       - "hdl/mockingboard/ssi263_p8_chip.sv"
       - "tests/mb_ssi263/tb_ssi263_p8_chip.sv"
       - "boards/a2n20v2-Enhanced/hdl/ssi263_p8_*.mem"
@@ -42,6 +43,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install RTL tools
         run: sudo apt-get update && sudo apt-get install -y iverilog verilator
+      - name: Assert FPGA ROMs match pinned C reference
+        run: python3 tools/generate_ssi263_p8_roms.py --check
       - name: Simulate independent P8 chip register/DSP chain
         run: |
           iverilog -g2012 -s tb_ssi263_p8_chip -o /tmp/p8chip.vvp hdl/mockingboard/ssi263_p8_chip.sv tests/mb_ssi263/tb_ssi263_p8_chip.sv
