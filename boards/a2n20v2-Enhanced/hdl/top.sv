@@ -56,10 +56,12 @@ module top #(
     parameter bit MOCKINGBOARD_SSI263_ENABLE = 1'b1,
     parameter integer MOCKINGBOARD_SSI263_VOICE_PROFILE = 1,
     // P8 independent chip is experimental and OFF by default.
-    parameter bit MOCKINGBOARD_SSI263_FULL_CHIP_ENABLE = 1'b0,
+    parameter bit MOCKINGBOARD_SSI263_FULL_CHIP_ENABLE = 1'b1,
     // P6: speech-only output gain. 3/1 ~= +9.54dB in normal MB-DOC mode.
     // Music's existing HDMI gain/limiter remains unchanged.
-    parameter integer MB_SPEECH_GAIN_NUM = 3,
+    // P8B isolation baseline: full chip runs, audio is NOT added to music.
+    // No unmute until C reference waveform and Gowin audio checks pass.
+    parameter integer MB_SPEECH_GAIN_NUM = 0,
     parameter bit [7:0] MOCKINGBOARD_ID = 2,
 
     parameter bit SUPERSERIAL_ENABLE = 0,
