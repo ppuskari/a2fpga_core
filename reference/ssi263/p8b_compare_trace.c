@@ -46,8 +46,12 @@ int main(int argc,char **argv) {
     emit(c,out,&p,2500);
     ssi263_write(c,0,0x44);
     emit(c,out,&p,2500);
+    // The SSI-263 die ROM marks code $28 as an unvoiced high-noise
+    // phoneme (VA=0, FA=15), to exercise F5 frication separately.
+    ssi263_write(c,0,0x28);
+    emit(c,out,&p,2500);
     ssi263_write(c,3,0x80);
     fclose(out);ssi263_free(c);
-    puts("PASS: pinned Pico SSI263 reference, 3 x 50 ms phoneme trace");
+    puts("PASS: pinned Pico SSI263 reference, 4 x 50 ms, voiced + fricative");
     return 0;
 }
