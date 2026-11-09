@@ -57,6 +57,17 @@ target_sources(app PRIVATE
     ../firmware/ffunicode.c
     ../firmware/fpga_sd.c
 )
+# P10-R4: BL616 has efficient single-precision FPU operations. The Pico
+# reference declares 'real' as float, but unsuffixed C literals promote many
+# expressions to double (software emulation on RV32IMAF). Keep reference data
+# intact and only change literal evaluation for the 2 isolated Pico sources.
+# Host PCM parity: correlation=0.999998, SNR=55.16 dB / 12288 samples.
+# Do not apply -ffast-math globally or alter DOC/mockingboard code.
+set_source_files_properties(
+    ../../../../../reference/ssi263/pico-v1.0.1/ssi263.c
+    ../../../../../reference/ssi263/pico-v1.0.1/ssi263dsp.c
+    PROPERTIES COMPILE_OPTIONS "-O3;-fsingle-precision-constant"
+)
 target_link_libraries(app m)
 sdk_set_main_file(main.c)
 
