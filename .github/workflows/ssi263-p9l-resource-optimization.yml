@@ -19,7 +19,7 @@ on:
       - "tools/generate_ssi263_p8_roms.py"
       - "boards/a2n20v2-Enhanced/hdl/ssi263_p8_glottal.mem"
       - "boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj"
-      - ".github/workflows/ssi263-p9-hardware-speech.yml"
+      - ".github/workflows/ssi263-p9l-resource-optimization.yml"
   workflow_dispatch:
 permissions:
   contents: read
