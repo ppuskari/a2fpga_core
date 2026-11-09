@@ -74,8 +74,9 @@ module ssi263_p8_chip #(
     logic [15:0] field_r[0:5];  // 4-bit code plus 12 fractional bits
     logic [3:0] target_r[0:5];
     logic [15:0] amp_r; // Q12, 0..15; physical VOL glides per phoneme
-    logic [11:0] pitch_glide_r;
-    logic [11:0] pitch_target_r;
+    // SSI R1 pitch transition kept at Q12 for fractional control steps.
+    logic [23:0] pitch_glide_r;
+    logic [23:0] pitch_target_r;
     logic [15:0] elapsed_fc_r;
     logic [15:0] frame_fc_r;
     logic [7:0] closure_level_r;
@@ -141,7 +142,7 @@ module ssi263_p8_chip #(
     // Phoneme length is measured on the independent XCK clock.
     wire [19:0] frame_now_w=FRAME_XCK*(20'd16-{16'd0,r2[7:4]});
     wire [11:0] imm_pitch_w={r2[3],8'b0,r2[2:0]};
-    wire [11:0] combined_pitch_w=pitch_glide_r+imm_pitch_w;
+    wire [11:0] combined_pitch_w=pitch_glide_r[23:12]+imm_pitch_w;
     wire [15:0] desired_pitch_w=(16'd4096-combined_pitch_w)<<3;
     wire [11:0] desired_pitch_target_w=
         (mode_r==2'd3) ? {r1[7:3],6'b0} : {r1,3'b0};
@@ -202,6 +203,34 @@ module ssi263_p8_chip #(
        (duration_frames_w == 3'd3) ?
           (($unsigned({16'd0,amp_step_base_w}) * 32'd21845) >> 16) :
        (amp_step_base_w >> 2);
+    // R1 glide code table from pinned SSI263 params (Q12):
+    // modes 1/2 are immediate; mode 3 applies step/FC tick.
+    function automatic [13:0] glide_mult_q12(input [2:0] code);
+      case (code)
+        3'd0:glide_mult_q12=14'd4096;
+        3'd1:glide_mult_q12=14'd3940;
+        3'd2:glide_mult_q12=14'd5022;
+        3'd3:glide_mult_q12=14'd10084;
+        3'd4:glide_mult_q12=14'd8569;
+        default:glide_mult_q12=14'd10084;
+      endcase
+    endfunction
+    wire [63:0] glide_product_w =
+       $unsigned(glide_mult_q12(r1[2:0])) *
+       $unsigned(filter_period_w) *
+       $unsigned(rate_inv_q12(r2[7:4])) * 64'd32;
+    wire [23:0] glide_step_w=(glide_product_w+64'd8388608)>>24;
+    function automatic [23:0] approach24(
+      input [23:0] value,input [23:0] dest,input [23:0] step
+    );
+      begin
+        if(value<dest)
+           approach24=(dest-value<=step)?dest:value+step;
+        else if(value>dest)
+           approach24=(value-dest<=step)?dest:value-step;
+        else approach24=value;
+      end
+    endfunction
     function automatic [15:0] approach16(
        input [15:0] value,input [15:0] dest,input [15:0] step
     );
@@ -338,8 +367,13 @@ module ssi263_p8_chip #(
                    {target_r[i],12'd0},
                    (i==0)?f1_step_w:((i>=4)?fast_step_w:slow_step_w));
              end
-             pitch_target_r<=desired_pitch_target_w;
-             pitch_glide_r<=approach(pitch_glide_r,pitch_target_r,12'd4);
+             pitch_target_r<={desired_pitch_target_w,12'd0};
+             // Modes 1 and 2 bypass pitch glide in the reference chip;
+             // only mode 3 transitions the R1 upper-pitch field.
+             pitch_glide_r<= (mode_r==2'd3) ?
+                approach24(pitch_glide_r,
+                   {desired_pitch_target_w,12'd0},glide_step_w) :
+                {desired_pitch_target_w,12'd0};
              amp_r<=approach16(amp_r,{r3[3:0],12'd0},amp_step_w);
              lfsr_r<={lfsr_r[14:0],
                        lfsr_r[15]^lfsr_r[13]^lfsr_r[12]^lfsr_r[10]};
