@@ -1,0 +1,43 @@
+name: P10 SSI263 BL616 hybrid feasibility harness
+on:
+  push:
+    branches:
+      - petar/ssi263-p10-hybrid-feasibility-20261109
+    paths:
+      - "boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_spi_bench.*"
+      - "boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/CMakeLists.txt"
+      - "boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/main.c"
+      - "tests/ssi263_hybrid/**"
+      - ".github/workflows/ssi263-p10-hybrid-feasibility.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  benchmark-host-harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile isolated BL616 SPI probe with mock SPI/timer
+        run: |
+          gcc -std=c11 -O2 -Wall -Wextra -Werror \
+            -Itests/ssi263_hybrid/stubs \
+            -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host \
+            tests/ssi263_hybrid/test_spi_bench.c \
+            boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_spi_bench.c \
+            -o /tmp/ssi263_spi_bench_test
+      - name: Verify transfer accounting, 256B integrity and corruption reporting
+        run: /tmp/ssi263_spi_bench_test
+      - name: Verify no benchmark runs in ordinary BL616 startup
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host')
+          m=(root/'main.c').read_text()
+          cm=(root/'CMakeLists.txt').read_text()
+          assert '#ifdef SSI263_HYBRID_SPI_BENCH' in m
+          assert '#include "ssi263_spi_bench.h"' in m
+          assert 'ssi263_spi_bench_run();' in m
+          assert 'ssi263_spi_bench.c' in cm
+          assert '-DSSI263_HYBRID_SPI_BENCH' not in cm
+          print('PASS: benchmark is compile-time opt-in only')
+          PY
