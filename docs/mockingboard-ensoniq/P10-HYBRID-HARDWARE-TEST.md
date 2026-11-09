@@ -6,6 +6,30 @@
 **Gowin fitting and BL616 SDK build are NOT yet hardware-verified.**
 This is a test candidate, **not** the new golden baseline.
 
+## P10-R2 post-route timing: PASS (user Gowin reports, 2026-11-09)
+
+The independently regenerated full-IIgs P10-R2 Gowin project now reports:
+
+- **0 setup violations and 0 hold violations** over 34,217 analyzed
+  paths and 16,310 endpoints.
+- **WNS +2.195 ns** (P10-R1: −0.471 ns).
+- **54 MHz logic Fmax 61.262 MHz** (P10-R1: 52.661 MHz).
+- SPI input constrained at its **actual 20 MHz**:
+  reported within-domain Fmax 247.156 MHz.
+- 27 MHz pixel Fmax 42.680 MHz; no reported routed violations.
+- Routed logic **10,239 / 20,736 = 50%**;
+  5,960 registers; **40 / 46 BSRAM = 87%**;
+  DSP 66%; PLL 2/2.
+
+This confirms P10-R2 is **post-route timing closed within the active
+SDC constraints**. SPI↔logic clock-domain paths remain explicitly
+false-pathed; this report alone cannot establish their protocol safety.
+The 20 MHz SPI and BL616 real-time PCM throughput still require hardware
+validation. Full IIgs Super Hi-Res video mode also needs real-system
+testing. The current bitstream is now eligible for an initial paired
+FPGA + Stage2-only BL616 functional test with rollback available; no
+speech-quality or reliable transport claims are established yet.
+
 ## P10-R2 timing correction — rebuild required
 
 The complete post-route timing report for P10-R1 disclosed exactly one
