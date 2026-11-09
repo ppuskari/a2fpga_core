@@ -1,0 +1,25 @@
+SSI263 P7 die-derived parameter ROM and coefficient generator
+===============================================================
+
+Source of 64 x 9 decoded parameter entries:
+kue-m/mockingboard-pico
+  firmware/vendor/ssi263/ssi263_defaults.h
+  https://github.com/kue-m/mockingboard-pico
+
+Underlying ROM and decoded SSI chip data:
+Tamas Geczy, ssi263-speech, Copyright (c) 2026, MIT
+  https://github.com/lprazdnik/ssi263-speech
+  https://github.com/tgeczy/ssi263-speech
+  src/data/rom_bits.csv and src/ssi263/rom.py
+
+The original ROM bit cells were decoded from silicon photographs
+hosted by Visual6502.org (Greg James; stitched by Christian Sattler).
+
+Our tools/generate_ssi263_die_formants.py uses the decoded entries to
+derive new fixed-point 16 kHz filter coefficients. That new Verilog
+filter implementation is experimental and is NOT identical to the
+upstream software's calibrated C99 switched-capacitor synth.
+
+This branch deliberately uses no MAME SC-01 glottal waveform and
+imports none of the upstream firmware or commercial device voices.
+Keep this NOTICE and LICENSE with distributions of the relevant code.
