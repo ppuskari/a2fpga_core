@@ -15,7 +15,7 @@ No proof yet that the optimized version fits; run Gowin synthesis.
 
 `hdl/mockingboard/ssi263_p8_chip.sv`:
 - Replaced **signed divided by 15** in glottal excitation with
-  Q15 reciprocal `2185 >> 15` (relative gain deviation ~0.006%).
+  Q15 reciprocal `2185 >> 15` (relative gain deviation ~0.021%).
 - Replaced **signed 64-bit divide by 491520** in fricative source with
   `839 >> 20` Q20 reciprocal (deviation <0.08%).
 - Merged R3 volume and stop-closure control into a **12-bit Q12**
@@ -35,6 +35,11 @@ runs isolated voice, noise, silence, early A/R and full 50 kHz
 C-vs-RTL diagnostic comparisons. Quantized arithmetic will introduce
 small systematic differences, which must be measured before hardware
 audio acceptance. Do not claim exact C waveform parity.
+
+GitHub Actions P9L isolated regressions **passed** (run 42626494600):
+P9L peak -2.88 dBFS, RMS -17.55 dBFS, 0% clipping,
+correlation 0.5975 vs P9 0.598; acoustic behavior is effectively unchanged
+within the current short test sequence. Strict C-model fidelity does NOT pass.
 
 Gowin P&R and timing **have not been verified**. Only the user-side
 Gowin mapper can confirm the new resource count.
