@@ -13,6 +13,7 @@ on:
       - "hdl/mockingboard/ssi263_slot.sv"
       - "boards/a2n20v2-Enhanced/hdl/top.sv"
       - "tests/mb_ssi263/tb_ssi263_p8b_trace.sv"
+      - "tests/mb_ssi263/tb_ssi263_p9_early_ar.sv"
       - "reference/ssi263/p8b_compare_trace.c"
       - "tools/compare_ssi263_p8b_audio.py"
       - "tools/generate_ssi263_p8_roms.py"
@@ -55,6 +56,10 @@ jobs:
           (cd boards/a2n20v2-Enhanced && vvp /tmp/p8b_voiced.vvp)
           iverilog -g2012 -s tb_ssi263_p8b_trace -Ptb_ssi263_p8b_trace.VOICE_ENABLE=0 -o /tmp/p8b_noise.vvp hdl/mockingboard/ssi263_p9_output_fir.sv hdl/mockingboard/ssi263_p8_chip.sv tests/mb_ssi263/tb_ssi263_p8b_trace.sv
           (cd boards/a2n20v2-Enhanced && vvp /tmp/p8b_noise.vvp)
+      - name: Check physical SSI stop early A/R and buffered successor writes
+        run: |
+          iverilog -g2012 -s tb_ssi263_p9_early_ar -o /tmp/p9_early.vvp hdl/mockingboard/ssi263_p9_output_fir.sv hdl/mockingboard/ssi263_p8_chip.sv tests/mb_ssi263/tb_ssi263_p9_early_ar.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/p9_early.vvp)
       - name: Compute objective PCM comparison without claiming fidelity
         run: |
           python3 tools/compare_ssi263_p8b_audio.py /tmp/p8b_c.pcm /tmp/p8b_rtl.pcm --report /tmp/p8b_comparison.json
