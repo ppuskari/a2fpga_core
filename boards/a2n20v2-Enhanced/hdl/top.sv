@@ -1229,6 +1229,11 @@ wire [7:0] doc_128k_status_w;
     wire [7:0] rgb_g_w;
     wire [7:0] rgb_b_w;
 
+    // The disabled SuperSprite's F18A can otherwise survive synthesis
+    // through its scanline output, even with ENABLE=0.  In the IIe-only
+    // experiment do not elaborate this large VDP/PSG/GPU subsystem.
+    // ENABLE=1 restores the exact original instance for other builds.
+    generate if (SUPERSPRITE_ENABLE) begin : gen_supersprite
     SuperSprite #(
         .ENABLE(SUPERSPRITE_ENABLE),
         .ID(SUPERSPRITE_ID),
@@ -1264,6 +1269,20 @@ wire [7:0] doc_128k_status_w;
 
         .ssp_audio_o(ssp_audio_w)
     );
+
+    end else begin : gen_no_supersprite
+        assign ssp_d_w = 8'h00;
+        assign ssp_rd = 1'b0;
+        assign vdp_irq_n = 1'b1;
+        assign ssp_audio_w = 10'd0;
+        assign vdp_ext_video = 1'b0;
+        assign vdp_unlocked_w = 1'b0;
+        assign vdp_gmode_w = 4'd0;
+        assign scanlines_w = SCANLINES_ENABLE | sw_scanlines_w;
+        assign rgb_r_w = ssp_apple_r_w;
+        assign rgb_g_w = ssp_apple_g_w;
+        assign rgb_b_w = ssp_apple_b_w;
+    end endgenerate
 
     // Mockingboard
 
