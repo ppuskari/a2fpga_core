@@ -42,7 +42,10 @@ module ssi263_p8_chip #(
     logic [15:0] pitch_xck_r;
     logic [15:0] pitch_div_r;
     logic pulse_pending_r;
-    logic [3:0] glottal_age_r;
+    logic [5:0] glottal_age_r;
+    // Full 36-filter-tick glottal impulse response from pinned Pico C.
+    logic signed [15:0] glottal_rom[0:63];
+    initial $readmemh("hdl/ssi263_p8_glottal.mem",glottal_rom);
     logic [15:0] lfsr_r;
     logic signed [15:0] noise_prev_r;
     // Symmetric finite-impulse-response output anti-image filter.
@@ -174,22 +177,7 @@ module ssi263_p8_chip #(
     wire signed [15:0] noise_now_w=
         $signed({8'b0,lfsr_r[7:0]})-16'sd128;
     wire signed [15:0] shaped_noise_w=noise_now_w-noise_prev_r;
-    wire signed [15:0] glottal_w=
-        (glottal_age_r==4'd0) ? 16'sd24576 :
-        (glottal_age_r==4'd1) ? 16'sd21 :
-        (glottal_age_r==4'd2) ? 16'sd80 :
-        (glottal_age_r==4'd3) ? 16'sd176 :
-        (glottal_age_r==4'd4) ? 16'sd300 :
-        (glottal_age_r==4'd5) ? 16'sd438 :
-        (glottal_age_r==4'd6) ? 16'sd584 :
-        (glottal_age_r==4'd7) ? 16'sd730 :
-        (glottal_age_r==4'd8) ? 16'sd844 :
-        (glottal_age_r==4'd9) ? 16'sd941 :
-        (glottal_age_r==4'd10) ? 16'sd1017 :
-        (glottal_age_r==4'd11) ? 16'sd1022 :
-        (glottal_age_r==4'd12) ? 16'sd943 :
-        (glottal_age_r==4'd13) ? 16'sd745 :
-        (glottal_age_r==4'd14) ? 16'sd391 : 16'sd0;
+    wire signed [15:0] glottal_w=glottal_rom[glottal_age_r];
     wire [15:0] amplitude_w={8'd0,amp_r};
     // Both VA and R3 amplitude are encoded 0..15. Normalize by
     // 15*15=225, not 4096: the old >>>12 discarded ~25 dB and
@@ -217,7 +205,7 @@ module ssi263_p8_chip #(
           frame_xck_r<=0; filter_xck_r<=0;
           fc_div_r<=0; fc_start_r<=0;
           pitch_xck_r<=0; pitch_div_r<=0; pulse_pending_r<=0;
-          glottal_age_r<=4'hf; lfsr_r<=16'hace1;
+          glottal_age_r<=6'd63; lfsr_r<=16'hace1;
           noise_prev_r<=0;
           out_count_r<=0; held_pcm_r<=0; pcm_o<=0;
           fir0_r<=0;fir1_r<=0;fir2_r<=0;fir3_r<=0;
@@ -295,7 +283,8 @@ module ssi263_p8_chip #(
              if(pulse_pending_r) begin
                  glottal_age_r<=0;
                  pulse_pending_r<=0;
-             end else if(glottal_age_r<15) glottal_age_r<=glottal_age_r+1'b1;
+             end else if(glottal_age_r<6'd63)
+                glottal_age_r<=glottal_age_r+1'b1;
              if(!closure_clear_w) begin
                 if(closure_level_r>4) closure_level_r<=closure_level_r-4;
                 else closure_level_r<=0;
@@ -341,7 +330,7 @@ module ssi263_p8_chip #(
              pcm_o<=0;held_pcm_r<=0;
              fir0_r<=0;fir1_r<=0;fir2_r<=0;fir3_r<=0;
              hp_x_r<=0;hp_y_r<=0;
-             stage_r<=0;pitch_div_r<=0;glottal_age_r<=4'hf;
+             stage_r<=0;pitch_div_r<=0;glottal_age_r<=6'd63;
           end
        end
     end
