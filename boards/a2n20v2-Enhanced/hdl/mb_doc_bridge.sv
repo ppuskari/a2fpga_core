@@ -81,6 +81,11 @@ module mb_doc_bridge #(
     logic [7:0] cmd_addr_r, cmd_data_r;
     logic [15:0] voice_freq_r;
     logic [7:0] voice_volume_r;
+    // P10-R2: stage piano amplitude decision while the iterative DOC
+    // frequency divider works. All inputs are sampled at VOICE_BEGIN
+    // so no changes to the piano articulation, YM envelope, or scan timing.
+    logic [7:0] voice_level_base_r, voice_level_decay_r;
+    logic voice_level_direct_r, voice_level_active_r;
     logic voice_tone_r;
     logic [11:0] prev_period_r [0:5];
     logic [3:0] prev_amp_r [0:5];
@@ -322,6 +327,10 @@ module mb_doc_bridge #(
             cmd_data_r       <= 8'h00;
             voice_freq_r     <= 16'h0000;
             voice_volume_r   <= 8'h00;
+            voice_level_base_r <= 8'd0;
+            voice_level_decay_r <= 8'd0;
+            voice_level_direct_r <= 1'b0;
+            voice_level_active_r <= 1'b0;
             voice_tone_r     <= 1'b0;
             note_restart_r    <= 1'b0;
             for (vi=0;vi<6;vi=vi+1) begin
@@ -408,14 +417,17 @@ module mb_doc_bridge #(
                     // share the logarithmic law; RESET/tone-off force mute.
                     // Do not reshape the keyboard's real AY R13 envelope.
                     // Fixed-volume MCS notes get a mild one-shot piano decay.
-                    voice_volume_r <= selected_note_active_w ?
-                        ((selected_amp_w[4] || !PIANO_ENVELOPE_ENABLE) ?
-                            ym_level(selected_amp_w[4] ? selected_env_level_w :
-                                     {selected_amp_w[3:0],selected_amp_w[3]}) :
-                            8'((({8'b0,ym_level({selected_amp_w[3:0],selected_amp_w[3]})}
-                                * {8'b0,(note_restart_w ? 8'hFF : piano_env_r[voice_r])})
-                                + 16'd255) >> 8)) :
-                        8'd0;
+                    // Capture exactly the original VOICE_BEGIN values. The
+                    // previous combinational path selected AY registers,
+                    // classified note restart, and multiplied in one cycle.
+                    voice_level_base_r <= ym_level(
+                        selected_amp_w[4] ? selected_env_level_w :
+                        {selected_amp_w[3:0],selected_amp_w[3]});
+                    voice_level_decay_r <= note_restart_w ? 8'hFF :
+                                           piano_env_r[voice_r];
+                    voice_level_direct_r <= selected_amp_w[4] ||
+                                            !PIANO_ENVELOPE_ENABLE;
+                    voice_level_active_r <= selected_note_active_w;
                     divisor_r <= (selected_period_w == 12'd0) ?
                                   12'd1 : selected_period_w;
                     dividend_r <= 17'd93623;
@@ -426,6 +438,14 @@ module mb_doc_bridge #(
                 end
 
                 DIVIDE: begin
+                    // The first of 17 divider cycles is free for the
+                    // registered 8x8 volume operation; volume isn't consumed
+                    // until VOICE_COMMAND's later VOL write.
+                    if (division_count_r == 5'd17)
+                        voice_volume_r <= !voice_level_active_r ? 8'd0 :
+                            voice_level_direct_r ? voice_level_base_r :
+                            8'((({8'b0,voice_level_base_r} *
+                                 {8'b0,voice_level_decay_r}) + 16'd255) >> 8);
                     remainder_r <= subtract_valid_w ?
                                    subtract_w : shifted_remainder_w;
                     dividend_r <= {dividend_r[15:0], 1'b0};
