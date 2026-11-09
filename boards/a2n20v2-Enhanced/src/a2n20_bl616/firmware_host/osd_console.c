@@ -11,6 +11,7 @@
 #include "usb_osal.h"
 #include "fpga_spi.h"
 #include "fpga_screen.h"
+#include "bflb_mtimer.h"
 #include "osd_console.h"
 #include "telnetd.h"
 
@@ -24,6 +25,7 @@ static char  s_lines[CON_ROWS][CON_COLS + 1];
 static int   s_count;
 static bool  s_visible;
 static bool  s_lockout;   /* menu owns the screen; buffer only */
+static uint32_t s_last_visible_activity_us;  /* boot console idle timeout */
 static usb_osal_mutex_t s_lock;
 
 /* The very first osd_log()/show() runs single-threaded at boot (the startup
@@ -73,6 +75,7 @@ void osd_log(const char *fmt, ...)
     /* Only repaint / assert the takeover when the console is the active view.
      * When hidden, we just buffer the line — the Apple II keeps the screen. */
     if (s_visible) {
+        s_last_visible_activity_us = (uint32_t)bflb_mtimer_get_time_us();
         repaint();
         fpga_spi_reg_write(REG_TEXT_MODE, 1);
         fpga_spi_reg_write(REG_VIDEO_ENABLE, 1);
@@ -90,6 +93,7 @@ void osd_console_show(void)
         return;
     }
     s_visible = true;
+    s_last_visible_activity_us = (uint32_t)bflb_mtimer_get_time_us();
     repaint();
     fpga_spi_reg_write(REG_TEXT_MODE, 1);
     fpga_spi_reg_write(REG_VIDEO_ENABLE, 1);
@@ -121,6 +125,21 @@ void osd_console_hide(void)
 
 /* Copy the current backlog for a newly connected remote console. Returns
  * the number of lines copied. */
+/* Periodically called from the menu input thread, even if no USB controller
+ * is connected. Keep the log buffer intact so it remains available on demand. */
+void osd_console_hide_if_idle(uint32_t timeout_us)
+{
+    ensure_lock();
+    usb_osal_mutex_take(s_lock);
+    uint32_t now = (uint32_t)bflb_mtimer_get_time_us();
+    if (s_visible && !s_lockout &&
+        (uint32_t)(now - s_last_visible_activity_us) >= timeout_us) {
+        s_visible = false;
+        fpga_spi_reg_write(REG_VIDEO_ENABLE, 0);
+    }
+    usb_osal_mutex_give(s_lock);
+}
+
 int osd_console_snapshot(char dst[][41], int max)
 {
     ensure_lock();
