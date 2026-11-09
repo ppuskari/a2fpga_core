@@ -6,6 +6,37 @@
 **Gowin fitting and BL616 SDK build are NOT yet hardware-verified.**
 This is a test candidate, **not** the new golden baseline.
 
+## P10-R2 timing correction — rebuild required
+
+The complete post-route timing report for P10-R1 disclosed exactly one
+setup-violated endpoint (no hold violations) in `mb_doc_bridge.sv`:
+
+- **WNS −0.471 ns; routed 54 MHz Fmax 52.661 MHz.**
+- From `bridge/voice_r` to `bridge/voice_volume_r`.
+- AY register/zone/note-restart combinational selection drove an
+  8×8 envelope volume multiply and final register in the same cycle.
+- The logic **does not involve SSI263 hybrid audio or the new bridge**.
+
+P10-R2 captures the selected YM level, the note-restart-conditioned
+8-bit decay, and active/direct mode together in `VOICE_BEGIN`, then
+computes the *same rounded product* in the first `DIVIDE` cycle.
+The existing frequency divider still has 17 cycles before DOC command
+writes, so output order and note-scanning latency should remain
+unchanged. The original `piano_env_r` pre-update value is captured,
+preserving nonblocking semantics and keyboard envelopes.
+
+The SDC now constrains `spi_sclk` at **20 MHz** (50 ns), matching
+`firmware/fpga_spi.c`, instead of its obsolete **4 MHz** (250 ns).
+The SPI/logic CDC exclusions remain, so those crossings still need
+specific review. Neither simulation nor SDC adjustments replace
+actual Gowin post-route timing verification.
+
+**Required:** `git pull --ff-only`, repeat Gowin synthesis, place,
+route and review the new `.tr.html`. The original P10-R1 bitstream
+is a **known timing-failing candidate** and should not be treated as
+timing-closed. The already compiled MCU binary has no source change
+from this R2 edit and need not be recompiled.
+
 ## User-verified Windows builds — 2026-11-09
 
 The first native Windows builds have now succeeded, after fixing the
