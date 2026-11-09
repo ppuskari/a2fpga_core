@@ -431,11 +431,44 @@ module ssi263_p8_chip #(
                 if(remain_xck_r>1) begin
                    remain_xck_r<=remain_xck_r-1'b1;
                    elapsed_xck_r<=elapsed_xck_r+1'b1;
-                   if(release_allowed_r && remain_xck_r<=release_window_xck_r)
+                   if(release_allowed_r && mode_r!=0 && !early_req_r &&
+                      remain_xck_r<=early_window_w &&
+                      remain_xck_r>release_window_xck_r) begin
+                      request_r<=1;early_req_r<=1;
+                   end
+                   if(release_allowed_r && pending_open_w &&
+                      remain_xck_r<=release_window_xck_r)
                        release_open_r<=1;
                 end
                 else if(remain_xck_r==1) begin
-                   remain_xck_r<=0;request_r<=mode_r!=0;
+                   if(pending_mask_r[0]) begin
+                      // Commit queued phoneme on the *original* stop end.
+                      r0<=pending_r0_r;
+                      if(pending_mask_r[1])r1<=pending_r1_r;
+                      if(pending_mask_r[2])r2<=pending_r2_r;
+                      if(pending_mask_r[3])r3<=pending_r3_r;
+                      if(pending_mask_r[4])r4<=pending_r4_r;
+                      remain_xck_r<=pending_duration_w;
+                      duration_xck_r<=pending_duration_w;
+                      elapsed_xck_r<=0;
+                      closing_r<=!pending_die_w[2];
+                      release_allowed_r<=!pending_die_w[2] && pending_die_w[1];
+                      close_delay_xck_r<=
+                         (amp_r<16'd2048 || !pending_die_w[1]) ?
+                         20'd0 : pending_duration_w>>2;
+                      release_window_xck_r<=
+                         (pending_duration_w>>2)+(pending_duration_w>>4);
+                      release_open_r<=0;early_req_r<=0;
+                      pending_mask_r<=0;request_r<=0;
+                   end else begin
+                      remain_xck_r<=0;request_r<=mode_r!=0;
+                      early_req_r<=0;
+                      if(pending_mask_r[1])r1<=pending_r1_r;
+                      if(pending_mask_r[2])r2<=pending_r2_r;
+                      if(pending_mask_r[3])r3<=pending_r3_r;
+                      if(pending_mask_r[4])r4<=pending_r4_r;
+                      pending_mask_r<=0;
+                   end
                 end
                 if(pitch_div_r<=1) begin
                    pitch_div_r<=desired_pitch_w;
@@ -483,10 +516,11 @@ module ssi263_p8_chip #(
              // approximately 1.25 frames before its original end.
              if(closing_r && elapsed_xck_r>=close_delay_xck_r &&
                 !release_open_r) begin
-                if(closure_level_r>8'd8) closure_level_r<=closure_level_r-8'd8;
+                if(closure_level_r>{2'b0,(filter_period_w>>4)})
+                   closure_level_r<=closure_level_r-(filter_period_w>>4);
                 else closure_level_r<=0;
-             end else if(closure_level_r<8'd247)
-                closure_level_r<=closure_level_r+8'd8;
+             end else if(closure_level_r<8'd255-(filter_period_w>>4))
+                closure_level_r<=closure_level_r+(filter_period_w>>4);
              else closure_level_r<=8'hff;
              // start the filter-clock sample's five stage microsequence.
              tract_r<=start_drive_w;
