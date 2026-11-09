@@ -978,6 +978,11 @@ void usbh_msc_run(struct usbh_msc *msc_class)
     usbh_msc_scsi_init(msc_class);
     g_msc_class = msc_class;
     osd_log("DISK II: USB STORAGE CONNECTED");
+    osd_log("USB MSC: %lu BLOCKS X %lu BYTES",
+            (unsigned long)msc_class->blocknum,
+            (unsigned long)msc_class->blocksize);
+    if (!msc_class->blocknum || !msc_class->blocksize)
+        osd_log("USB MSC: SCSI GEOMETRY UNAVAILABLE");
     disk_request_remount();
 }
 
