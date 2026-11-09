@@ -1,0 +1,60 @@
+name: P10-R4 Enhanced MCU baseline and hybrid integration
+on:
+  push:
+    branches:
+      - petar/ssi263-p10r4-enhanced-mcu-sync-20261109
+    paths:
+      - "boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/**"
+      - "tests/ssi263_hybrid/**"
+      - ".github/workflows/ssi263-p10r4-enhanced-mcu-sync.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  enhanced-mcu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify synchronized Enhanced HID, 15s timeout, boot/reset, Pico integration
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          base=Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host")
+          f=lambda n:(base/n).read_text()
+          main=f("main.c");menu=f("menu.c");disk=f("disk.c")
+          assert "#include \"usbh_hidinput.h\"" in main
+          assert "usbh_hidinput_buttons()" in main
+          assert "usb_kbd_menu" not in main
+          assert "usbh_hidinput.c" in f("CMakeLists.txt")
+          assert not (base/"usb_kbd_menu.c").exists()
+          assert "set(CONFIG_CHERRYUSB_HOST_HID 1)" in f("proj.conf")
+          assert "HID_PROTOCOL_KEYBOARD" in f("usbh_hidinput.c")
+          assert "map_consumer_usage" in f("usbh_hidinput.c")
+          assert "MCU_SCREEN_TIMEOUT_US 15000000u" in menu
+          assert "osd_console_hide_if_idle" in menu and "osd_console_hide_if_idle" in f("osd_console.c")
+          assert "schedule_console_hide(15000000u)" in disk
+          assert "schedule_console_hide(1500000u)" in disk
+          assert "g_slots_applied_early" in main and "g_slots_applied_early" in disk
+          assert "bt_mark(BT_FPGA_READY)" in main
+          assert "bt_mark(BT_RST_RELEASED)" in disk
+          assert "boot_timeline.c" in f("CMakeLists.txt")
+          assert "ssi263_hybrid.c" in f("CMakeLists.txt")
+          assert "ssi263_hybrid_task" in main
+          assert "usb_osal_thread_create(\"ssi263\", 6144, CONFIG_USBHOST_PSC_PRIO," in main
+          assert "USB MSC: SCSI GEOMETRY UNAVAILABLE" in main
+          print("PASS: latest Enhanced HID keyboard+remote, idle handoff, early slot/reset, boot timeline, USB diagnostics, low-priority hybrid speech")
+          PY
+      - name: Run original Pico reference C synthesis smoke test
+        run: |
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -Ireference/ssi263/pico-v1.0.1 \
+            tests/ssi263_hybrid/test_pico_model.c \
+            reference/ssi263/pico-v1.0.1/ssi263.c \
+            reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/p10r4-reference
+          /tmp/p10r4-reference
+      - name: Compile hybrid MCU speech task against local FreeRTOS/SPI stub contract
+        run: |
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -fsyntax-only \
+            -Itests/ssi263_hybrid/stubs \
+            -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host \
+            -Ireference/ssi263/pico-v1.0.1 \
+            boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c
