@@ -1,0 +1,45 @@
+name: P10-R3 BL616 USB HID menu and timeout
+on:
+  push:
+    branches:
+      - petar/ssi263-p10r3-usb-host-ui-20261109
+    paths:
+      - "boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/**"
+      - "tests/ssi263_hybrid/**"
+      - ".github/workflows/ssi263-p10r3-usb-host-ui.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test USB keyboard handler against CherryUSB 1.5.3 API stubs
+        run: |
+          gcc -std=c11 -O2 -Wall -Wextra -Werror \
+            -Itests/ssi263_hybrid/stubs \
+            -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host \
+            tests/ssi263_hybrid/test_usb_kbd_menu.c \
+            boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/usb_kbd_menu.c \
+            -o /tmp/p10r3-kbd-test
+          /tmp/p10r3-kbd-test
+      - name: Verify 15s fallback, HID configured, XInput still working and SCSI debug
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host')
+          d=(p/'disk.c').read_text()
+          m=(p/'main.c').read_text()
+          cm=(p/'CMakeLists.txt').read_text()
+          cfg=(p/'proj.conf').read_text()
+          assert 'schedule_console_hide(15000000u);' in d
+          assert 'schedule_console_hide(1500000u);' in d
+          assert 'USB MSC: SCSI GEOMETRY UNAVAILABLE' in m
+          assert m.count('usb_kbd_menu_poll();')==2
+          assert 'menu_input(g_btn_latest)' in m
+          assert 'usb_kbd_menu.c' in cm
+          assert 'set(CONFIG_CHERRYUSB_HOST_HID 1)' in cfg
+          assert 'set(CONFIG_CHERRYUSB_HOST_MSC 1)' in cfg
+          print('PASS: 15s failure timeout; USB keyboard and XInput coexist; disk metrics')
+          PY
