@@ -4,8 +4,10 @@
  * New FPGA XFER space 5: 8B host write event
  *  [addr,data,seq16LE,xck32LE], auto-pop after last byte.
  * XFER space 4 read @0x800000: 24B transport status.
- * XFER space 4 write @0: mono PCM16LE, 44.1 kHz.
+ * XFER space 4 write @0: mono PCM16LE, 44.1/22.05/11.025 kHz.
  * XFER space 4 write @0x800000: PCM ring reset.
+ * XFER space 4 write @0x800001: rate code 0/1/2 (new FPGA only).
+ * FPGA holds each low-rate source sample for 1/2/4 HDMI audio ticks.
  *
  * Audio latency is ~12-46 ms depending on occupancy; SSI A/R remains
  * entirely FPGA-owned. Model renders future PCM on each service turn.
@@ -27,10 +29,17 @@
 #define SSI_PCM_SPACE      4u
 #define SSI_EVENTS_SPACE   5u
 #define SSI_STATUS_ADDR    0x800000u
+#define SSI_RATE_ADDR      0x800001u
+#ifndef SSI263_PCM_RATE_DIV
+#define SSI263_PCM_RATE_DIV 2u /* 1=44.1k; 2=22.05k default; 4=11.025k */
+#endif
+#if SSI263_PCM_RATE_DIV != 1 && SSI263_PCM_RATE_DIV != 2 && SSI263_PCM_RATE_DIV != 4
+#error "SSI263_PCM_RATE_DIV must be 1, 2, or 4"
+#endif
 #define BLOCK_SAMPLES      128u
 #define BLOCK_BYTES        (2u*BLOCK_SAMPLES)
 #define EVENTS_PER_BURST   12u
-#define STATUS_LEN         24u
+#define STATUS_LEN         26u /* legacy 24 bytes plus R6 capability/rate */
 #define TARGET_BUFFER      1024u
 #define XCK_HZ             1020000.0f
 
@@ -63,6 +72,29 @@ static void ring_reset(void)
     fpga_spi_xfer_write(SSI_PCM_SPACE,SSI_STATUS_ADDR,&one,1);
 }
 
+/* Old P10 FPGA returns 0x31 for the optional capability byte and must
+ * continue receiving 44.1 kHz PCM. New FPGA: require write/readback ACK
+ * before creating the software synthesizer at the lower rate. */
+static unsigned configure_pcm_rate(void)
+{
+    if(status_buf[24]!=0xA6u)return 1u;
+    const uint8_t wanted=(SSI263_PCM_RATE_DIV==4u)?2u:
+                         (SSI263_PCM_RATE_DIV==2u)?1u:0u;
+    for(unsigned attempt=0;attempt<3u;attempt++) {
+        fpga_spi_xfer_write(SSI_PCM_SPACE,SSI_RATE_ADDR,&wanted,1u);
+        if(read_status() && status_buf[24]==0xA6u &&
+           status_buf[25]==wanted)return SSI263_PCM_RATE_DIV;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    /* A mismatched source and HDMI divider would corrupt timing. Explicitly
+     * restore 44.1k and insist on an ACK; otherwise refuse speech startup. */
+    const uint8_t fallback=0;
+    fpga_spi_xfer_write(SSI_PCM_SPACE,SSI_RATE_ADDR,&fallback,1u);
+    if(read_status() && status_buf[24]==0xA6u && status_buf[25]==0u)
+        return 1u;
+    return 0u;
+}
+
 /* Log a mismatch without pretending the SSI model is synchronized.
  * If a FIFO overflow occurs the CPU event stream is no longer complete;
  * power-cycle/restart is required for speech accuracy. */
@@ -72,7 +104,17 @@ void ssi263_hybrid_task(void *arg)
     ssi263_params params;
     ssi263_default_params(&params);
     params.xck_hz=XCK_HZ;
-    ssi263 *chip=ssi263_new(&params,ssi263_default_rom(),44100.0f);
+    while(!read_status())vTaskDelay(pdMS_TO_TICKS(100));
+    const unsigned pcm_rate_div=configure_pcm_rate();
+    if(!pcm_rate_div) {
+        osd_log("P10 SSI263: RATE MODE ACK FAILED");
+        vTaskDelete(NULL);
+        return;
+    }
+    const unsigned pcm_hz=44100u/pcm_rate_div;
+    const uint32_t block_budget_us=(uint32_t)
+          ((uint64_t)BLOCK_SAMPLES*1000000u*pcm_rate_div/44100u);
+    ssi263 *chip=ssi263_new(&params,ssi263_default_rom(),(real)pcm_hz);
     if(!chip) {
         osd_log("P10 SSI263: MODEL INIT FAILED");
         vTaskDelete(NULL);
@@ -87,9 +129,9 @@ void ssi263_hybrid_task(void *arg)
     uint32_t over_budget_blocks=0,prev_over_budget=0;
     uint32_t report_interval_ms=10000u;
 
-    while(!read_status())vTaskDelay(pdMS_TO_TICKS(100));
     ring_reset();
     osd_log("P10 SSI263: Pico C hybrid online");
+    osd_log("P10 SOURCE=%uHZ DIV=%u",pcm_hz,pcm_rate_div);
     for(;;) {
         if(!read_status()) {
             active=false;seq_valid=false;fault=true;
@@ -165,10 +207,11 @@ void ssi263_hybrid_task(void *arg)
             if(spi_us>peak_spi_us)peak_spi_us=spi_us;
             ++total_blocks;
             rendered_samples+=BLOCK_SAMPLES;
-            /* 128 / 44100 = 2.902 ms per block. Preserve the original
-             * 2.5 ms SLOW threshold, and separately count true overruns. */
-            if(total_us>2500u)++slow_blocks;
-            if(total_us>2902u)++over_budget_blocks;
+            /* 128 samples: 2.902/5.805/11.610 ms at div 1/2/4.
+             * Scale the prior 2.5 ms guard with the source rate so SLOW
+             * means comparable headroom across all three modes. */
+            if(total_us>2500u*pcm_rate_div)++slow_blocks;
+            if(total_us>block_budget_us)++over_budget_blocks;
         } else {
             // Yield voluntarily even under high-priority audio service;
             // leave USB/SD/virtual-disk network firmware responsive.
