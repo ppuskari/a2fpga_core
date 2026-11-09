@@ -26,6 +26,10 @@ jobs:
         run: |
           iverilog -g2012 -Wall -s tb_ssi263_hybrid_bridge -o /tmp/p10bridge.vvp boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv tests/ssi263_hybrid/tb_ssi263_hybrid_bridge.sv
           vvp /tmp/p10bridge.vvp
+      - name: Verify native Apple SSI register/A-R path with PCM offloaded
+        run: |
+          iverilog -g2012 -s tb_ssi263_p10_slot -o /tmp/p10slot.vvp hdl/mockingboard/ssi263_control.sv hdl/mockingboard/ssi263_slot.sv tests/ssi263_hybrid/tb_ssi263_p10_slot.sv
+          vvp /tmp/p10slot.vvp
       - name: Lint hybrid FIFO implementation
         run: |
           verilator --lint-only --timing -Wno-fatal --top-module ssi263_hybrid_bridge boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv
