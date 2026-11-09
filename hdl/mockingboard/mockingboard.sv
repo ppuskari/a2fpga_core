@@ -21,7 +21,8 @@ module Mockingboard #(
     parameter bit [7:0] ID = 2,
     parameter bit ENABLE = 1'b1,
     parameter bit ENABLE_SSI263 = 1'b0,
-    parameter integer SSI263_VOICE_PROFILE = 1
+    parameter integer SSI263_VOICE_PROFILE = 1,
+    parameter bit SSI263_FULL_CHIP_ENABLE = 1'b0
 ) (
     a2bus_if.slave a2bus_if,
     slot_if.card slot_if,
@@ -73,7 +74,8 @@ module Mockingboard #(
     // only when the Apple bus controller asserts data_in_strobe.
     wire ssi_selected_w, ssi_read_w, ssi_ca1_w;
     wire [7:0] ssi_data_w;
-    ssi263_slot #(.VOICE_PROFILE(SSI263_VOICE_PROFILE)) speech_socket (
+    ssi263_slot #(.VOICE_PROFILE(SSI263_VOICE_PROFILE),
+                  .FULL_CHIP_ENABLE(SSI263_FULL_CHIP_ENABLE)) speech_socket (
         .clk_i(a2bus_if.clk_logic),
         .reset_n_i(a2bus_if.system_reset_n),
         .enabled_i(card_enable && ENABLE_SSI263),
