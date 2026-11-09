@@ -18,7 +18,9 @@ module tb_ssi263_demo;
     logic ever_spoke=0;
 
     // Exercise the new die-derived profile through the actual SSI slot path.
-    ssi263_slot #(.VOICE_PROFILE(2)) dut (
+    // The bench's XCK is deliberately accelerated; accelerate the
+    // audio divider too so a phoneme receives realistic audio ticks.
+    ssi263_slot #(.VOICE_PROFILE(2), .VOICE_CLK_HZ(64000)) dut (
         .clk_i(clk), .reset_n_i(reset_n), .enabled_i(en),
         .card_io_sel_i(sel), .xck_tick_i(xck), .data_in_strobe_i(data_strobe), .rw_n_i(rw_n),
         .card_addr_i(addr), .data_i(data),
