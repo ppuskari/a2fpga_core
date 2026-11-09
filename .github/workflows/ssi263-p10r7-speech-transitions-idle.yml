@@ -1,0 +1,42 @@
+name: P10 R7 SSI speech edges and idle
+on:
+  push:
+    branches:
+      - petar/ssi263-p10r7-speech-transitions-idle-20261109
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run 16-bit PCM onset regression
+        run: |
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host tests/ssi263_hybrid/test_ssi263_audio_edges.c -o /tmp/r7edges
+          /tmp/r7edges
+      - name: Compile R7 MCU renderer using FreeRTOS and SPI test headers
+        run: |
+          for div in 1 2 4; do
+            gcc -std=c99 -O2 -Wall -Wextra -Werror -fsyntax-only -DSSI263_PCM_RATE_DIV=$div -Itests/ssi263_hybrid/stubs -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Ireference/ssi263/pico-v1.0.1 boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c
+          done
+      - name: Guard Enhanced USB host and rate/FPGA compatibility
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          r=Path("boards/a2n20v2-Enhanced")
+          c=(r/"src/a2n20_bl616/firmware_host/ssi263_hybrid.c").read_text()
+          usb=(r/"src/a2n20_bl616/firmware_host/usb_config.h").read_text()
+          main=(r/"src/a2n20_bl616/firmware_host/main.c").read_text()
+          assert "#define SSI263_PCM_RATE_DIV 2u" in c
+          assert "ssi263_audio_edges_sample(&edges" in c
+          assert "ssi263_skip(chip," in c and "ssi263_request(chip)" in c
+          assert "all_zero && ssi263_request(chip)" in c
+          assert "SSI263_R7_NOISE_PERCENT 100u" in c
+          assert "CONFIG_USBHOST_MAX_EHPORTS          8" in usb
+          assert "CONFIG_USBHOST_REQUEST_BUFFER_LEN 1024" in usb
+          assert "usbh_hidinput_buttons()" in main
+          assert (r/"hdl/ssi263_hybrid_bridge.sv").exists()
+          assert "ssi263_hybrid_bridge" in (r/"hdl/top.sv").read_text()
+          print("PASS R7 MCU-only Enhanced USB, original FPGA 22k transport, idle guard and edge controls")
+          PY
