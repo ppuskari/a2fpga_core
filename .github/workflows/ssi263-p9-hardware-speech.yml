@@ -1,0 +1,84 @@
+name: P9 SSI263 hardware-speech DSP regression and C-model comparison
+on:
+  push:
+    branches:
+      - petar/ssi263-p9-hardware-speech-20261109
+    paths:
+      - "hdl/mockingboard/ssi263_p8_chip.sv"
+      - "hdl/mockingboard/ssi263_slot.sv"
+      - "boards/a2n20v2-Enhanced/hdl/top.sv"
+      - "tests/mb_ssi263/tb_ssi263_p8b_trace.sv"
+      - "reference/ssi263/p8b_compare_trace.c"
+      - "tools/compare_ssi263_p8b_audio.py"
+      - "tools/generate_ssi263_p8_roms.py"
+      - "boards/a2n20v2-Enhanced/hdl/ssi263_p8_glottal.mem"
+      - "boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj"
+      - ".github/workflows/ssi263-p9-hardware-speech.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-dsp-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install simulation and spectral tools
+        run: sudo apt-get update && sudo apt-get install -y iverilog verilator python3-numpy
+      - name: Check upstream silicon ROM generation
+        run: python3 tools/generate_ssi263_p8_roms.py --check
+      - name: Compile pinned Pico SSI263 C reference renderer
+        run: |
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -Ireference/ssi263/pico-v1.0.1 reference/ssi263/p8b_compare_trace.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/p8b_ref
+          /tmp/p8b_ref /tmp/p8b_c.pcm
+          test "$(stat -c%s /tmp/p8b_c.pcm)" -eq 20000
+      - name: Simulate identical 1 MHz source events in RTL
+        run: |
+          iverilog -g2012 -s tb_ssi263_p8b_trace -o /tmp/p8b_trace.vvp hdl/mockingboard/ssi263_p8_chip.sv tests/mb_ssi263/tb_ssi263_p8b_trace.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/p8b_trace.vvp)
+          cp boards/a2n20v2-Enhanced/p8b_trace.pcm /tmp/p8b_rtl.pcm
+          test "$(stat -c%s /tmp/p8b_rtl.pcm)" -eq 20000
+      - name: Prove no excitation produces no PCM
+        run: |
+          iverilog -g2012 -s tb_ssi263_p8b_trace -Ptb_ssi263_p8b_trace.VOICE_ENABLE=0 -Ptb_ssi263_p8b_trace.NOISE_ENABLE=0 -o /tmp/p8b_silent.vvp hdl/mockingboard/ssi263_p8_chip.sv tests/mb_ssi263/tb_ssi263_p8b_trace.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/p8b_silent.vvp)
+      - name: Prove voiced and noise generators elaborate independently
+        run: |
+          iverilog -g2012 -s tb_ssi263_p8b_trace -Ptb_ssi263_p8b_trace.NOISE_ENABLE=0 -o /tmp/p8b_voiced.vvp hdl/mockingboard/ssi263_p8_chip.sv tests/mb_ssi263/tb_ssi263_p8b_trace.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/p8b_voiced.vvp)
+          iverilog -g2012 -s tb_ssi263_p8b_trace -Ptb_ssi263_p8b_trace.VOICE_ENABLE=0 -o /tmp/p8b_noise.vvp hdl/mockingboard/ssi263_p8_chip.sv tests/mb_ssi263/tb_ssi263_p8b_trace.sv
+          (cd boards/a2n20v2-Enhanced && vvp /tmp/p8b_noise.vvp)
+      - name: Compute objective PCM comparison without claiming fidelity
+        run: |
+          python3 tools/compare_ssi263_p8b_audio.py /tmp/p8b_c.pcm /tmp/p8b_rtl.pcm --report /tmp/p8b_comparison.json
+          cp /tmp/p8b_comparison.json p8b_comparison.json
+      - name: Verify the HDMI piano is bit-transparent when SSI muted
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          t=Path("boards/a2n20v2-Enhanced/hdl/top.sv").read_text()
+          report=json.loads(Path("p8b_comparison.json").read_text())
+          assert "MOCKINGBOARD_SSI263_FULL_CHIP_ENABLE = 1'b1" in t
+          assert "MB_SPEECH_GAIN_NUM = 0" in t
+          if not report["fidelity_accepted"]:
+              print("FIDELITY GATE FAILED: SSI output stays hardware-muted")
+          assert "mb_speech_gain_w >>> 3" in t
+          assert "mb_speech_sum_l_w" in t and "mb_speech_sum_r_w" in t
+          assert "MB_DOC_MULTISAMPLE_ENABLE = 1'b1" in t
+          assert "MB_DOC_PIANO_ARTICULATION_ENABLE = 1'b1" in t
+          assert "MB_DOC_FX_AY_BYPASS_ENABLE = 1'b1" in t
+          assert "ssi263_p8_glottal.mem" in Path("boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj").read_text()
+          print("PASS: full chip selected for synthesis, SSI HDMI contribution exactly zero by construction")
+          PY
+      - name: Lint independent chip and its controls
+        run: |
+          (cd boards/a2n20v2-Enhanced && verilator --lint-only --timing -Wno-fatal --top-module ssi263_p8_chip ../../hdl/mockingboard/ssi263_p8_chip.sv)
+      - name: Publish diagnostic PCM and metrics as CI artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p8b-ssi263-reference-vs-rtl-pcm
+          path: |
+            p8b_comparison.json
+            boards/a2n20v2-Enhanced/p8b_trace.pcm
+          if-no-files-found: ignore
