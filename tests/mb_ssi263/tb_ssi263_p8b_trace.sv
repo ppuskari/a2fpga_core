@@ -73,7 +73,7 @@ module tb_ssi263_p8b_trace #(
         capture(2500);
         write_reg(3'd0,8'h44);
         capture(2500);
-        write_reg(3'd0,8'h28); // unvoiced FA=15, isolated fricative noise
+        write_reg(3'd0,8'h30); // open unvoiced FA=15 fricative
         capture(2500);
         write_reg(3'd3,8'h80);
         repeat(5) @(negedge clk);
