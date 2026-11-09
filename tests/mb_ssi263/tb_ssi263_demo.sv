@@ -17,7 +17,8 @@ module tb_ssi263_demo;
     wire signed [15:0] pcm;
     logic ever_spoke=0;
 
-    ssi263_slot dut (
+    // Exercise the new die-derived profile through the actual SSI slot path.
+    ssi263_slot #(.VOICE_PROFILE(2)) dut (
         .clk_i(clk), .reset_n_i(reset_n), .enabled_i(en),
         .card_io_sel_i(sel), .xck_tick_i(xck), .data_in_strobe_i(data_strobe), .rw_n_i(rw_n),
         .card_addr_i(addr), .data_i(data),
