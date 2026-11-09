@@ -54,8 +54,9 @@ module top #(
     parameter bit MOCKINGBOARD_ENABLE = 0,
     // SSI speech can coexist with exclusive AY-to-DOC music ownership.
     parameter bit MOCKINGBOARD_SSI263_ENABLE = 1'b1,
-    parameter integer MOCKINGBOARD_SSI263_VOICE_PROFILE = 1,
+    parameter integer MOCKINGBOARD_SSI263_VOICE_PROFILE = 2,
     // P6: speech-only output gain. 3/1 ~= +9.54dB in normal MB-DOC mode.
+    // P7 profile 2 uses this same output path; adjust if limiting occurs.
     // Music's existing HDMI gain/limiter remains unchanged.
     parameter integer MB_SPEECH_GAIN_NUM = 3,
     parameter bit [7:0] MOCKINGBOARD_ID = 2,
