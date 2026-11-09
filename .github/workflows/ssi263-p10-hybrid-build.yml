@@ -30,6 +30,19 @@ jobs:
         run: |
           iverilog -g2012 -s tb_ssi263_p10_slot -o /tmp/p10slot.vvp hdl/mockingboard/ssi263_control.sv hdl/mockingboard/ssi263_slot.sv tests/ssi263_hybrid/tb_ssi263_p10_slot.sv
           vvp /tmp/p10slot.vvp
+      - name: Compile pipelined piano DOC bridge and validate real SPI constraints
+        run: |
+          iverilog -g2012 -Wall -s mb_doc_bridge -o /tmp/p10piano.vvp boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv
+          python3 - <<'PY'
+          from pathlib import Path
+          rtl=Path("boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv").read_text()
+          sdc=Path("boards/a2n20v2-Enhanced/hdl/a2n20v2_enhanced.sdc").read_text()
+          assert "voice_level_base_r <= ym_level(" in rtl
+          assert "voice_level_decay_r <= note_restart_w ? 8'hFF" in rtl
+          assert "if (division_count_r == 5'd17)" in rtl
+          assert "create_clock -name spi_sclk -period 50.000" in sdc
+          print("PASS: P10-R2 DOC volume pipeline elaborates; 20 MHz SPI constraint retained")
+          PY
       - name: Lint hybrid FIFO implementation
         run: |
           verilator --lint-only --timing -Wno-fatal --top-module ssi263_hybrid_bridge boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv
