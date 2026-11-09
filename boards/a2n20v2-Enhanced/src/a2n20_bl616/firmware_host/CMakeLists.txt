@@ -7,7 +7,7 @@ find_package(bouffalo_sdk REQUIRED HINTS $ENV{BL_SDK_BASE})
 # Pull in shared FPGA-SPI sources from the FT2232 firmware (../firmware) so we
 # do not duplicate them. Only fpga_spi/fpga_screen are reused; the device-mode
 # (FTDI/JTAG/UART/CLI) sources are intentionally excluded from the host build.
-sdk_add_include_directories(. ../firmware)
+sdk_add_include_directories(. ../firmware ../../../../../reference/ssi263/pico-v1.0.1)
 # lwIP base config (SDK's reference lwipopts.h).
 sdk_add_include_directories($ENV{BL_SDK_BASE}/components/net/lwip/lwip/lwip-port/config)
 # CRITICAL: the SDK lwipopts defaults PBUF_POOL_SIZE to 0 unless CFG_ETHERNET_ENABLE
@@ -40,6 +40,9 @@ target_sources(app PRIVATE
     telnetd.c
     sscbridge.c
     ssi263_spi_bench.c
+    ssi263_hybrid.c
+    ../../../../../reference/ssi263/pico-v1.0.1/ssi263.c
+    ../../../../../reference/ssi263/pico-v1.0.1/ssi263dsp.c
     ftpd.c
     ../firmware/gcr_dsk.c
     ../firmware/fpga_spi.c
@@ -52,6 +55,7 @@ target_sources(app PRIVATE
     ../firmware/ffunicode.c
     ../firmware/fpga_sd.c
 )
+target_link_libraries(app PRIVATE m)
 sdk_set_main_file(main.c)
 
 project(a2n20_bl616_host)
