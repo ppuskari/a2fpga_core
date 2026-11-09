@@ -44,6 +44,9 @@
         <File path="../../hdl/mockingboard/ssi263_control.sv" type="file.verilog" enable="1"/>
         <File path="../../hdl/mockingboard/ssi263_slot.sv" type="file.verilog" enable="1"/>
         <File path="../../hdl/mockingboard/ssi263_voice.sv" type="file.verilog" enable="1"/>
+        <File path="../../hdl/mockingboard/ssi263_p8_chip.sv" type="file.verilog" enable="1"/>
+        <File path="hdl/ssi263_p8_params.mem" type="file.other" enable="1"/>
+        <File path="hdl/ssi263_p8_coefs.mem" type="file.other" enable="1"/>
         <File path="hdl/ssi263_voice.mem" type="file.other" enable="1"/>
         <File path="../../hdl/mockingboard/mockingboard.sv" type="file.verilog" enable="1"/>
         <File path="../../hdl/sound/apple_speaker.sv" type="file.verilog" enable="1"/>
