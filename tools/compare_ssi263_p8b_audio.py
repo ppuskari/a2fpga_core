@@ -68,13 +68,24 @@ def main():
     r=load(args.reference);v=load(args.rtl)
     ref=analyze(r);rtl=analyze(v)
     corr,lag=similarity(r,v)
+    # Conservative release gate for HDMI unmute. Correlation alone
+    # cannot establish real-chip fidelity; this is a minimum test.
+    rms_delta=rtl["rms_dbfs"]-ref["rms_dbfs"]
+    band_delta=[abs(a-b) for a,b in zip(ref["band_power_pct"],rtl["band_power_pct"])]
+    accepted=(
+        corr>=0.90 and abs(rms_delta)<=2.0
+        and max(band_delta)<=7.0
+        and rtl["clip_fraction"]<=0.001
+        and rtl["largest_pcm_step"]<=ref["largest_pcm_step"]*1.25
+    )
     result={"reference":ref,"rtl":rtl,
        "peak_difference_db":round(rtl["peak_dbfs"]-ref["peak_dbfs"],2),
-       "rms_difference_db":round(rtl["rms_dbfs"]-ref["rms_dbfs"],2),
+       "rms_difference_db":round(rms_delta,2),
        "max_lagged_correlation":round(corr,4),
        "best_lag_samples":lag,
-       "fidelity_accepted":False,
-       "acceptance_note":"Not accepted until RMS, pitch, formant, timing, and waveform correlation gates are defined and passed"}
+       "band_power_abs_delta_pct":[round(v,2) for v in band_delta],
+       "fidelity_accepted":accepted,
+       "acceptance_note":"Gate is minimum C/RTL trace parity; native WAV + Gowin + hardware tests also required before HDMI unmute"}
     args.report.write_text(json.dumps(result,indent=2)+"\n")
     print(json.dumps(result,indent=2))
     assert rtl["clip_fraction"]<0.05,"Excessive hard clipping: invalidate RTL build"
