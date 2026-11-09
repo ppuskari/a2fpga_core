@@ -86,7 +86,7 @@ Set-Location C:\AppleIIgsDev_02\a2fpga-ssi263-p10
 ```
 
 ```powershell
-git fetch origin petar/ssi263-p10r3-usb-host-ui-20261109
+git fetch origin
 ```
 
 ```powershell
