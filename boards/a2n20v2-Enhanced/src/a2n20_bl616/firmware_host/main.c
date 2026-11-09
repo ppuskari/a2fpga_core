@@ -24,6 +24,9 @@
 #include "bflb_mtimer.h"
 
 #include "fpga_spi.h"
+#ifdef SSI263_HYBRID_SPI_BENCH
+#include "ssi263_spi_bench.h"
+#endif
 #include "fpga_screen.h"
 
 #include "lwip/tcpip.h"   /* lwIP for the USB-Ethernet (CDC-ECM) net path */
@@ -1186,6 +1189,22 @@ int main(void)
     /* Persisted preferences, then the gamepad menu that edits them. */
     settings_init();
     menu_init();
+#ifdef SSI263_HYBRID_SPI_BENCH
+    // P10 feasibility benchmark only; not part of the shipping firmware.
+    // Run once pre-RTOS and record results on OSD/console.
+    if (ready) {
+        ssi263_spi_bench_result br=ssi263_spi_bench_run();
+        printf("P10 SPI W=%lu B/s R=%lu B/s total=%lu B/s mismatches=%lu\\r\\n",
+            (unsigned long)br.write_bytes_per_sec,
+            (unsigned long)br.read_bytes_per_sec,
+            (unsigned long)br.total_bytes_per_sec,
+            (unsigned long)br.mismatches);
+        osd_log("P10 SPI W=%lu R=%lu kB/s err=%lu",
+            (unsigned long)(br.write_bytes_per_sec/1000),
+            (unsigned long)(br.read_bytes_per_sec/1000),
+            (unsigned long)br.mismatches);
+    }
+#endif
 
     {
         char dbg[41];
