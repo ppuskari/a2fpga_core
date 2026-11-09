@@ -14,9 +14,11 @@ module ssi263_p8_chip #(
     // DSP diagnostic controls: enable/disable inputs to isolate hiss.
     parameter bit EXCITATION_VOICE_ENABLE = 1'b1,
     parameter bit EXCITATION_NOISE_ENABLE = 1'b1,
-    // Pinned software reference applies output_gain in chip_run and PCM16.
-    // Both are 3 in the pinned defaults: 9x output conversion total.
-    parameter integer OUTPUT_GAIN_NUM = 9
+    // Output calibration is performed at the chip boundary, not in the
+    // shared HDMI mixer. 6x avoids the clipping seen with 9x while
+    // approaching the native recording's ~-3 dBFS peak.
+    // This does NOT imply waveform fidelity to the reference C engine.
+    parameter integer OUTPUT_GAIN_NUM = 6
 )(
     input wire clk_i,
     input wire reset_n_i,
