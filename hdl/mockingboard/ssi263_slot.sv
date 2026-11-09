@@ -11,7 +11,10 @@ module ssi263_slot #(
     parameter integer VOICE_PROFILE = 1,
     // Independent P8 chip replacing BOTH legacy controller and renderer.
     // Disabled until C-reference parity, timing, and audio fidelity gates pass.
-    parameter bit FULL_CHIP_ENABLE = 1'b0
+    parameter bit FULL_CHIP_ENABLE = 1'b0,
+    // P10: retain FPGA register/XCK/A-R controller; PCM comes from BL616.
+    // Overrides FULL_CHIP_ENABLE, so the heavy DSP does not elaborate.
+    parameter bit HYBRID_ENABLE = 1'b0
 ) (
     input  wire       clk_i,
     input  wire       reset_n_i,
@@ -29,7 +32,13 @@ module ssi263_slot #(
     output wire       via_ca1_o,
     output wire       powered_o,
     output wire [5:0] phoneme_o,
-    output wire signed [15:0] speech_pcm_o
+    output wire signed [15:0] speech_pcm_o,
+    input wire signed [15:0] hybrid_pcm_i,
+    output wire hybrid_event_valid_o,
+    output wire [2:0] hybrid_event_reg_o,
+    output wire [7:0] hybrid_event_data_o,
+    output wire hybrid_xck_tick_o,
+    output wire hybrid_powered_o
 );
     wire speech_sel_w = enabled_i && card_io_sel_i &&
                         (card_addr_i[7:6] == 2'b01);
@@ -87,7 +96,28 @@ module ssi263_slot #(
         end
     end
 
-    generate if (FULL_CHIP_ENABLE) begin : gen_p8_full_chip
+    // CPU writes are captured *before* the MCU service. No MCU-sourced
+    // event can alter right VIA CA1 timing or Apple bus readback.
+    assign hybrid_event_valid_o=HYBRID_ENABLE && wr_pulse_r;
+    assign hybrid_event_reg_o=wr_reg_r;
+    assign hybrid_event_data_o=wr_data_r;
+    assign hybrid_xck_tick_o=xck_tick_i;
+    assign hybrid_powered_o=powered_o;
+
+    generate if (HYBRID_ENABLE) begin : gen_p10_hybrid
+        // Keep the hardware-timed SSI controller; only acoustic DSP moves
+        // to BL616. Mockingboard Demo Disk 1 still clocks A/R from here.
+        ssi263_control controller (
+            .clk_i(clk_i),.reset_n_i(reset_n_i && enabled_i),
+            .xck_tick_i(xck_tick_i && enabled_i),
+            .wr_i(wr_pulse_r),.addr_i(wr_reg_r),.data_i(wr_data_r),
+            .ar_n_o(ar_n_w),.status_d7_o(ar_status_w),
+            .powered_o(powered_o),.phoneme_o(phoneme_o),
+            .amplitude_o(),.inflection_o(),.rate_o(),
+            .phoneme_start_o(),.debug_r3_o(debug_r3_w)
+        );
+        assign speech_pcm_o=powered_o ? hybrid_pcm_i : 16'sd0;
+    end else if (FULL_CHIP_ENABLE) begin : gen_p8_full_chip
         ssi263_p8_chip chip (
             .clk_i(clk_i),
             .reset_n_i(reset_n_i && enabled_i),
