@@ -116,9 +116,11 @@ module ssi263_p8_chip #(
 
     logic [31:0] die_rom[0:63];
     logic [55:0] coefficient_rom[0:49];
+    logic [55:0] f2nas_coeff_rom[0:255];
     initial begin
        $readmemh("hdl/ssi263_p8_params.mem",die_rom);
        $readmemh("hdl/ssi263_p8_coefs.mem",coefficient_rom);
+       $readmemh("hdl/ssi263_p9_f2nas.mem",f2nas_coeff_rom);
     end
     wire [31:0] die_w=die_rom[r0[5:0]];
     wire [3:0] f1_target_w=die_w[31:28];
@@ -284,7 +286,11 @@ module ssi263_p8_chip #(
         (stage_r==3'd2) ? {2'b01,field_r[1][15:12]} :
         (stage_r==3'd3) ? {2'b10,field_r[2][15:12]} :
         (stage_r==3'd4) ? 6'd48 : 6'd49;
-    wire [55:0] coeff_w=coefficient_rom[coeff_index_w];
+    // NAS is not a fourth resonator: silicon model broadens F2
+    // bandwidth as BW2*(1+0.5*NAS). Preserve all 16x16 combinations.
+    wire [7:0] f2nas_index_w={field_r[3][15:12],field_r[1][15:12]};
+    wire [55:0] coeff_w=(stage_r==3'd2) ?
+        f2nas_coeff_rom[f2nas_index_w] : coefficient_rom[coeff_index_w];
     wire signed [15:0] a1_w=coeff_w[55:40];
     wire signed [15:0] a2_w=coeff_w[39:24];
     wire signed [24:0] gain_w={1'b0,coeff_w[23:0]};
