@@ -28,7 +28,11 @@ sdk_add_compile_definitions(-DFATFS_EXTERNAL_DISKIO)
 
 target_sources(app PRIVATE
     usbh_xinput.c
-    usb_kbd_menu.c
+    usbh_hidinput.c
+    ssi263_spi_bench.c
+    ssi263_hybrid.c
+    ../../../../../reference/ssi263/pico-v1.0.1/ssi263.c
+    ../../../../../reference/ssi263/pico-v1.0.1/ssi263dsp.c
     w5100.c
     disk.c
     diskio_host.c
@@ -40,11 +44,8 @@ target_sources(app PRIVATE
     fpgaupdate.c
     telnetd.c
     sscbridge.c
-    ssi263_spi_bench.c
-    ssi263_hybrid.c
-    ../../../../../reference/ssi263/pico-v1.0.1/ssi263.c
-    ../../../../../reference/ssi263/pico-v1.0.1/ssi263dsp.c
     ftpd.c
+    boot_timeline.c
     ../firmware/gcr_dsk.c
     ../firmware/fpga_spi.c
     ../firmware/fpga_screen.c
