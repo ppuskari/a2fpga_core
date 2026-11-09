@@ -3,11 +3,6 @@ on:
   push:
     branches:
       - petar/ssi263-p10r6-multirate-speech-20261109
-    paths:
-      - "boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv"
-      - "boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c"
-      - "tests/ssi263_hybrid/**"
-      - ".github/workflows/ssi263-p10r6-multirate-speech.yml"
   workflow_dispatch:
 permissions:
   contents: read
