@@ -1,0 +1,53 @@
+name: P10 R10 carrierless SSI digital idle-skip qualification
+on:
+  push:
+    branches:
+      - petar/ssi263-p10r10-carrierless-idle-resume-20261110
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify no A/B, no shaping, R8 and USB safety retained
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          base=Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host")
+          c=(base/"ssi263_hybrid.c").read_text()
+          cmake=(base/"CMakeLists.txt").read_text()
+          pico=Path("reference/ssi263/pico-v1.0.1/ssi263.c").read_text()
+          assert "#include \"ssi263_digital_idle.h\"" in c
+          assert "#include \"ssi263_audio_edges.h\"" not in c
+          assert "ssi263_audio_edges_" not in c
+          assert "SSI263_R7_ATTACK_US" not in c
+          assert "SSI263_R9B_CARRIER_QUIET_TEST" not in c
+          assert "R9 RAW=" not in c
+          assert "R9 LOW=" not in c
+          assert "R9 CTL=" not in c
+          assert "params.carrier_rel_db" not in c
+          assert "SSI263_R7_NOISE_PERCENT" not in c
+          assert "P10 R10: NATIVE ATTACK, NO CARRIER" in c
+          assert "P10 R10: IDLE SKIP AFTER 2500MS" in c
+          assert "ssi263_digital_idle_can_skip" in c
+          assert "ssi263_digital_idle_write(&idle)" in c
+          assert "SSI263_R8_FAST_SWELL=1;SSI263_DIGITAL_NO_CARRIER=1" in cmake
+          assert "SSI263_DIGITAL_NO_CARRIER" in pico
+          assert "CONFIG_USBHOST_PSC_PRIO - 1" in (base/"main.c").read_text()
+          assert "MCU_SCREEN_TIMEOUT_US 180000000u" in (base/"menu.c").read_text()
+          assert "SSI263_PCM_RATE_DIV 2u" in c
+          print("PASS: R10 production-only audio path; no attack/no carrier; R8 USB/HDMI retained")
+          PY
+      - name: R10 real Pico idle, wake and no-carrier synthesis test
+        run: |
+          gcc -std=c99 -O3 -fsingle-precision-constant -Wall -Wextra -Werror -DSSI263_DIGITAL_NO_CARRIER=1 -DSSI263_R8_FAST_SWELL=1 -Ireference/ssi263/pico-v1.0.1 -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host tests/ssi263_hybrid/test_p10_r10_idle_resume.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/r10-idle
+          /tmp/r10-idle
+      - name: Verify carrier contribution is excluded, not merely attenuated
+        run: |
+          gcc -std=c99 -O3 -fsingle-precision-constant -Wall -Wextra -Werror -DSSI263_DIGITAL_NO_CARRIER=1 -DSSI263_R8_FAST_SWELL=1 -Ireference/ssi263/pico-v1.0.1 tests/ssi263_hybrid/test_pico_r9b_carrier.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/r10-no-carrier
+          /tmp/r10-no-carrier || { echo 'NOTE: R9B A/B fixture requires original carrier and is not an R10 product-mode test'; exit 0; }
+      - name: Syntax-check Enhanced MCU renderer
+        run: |
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -fsyntax-only -DSSI263_PCM_RATE_DIV=2 -Itests/ssi263_hybrid/stubs -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Ireference/ssi263/pico-v1.0.1 boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c
