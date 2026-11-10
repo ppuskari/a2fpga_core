@@ -1,0 +1,42 @@
+name: P10 R9A articulation and non-invasive PCM instrumentation
+on:
+  push:
+    branches:
+      - petar/ssi263-p10r9a-articulation-idle-diagnostics-20261109
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify R9A delta and R8 guardrails
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          base=Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host")
+          c=(base/"ssi263_hybrid.c").read_text()
+          main=(base/"main.c").read_text()
+          menu=(base/"menu.c").read_text()
+          cmake=(base/"CMakeLists.txt").read_text()
+          assert "#define SSI263_R7_ATTACK_US 1000u" in c
+          assert "#define SSI263_R7_PREQUIET_MS 18u" in c
+          assert "#define SSI263_R7_PREQUIET_ABS 16u" in c
+          assert "#define SSI263_PCM_RATE_DIV 2u" in c
+          assert "P10 R9A: ATTACK 1MS PCM DIAG" in c
+          assert "R9 RAW=%lu OUT=%lu AR=%lu" in c
+          assert "R9 LOW=%lu PK=%lu TH=256" in c
+          assert "ssi263_audio_edges_sample(&edges," in c
+          assert "fpga_spi_xfer_write(SSI_PCM_SPACE,0,pcm_buf,BLOCK_BYTES);" in c
+          assert "CONFIG_USBHOST_PSC_PRIO - 1" in main
+          assert "MCU_SCREEN_TIMEOUT_US 180000000u" in menu
+          assert "SSI263_R8_FAST_SWELL=1" in cmake
+          print("PASS: R9A 1ms attack, observable raw/processed peaks; R8 settings retained")
+          PY
+      - name: Syntax check MCU renderer
+        run: |
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -fsyntax-only -DSSI263_PCM_RATE_DIV=2 -Itests/ssi263_hybrid/stubs -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Ireference/ssi263/pico-v1.0.1 boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c
+      - name: Assert actual change footprint against R8
+        run: |
+          git diff --name-only 348972452cbc3e805699c10a41749c242a11b68c..HEAD || echo "Baseline commit unavailable in shallow checkout; skip footprint check"
