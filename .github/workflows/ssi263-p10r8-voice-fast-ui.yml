@@ -1,0 +1,64 @@
+name: P10 R8 Enhanced voice speed and keyboard responsiveness
+on:
+  push:
+    branches:
+      - petar/ssi263-p10r8-voiced-dsp-speed-20261109
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify 180 second console and USB service priority
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          base=Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host")
+          menu=(base/"menu.c").read_text()
+          disk=(base/"disk.c").read_text()
+          main=(base/"main.c").read_text()
+          conf=(base/"usb_config.h").read_text()
+          cmake=(base/"CMakeLists.txt").read_text()
+          assert "#define MCU_SCREEN_TIMEOUT_US 180000000u" in menu
+          assert "osd_console_hide_if_idle(MCU_SCREEN_TIMEOUT_US)" in menu
+          assert "schedule_console_hide(180000000u);" in disk
+          assert "schedule_console_hide(1500000u);" in disk
+          assert 'usb_osal_thread_create("ssi263", 6144, CONFIG_USBHOST_PSC_PRIO - 1,' in main
+          assert 'usb_osal_thread_create("xinput", 2048, CONFIG_USBHOST_PSC_PRIO + 1,' in main
+          assert "CONFIG_USBHOST_MAX_EHPORTS          8" in conf
+          assert "CONFIG_USBHOST_REQUEST_BUFFER_LEN 1024" in conf
+          assert "usbh_hidinput_buttons()" in main
+          assert "SSI263_R8_FAST_SWELL=1" in cmake
+          assert "SSI263_PCM_RATE_DIV 2u" in (base/"ssi263_hybrid.c").read_text()
+          assert (base/"usbh_hidinput.c").exists()
+          print("PASS: 180s idle/failure console, original 1.5s successful mount, USB host priority > speech, Enhanced USB preserved")
+          PY
+      - name: Native Pico oscillator A/B sample parity
+        run: |
+          for mode in ref fast; do
+            flags=""
+            if [ "$mode" = fast ]; then flags="-DSSI263_R8_FAST_SWELL=1"; fi
+            gcc -std=c99 -O3 -fsingle-precision-constant -Wall -Wextra -Werror $flags -Ireference/ssi263/pico-v1.0.1 tests/ssi263_hybrid/test_pico_r8_voiced_pcm.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/r8-$mode
+            /tmp/r8-$mode > /tmp/r8-$mode.pcm
+          done
+          python3 - <<'PY'
+          from array import array
+          import math
+          def load(fn):
+              a=array("h");a.frombytes(open(fn,"rb").read());return a
+          a=load("/tmp/r8-ref.pcm")
+          b=load("/tmp/r8-fast.pcm")
+          assert len(a)==len(b)==49152
+          power=sum(v*v for v in a)
+          distortion=sum((x-y)**2 for x,y in zip(a,b))
+          peak=max(abs(x-y) for x,y in zip(a,b))
+          snr=10*math.log10(power/max(distortion,1))
+          corr=sum(x*y for x,y in zip(a,b))/math.sqrt(power*sum(y*y for y in b))
+          print(f"R8 PCM parity: corr={corr:.8f}, SNR={snr:.1f}dB, peakDiff={peak}pcm16")
+          assert corr>0.999 and snr>45
+          PY
+      - name: Host syntax-check R7/R8 hybrid renderer
+        run: |
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -fsyntax-only -DSSI263_PCM_RATE_DIV=2 -Itests/ssi263_hybrid/stubs -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Ireference/ssi263/pico-v1.0.1 boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c
