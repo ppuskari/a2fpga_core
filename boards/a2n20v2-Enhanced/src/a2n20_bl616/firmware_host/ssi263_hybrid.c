@@ -46,7 +46,7 @@
 /* Optional, controlled R7 A/B knobs. The Pico model and phoneme ROM
  * remain intact. Do not globally low-pass or suppress all noise. */
 #ifndef SSI263_R7_ATTACK_US
-#define SSI263_R7_ATTACK_US 2500u
+#define SSI263_R7_ATTACK_US 1000u /* R9A articulation A/B: R8=2500u */
 #endif
 #ifndef SSI263_R7_PREQUIET_MS
 #define SSI263_R7_PREQUIET_MS 18u
@@ -149,6 +149,10 @@ void ssi263_hybrid_task(void *arg)
     uint32_t last_stamp=0;
     uint32_t prev_blocks=0,peak_model_us=0,peak_spi_us=0;
     uint32_t over_budget_blocks=0,prev_over_budget=0;
+    /* R9A: bounded, inexpensive PCM evidence. These are not silence gates.
+     * qpk counts low-amplitude blocks, never suppresses their audio. */
+    uint32_t r9_ar_blocks=0,r9_low_blocks=0;
+    uint32_t r9_raw_peak=0,r9_post_peak=0,r9_low_peak=0;
     uint32_t report_interval_ms=10000u;
     ssi263_audio_edges edges;
     ssi263_audio_edges_init(&edges,pcm_hz,SSI263_R7_PREQUIET_MS,
@@ -161,6 +165,7 @@ void ssi263_hybrid_task(void *arg)
     ring_reset();
     osd_log("P10 SSI263: Pico C hybrid online");
     osd_log("P10 SOURCE=%uHZ DIV=%u",pcm_hz,pcm_rate_div);
+    osd_log("P10 R9A: ATTACK 1MS PCM DIAG");
     osd_log("P10 R8: FAST VOICED COS LUT512");
     for(;;) {
         if(!read_status()) {
@@ -255,9 +260,25 @@ void ssi263_hybrid_task(void *arg)
                     silent_samples=0u;
                 }
             }
+            /* Request is a model status indicator, NOT proof of silence. */
+            if(ssi263_request(chip))++r9_ar_blocks;
+            uint32_t block_raw_peak=0;
+            for(unsigned j=0;j<BLOCK_SAMPLES;j++) {
+                int32_t s=signed_samples[j];
+                uint32_t magnitude=(uint32_t)(s<0 ? -s : s);
+                if(magnitude>block_raw_peak)block_raw_peak=magnitude;
+            }
+            if(block_raw_peak>r9_raw_peak)r9_raw_peak=block_raw_peak;
+            if(block_raw_peak<=256u) {
+                ++r9_low_blocks;
+                if(block_raw_peak>r9_low_peak)r9_low_peak=block_raw_peak;
+            }
             for(unsigned j=0;j<BLOCK_SAMPLES;j++) {
                 int16_t shaped=ssi263_audio_edges_sample(&edges,
                                          signed_samples[j]);
+                int32_t s=shaped;
+                uint32_t magnitude=(uint32_t)(s<0 ? -s : s);
+                if(magnitude>r9_post_peak)r9_post_peak=magnitude;
                 uint16_t v=(uint16_t)shaped;
                 pcm_buf[j*2]=(uint8_t)v;
                 pcm_buf[j*2+1]=(uint8_t)(v>>8);
@@ -310,6 +331,15 @@ void ssi263_hybrid_task(void *arg)
                     (unsigned long)edges.attacks,
                     (unsigned long)idle_blocks,
                     (unsigned)idle_fastpath);
+            osd_log("R9 RAW=%lu OUT=%lu AR=%lu",
+                    (unsigned long)r9_raw_peak,
+                    (unsigned long)r9_post_peak,
+                    (unsigned long)r9_ar_blocks);
+            osd_log("R9 LOW=%lu PK=%lu TH=256",
+                    (unsigned long)r9_low_blocks,
+                    (unsigned long)r9_low_peak);
+            r9_ar_blocks=0;r9_low_blocks=0;
+            r9_raw_peak=0;r9_post_peak=0;r9_low_peak=0;
             peak_model_us=0;
             peak_spi_us=0;
             (void)rendered_samples;(void)last_stamp;
