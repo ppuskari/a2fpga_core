@@ -46,7 +46,7 @@
 /* Optional, controlled R7 A/B knobs. The Pico model and phoneme ROM
  * remain intact. Do not globally low-pass or suppress all noise. */
 #ifndef SSI263_R7_ATTACK_US
-#define SSI263_R7_ATTACK_US 1000u /* R9A articulation A/B: R8=2500u */
+#define SSI263_R7_ATTACK_US 0u /* R9B true bypass: no edge shaper at all */
 #endif
 #ifndef SSI263_R7_PREQUIET_MS
 #define SSI263_R7_PREQUIET_MS 18u
@@ -62,6 +62,17 @@
 #endif
 #if SSI263_R7_NOISE_PERCENT > 100u
 #error "R7 noise-percent knob must be 0..100"
+#endif
+
+/* Diagnostic A/B option; default preserves the original Pico carrier.
+ * 1 substitutes -200dB carrier_rel_db to make carrier negligible at PCM16,
+ * without altering the pinned Pico model source or other phoneme sources.
+ * Deliberately separate this experiment from the 0us attack baseline. */
+#ifndef SSI263_R9B_CARRIER_QUIET_TEST
+#define SSI263_R9B_CARRIER_QUIET_TEST 0u
+#endif
+#if SSI263_R9B_CARRIER_QUIET_TEST != 0u && SSI263_R9B_CARRIER_QUIET_TEST != 1u
+#error "SSI263_R9B_CARRIER_QUIET_TEST must be 0 or 1"
 #endif
 
 static uint8_t status_buf[STATUS_LEN];
@@ -126,6 +137,9 @@ void ssi263_hybrid_task(void *arg)
     ssi263_default_params(&params);
     params.xck_hz=XCK_HZ;
     params.noise_gain *= (real)SSI263_R7_NOISE_PERCENT/100.0f;
+#if SSI263_R9B_CARRIER_QUIET_TEST
+    params.carrier_rel_db=-200.0f; /* PCM16 effectively zero after quantization */
+#endif
     while(!read_status())vTaskDelay(pdMS_TO_TICKS(100));
     const unsigned pcm_rate_div=configure_pcm_rate();
     if(!pcm_rate_div) {
@@ -154,9 +168,11 @@ void ssi263_hybrid_task(void *arg)
     uint32_t r9_ar_blocks=0,r9_low_blocks=0;
     uint32_t r9_raw_peak=0,r9_post_peak=0,r9_low_peak=0;
     uint32_t report_interval_ms=10000u;
+#if SSI263_R7_ATTACK_US > 0u
     ssi263_audio_edges edges;
     ssi263_audio_edges_init(&edges,pcm_hz,SSI263_R7_PREQUIET_MS,
                             SSI263_R7_ATTACK_US,SSI263_R7_PREQUIET_ABS);
+#endif
     const uint32_t idle_zero_samples=(uint32_t)
         ((uint64_t)pcm_hz*SSI263_R7_IDLE_ZERO_MS/1000u);
     uint32_t silent_samples=0u,idle_blocks=0u;
@@ -165,7 +181,8 @@ void ssi263_hybrid_task(void *arg)
     ring_reset();
     osd_log("P10 SSI263: Pico C hybrid online");
     osd_log("P10 SOURCE=%uHZ DIV=%u",pcm_hz,pcm_rate_div);
-    osd_log("P10 R9A: ATTACK 1MS PCM DIAG");
+    osd_log("P10 R9B: ATTACK BYPASSED");
+    osd_log("P10 R9B CARRIER=%s", SSI263_R9B_CARRIER_QUIET_TEST ? "QUIET" : "ORIGINAL");
     osd_log("P10 R8: FAST VOICED COS LUT512");
     for(;;) {
         if(!read_status()) {
@@ -205,7 +222,9 @@ void ssi263_hybrid_task(void *arg)
                     if(!active) {
                         ring_reset();
                         rendered_samples=0;
+#if SSI263_R7_ATTACK_US > 0u
                         ssi263_audio_edges_rearm(&edges);
+#endif
                         silent_samples=0u;
                         idle_fastpath=false;
                     }
@@ -274,8 +293,13 @@ void ssi263_hybrid_task(void *arg)
                 if(block_raw_peak>r9_low_peak)r9_low_peak=block_raw_peak;
             }
             for(unsigned j=0;j<BLOCK_SAMPLES;j++) {
-                int16_t shaped=ssi263_audio_edges_sample(&edges,
-                                         signed_samples[j]);
+                /* R9B: truly bypass the post-PCM attack envelope at 0us. */
+                int16_t shaped;
+#if SSI263_R7_ATTACK_US > 0u
+                shaped=ssi263_audio_edges_sample(&edges,signed_samples[j]);
+#else
+                shaped=signed_samples[j];
+#endif
                 int32_t s=shaped;
                 uint32_t magnitude=(uint32_t)(s<0 ? -s : s);
                 if(magnitude>r9_post_peak)r9_post_peak=magnitude;
@@ -327,14 +351,25 @@ void ssi263_hybrid_task(void *arg)
                     (unsigned long)peak_model_us,
                     (unsigned long)peak_spi_us,
                     (unsigned long)read16(status_buf+10));
+            /* Retain legacy R7 field for R8/R9A comparison; E=0 means
+             * the edge shaper is disabled, not that no phoneme began. */
+#if SSI263_R7_ATTACK_US > 0u
+            const unsigned long edge_attacks=(unsigned long)edges.attacks;
+#else
+            const unsigned long edge_attacks=0ul;
+#endif
             osd_log("P10 R7 E=%lu IDLE=%lu Q=%u",
-                    (unsigned long)edges.attacks,
+                    edge_attacks,
                     (unsigned long)idle_blocks,
                     (unsigned)idle_fastpath);
             osd_log("R9 RAW=%lu OUT=%lu AR=%lu",
                     (unsigned long)r9_raw_peak,
                     (unsigned long)r9_post_peak,
                     (unsigned long)r9_ar_blocks);
+            osd_log("R9 CTL=%02X R4=%02X MODE=%d",
+                    (unsigned)ssi263_reg(chip,3),
+                    (unsigned)ssi263_reg(chip,4),
+                    ssi263_mode(chip));
             osd_log("R9 LOW=%lu PK=%lu TH=256",
                     (unsigned long)r9_low_blocks,
                     (unsigned long)r9_low_peak);
