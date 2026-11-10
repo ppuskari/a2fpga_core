@@ -79,7 +79,7 @@ Set-Location C:\AppleIIgsDev_02\a2fpga-ssi263-p10r9b\boards\a2n20v2-Enhanced\src
 ```
 
 ```powershell
-$p='.\ssi263_hybrid.c'; $s=[IO.File]::ReadAllText($p); [IO.File]::WriteAllText($p,$s.Replace('#define SSI263_R9B_CARRIER_QUIET_TEST 0u','#define SSI263_R9B_CARRIER_QUIET_TEST 1u'),(New-Object System.Text.UTF8Encoding($false)))
+$p='.\ssi263_hybrid.c'; $s=[IO.File]::ReadAllText($p); [IO.File]::WriteAllText($p,$s.Replace('#define SSI263_R9B_CARRIER_QUIET_TEST 0u','#define SSI263_R9B_CARRIER_QUIET_TEST 1u'),[System.Text.UTF8Encoding]::new($false))
 ```
 
 ```powershell
@@ -104,5 +104,5 @@ Verify boot log `P10 R9B CARRIER=QUIET`. For rollback, flash the saved R9A .bin 
 
 - R9B original (0us attack): compare articulation and powerup/shutdown clicks to R9A (1ms), with unchanged idle tone expected.
 - R9B carrier-quiet: if raw idle PCM drops to zero, optical tone drops, and speech is otherwise equal, the modeled carrier is isolated as the likely residual source. If the 2656Hz optical tone persists with PCM exact zero, investigate FPGA mixing/clocking and other audio sources.
-- The R7 idle fastpath may engage only after **2.5s exact-zero output plus A/R request**, as before. If it does, compare immediate post-idle phoneme onset and ISR/USB responsiveness; a new behavior is *not automatically* qualified.
+- In optional carrier-quiet mode, the R7 idle fastpath is **deliberately held off** to keep synth clock/filter evolution live during the A/B test; `IDLE=0 Q=0` is expected. With the original carrier, R7 idle rules remain unchanged.
 - Do not claim hardware readiness until real BL616 SDK build, Stage2 verification, and optical comparisons succeed.
