@@ -82,3 +82,5 @@ static inline void ssi263_digital_idle_observe(ssi263_digital_idle *s,
     }
     if (s->consecutive_zeros >= s->needed_zeros) s->skipping=true;
 }
+
+#endif /* SSI263_DIGITAL_IDLE_H */
