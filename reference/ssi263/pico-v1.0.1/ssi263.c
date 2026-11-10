@@ -21,6 +21,13 @@ typedef char ssi263_defaults_size_check[
 enum { F1, F2, F3, NAS, VA, FA, NFIELDS };
 #define FINE_CHUNK 2048
 #define PENDING_MAX 256              /* writes held for a stop's end (as chip.py PENDING_MAX) */
+/* Experimental BL616-only optimization of the voiced-noise modulation
+ * oscillator. The unmodified Pico C model remains the default when this
+ * flag is undefined. 512 samples + linear interpolation, max |cos| error
+ * < 1.89e-5. A/B reference tests quantify rendered PCM fidelity. */
+#ifdef SSI263_R8_FAST_SWELL
+#define SSI263_R8_SWELL_LUT_SIZE 512u
+#endif
 
 typedef struct {
     real g, a1, a2, y1, y2, x1, x2;
@@ -71,6 +78,9 @@ struct ssi263 {
     real time;
     /* constants of _run */
     real hp_r, carrier[8], clo_floor;
+#ifdef SSI263_R8_FAST_SWELL
+    real swell_cos[SSI263_R8_SWELL_LUT_SIZE + 1u];
+#endif
     real fine[FINE_CHUNK];
 };
 
@@ -366,6 +376,15 @@ SSI263_API ssi263 *ssi263_new(const ssi263_params *p, const unsigned char *rom, 
     if (!c)
         return NULL;
     c->p = *p;
+#ifdef SSI263_R8_FAST_SWELL
+    /* Startup-only preparation (the synth task then never calls libm cosf
+     * for glottal noise modulation). Table belongs to the instance. */
+    if (p->noise_voice_swell != 0.0f) {
+        for (i = 0; i <= (int)SSI263_R8_SWELL_LUT_SIZE; i++)
+            c->swell_cos[i] = (real)cos(2.0 * M_PI * (double)i /
+                                       (double)SSI263_R8_SWELL_LUT_SIZE);
+    }
+#endif
     memcpy(c->rom, rom, SSI263_ROM_BYTES);
     c->gw_n = (int)p->glottal_n;
     if (c->gw_n < 1 || c->gw_n > SSI263_GLOTTAL_MAX)
@@ -494,6 +513,23 @@ SSI263_API void ssi263_set_xck(ssi263 *c, real xck)
     if (c && xck > 0.0)
         c->xck = xck;
 }
+
+#ifdef SSI263_R8_FAST_SWELL
+/* Linear-interpolated cosine, phase wrapped by chip_run to [0,1). The table
+ * is populated on model startup, so no cosine evaluation is done while
+ * producing audio. The exact reference function remains available under
+ * the original build, allowing a waveform-level comparison. */
+static inline real fast_swell_cos(const ssi263 *c)
+{
+    real p = c->phase * (real)SSI263_R8_SWELL_LUT_SIZE;
+    unsigned index = (unsigned)p;
+    if (index >= SSI263_R8_SWELL_LUT_SIZE)
+        index = SSI263_R8_SWELL_LUT_SIZE - 1u;
+    real alpha = p - (real)index;
+    return c->swell_cos[index] + alpha *
+        (c->swell_cos[index + 1u] - c->swell_cos[index]);
+}
+#endif
 
 /* chip.py's _run and _decimate, streamed: fine samples go through the FIR in chunks,
    which gives the same output as one call (the FIR carries its tail and phase). */
@@ -715,7 +751,11 @@ static long chip_run(ssi263 *c, long max_out, int stop_on_request, real *out)
             }
             if (swell != 0.0 && la[VA] > 0)
                 /* the noise swells with each glottal pulse while voiced (chip.py noise_voice_swell, v0.14) */
+#ifdef SSI263_R8_FAST_SWELL
+                nz = nz * (1.0 + swell * fast_swell_cos(c)) / swell_norm;
+#else
                 nz = nz * (1.0 + swell * cos(2 * M_PI * c->phase)) / swell_norm;
+#endif
             if (c->shaper_on)
                 nz = section_step(&c->shaper, nz);
             /* -- the cascade: F1 -> F2 (+noise) -> F3 -> F4 -> F5 (+noise) -- */
