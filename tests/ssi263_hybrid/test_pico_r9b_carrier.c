@@ -22,9 +22,10 @@ static int measure(float carrier_db, unsigned *peak, unsigned long *nonzero, int
     if (!c) return 1;
     /* Power on, choose an A/R-enabled phoneme mode, set amp=0, R4=$E8.
      * This deliberately tests carrier while the speech amplitude is zero. */
+    ssi263_write(c, 0, 0x40); /* mode latched from R0 at CTL power-up */
     ssi263_write(c, 3, 0x00);
     ssi263_write(c, 4, 0xE8);
-    ssi263_write(c, 0, 0x40);
+    ssi263_write(c, 0, 0x40); /* load a timed phoneme with zero amplitude */
     *peak = 0;
     *nonzero = 0;
     for (b = 0; b < BLOCKS; ++b) {
@@ -67,7 +68,8 @@ int main(void)
     if (original_peak < 5 || original_peak > 64
         || quiet_peak > 1
         || original_nonzero == 0
-        || quiet_nonzero > original_nonzero/100)
+        || quiet_nonzero > original_nonzero/100
+        || !ar_original || !ar_quiet)
         return 1;
     puts("PASS: reference Pico's powered-idle carrier accounts for PCM16-scale output");
     return 0;
