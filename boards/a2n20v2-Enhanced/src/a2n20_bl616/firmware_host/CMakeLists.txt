@@ -68,6 +68,14 @@ set_source_files_properties(
     ../../../../../reference/ssi263/pico-v1.0.1/ssi263dsp.c
     PROPERTIES COMPILE_OPTIONS "-O3;-fsingle-precision-constant"
 )
+# R8 BL616-only voiced-noise oscillator experiment. The original
+# (unoptimized) Pico reference remains the default for other platforms.
+# 512-point cosine LUT eliminates per-filter-tick libm cos calls.
+# CI compares unmodified/optimized 22.05kHz PCM before rollout.
+set_source_files_properties(
+    ../../../../../reference/ssi263/pico-v1.0.1/ssi263.c
+    PROPERTIES COMPILE_DEFINITIONS "SSI263_R8_FAST_SWELL=1"
+)
 target_link_libraries(app m)
 sdk_set_main_file(main.c)
 
