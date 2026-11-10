@@ -437,12 +437,16 @@ SSI263_API ssi263 *ssi263_new(const ssi263_params *p, const unsigned char *rom, 
            c->out_rate * c->os);
     /* constants of _run */
     c->hp_r = 1.0 - 2.0 * M_PI * p->hp_ratio;
+    /* Enhanced digital output omits the model\x27s analog-like residual
+     * carrier. The original reference behavior stays intact elsewhere. */
+#ifndef SSI263_DIGITAL_NO_CARRIER
     {
         real c8 = 0.1 * pow(10.0, p->carrier_rel_db / 20.0);
         real c4 = c8 * pow(10.0, p->carrier_h2_db / 20.0);
         for (i = 0; i < 8; i++)
             c->carrier[i] = c8 * sin(2 * M_PI * i / 8.0) + c4 * sin(2 * M_PI * i / 4.0);
     }
+#endif
     c->clo_floor = p->has_closure_floor != 0.0 ? pow(10.0, p->closure_floor_db / 20.0) : 0.0;
     set_fixed_sections(c);
     latch_all(c, 1);
@@ -551,7 +555,9 @@ static long chip_run(ssi263 *c, long max_out, int stop_on_request, real *out)
     int frac_timing = p->closure_fraction != 0.0;
     int fractional = p->pulse_fractional != 0.0;
     int clo_va = p->closure_va != 0.0;
+#ifndef SSI263_DIGITAL_NO_CARRIER
     int carrier_off = p->carrier_when_powered_down != 0.0;
+#endif
     int look = p->release_lookahead != 0.0;
     real lead = p->lookahead_lead_frames;
     int precharge = p->fricative_precharge != 0.0;
@@ -772,9 +778,11 @@ static long chip_run(ssi263 *c, long max_out, int stop_on_request, real *out)
             amp = rint(c->amp_cur) / 15.0;                   /* round(): half to even */
             v = gain * hp * amp * (clo_va ? 1.0 : c->clo);
         }
+#ifndef SSI263_DIGITAL_NO_CARRIER
         if (pw || carrier_off)
             v += c->carrier[c->tick & 7];
         c->tick += 1;
+#endif
         /* -- area-sample the held value to the host rate -- */
         rem = dt;
         while (rem > 0.0) {
