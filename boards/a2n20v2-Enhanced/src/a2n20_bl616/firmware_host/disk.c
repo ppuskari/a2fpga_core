@@ -459,7 +459,7 @@ static volatile bool g_remounting  = false;   /* disk_remount() running */
  * 0 = nothing scheduled. */
 static uint32_t g_hide_console_at_us = 0;
 
-/* Nonblocking screen handoff: 1.5 s with mounted media, 15 s if USB/SD
+/* Nonblocking screen handoff: 1.5 s with mounted media, 180 s if USB/SD
  * fails. The steady P10 speech diagnostics must never trap Apple video. */
 static void schedule_console_hide(uint32_t delay_us)
 {
@@ -482,7 +482,7 @@ static void disk_remount(void)
     /* Arm the failure timeout BEFORE any mount early-return path. */
     g_hide_console_at_us = 0;
     osd_console_show();
-    schedule_console_hide(15000000u);
+    schedule_console_hide(180000000u);
     osd_log("DISK II: SEARCHING FOR STORAGE...");
 
     /* Tear down the previous mount. */
