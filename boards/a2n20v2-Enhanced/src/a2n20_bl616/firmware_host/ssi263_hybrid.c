@@ -270,7 +270,9 @@ void ssi263_hybrid_task(void *arg)
                 bool all_zero=true;
                 for(unsigned j=0;j<BLOCK_SAMPLES;j++)
                     if(signed_samples[j]!=0) { all_zero=false; break; }
-                if(all_zero && ssi263_request(chip)) {
+                /* Carrier quiet A/B must not also activate the R7 fast idle
+                 * reset/skip path, which would confound the audio comparison. */
+                if(!SSI263_R9B_CARRIER_QUIET_TEST && all_zero && ssi263_request(chip)) {
                     if(silent_samples<idle_zero_samples)
                         silent_samples+=BLOCK_SAMPLES;
                     if(silent_samples>=idle_zero_samples)
