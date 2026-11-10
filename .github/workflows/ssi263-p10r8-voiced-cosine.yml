@@ -1,0 +1,70 @@
+name: P10 R8 SSI voiced DSP optimization
+on:
+  push:
+    branches:
+      - petar/ssi263-p10r8-voiced-dsp-speed-20261109
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pcm-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Produce matched 22.05kHz voiced PCM from unmodified and R8 Pico C
+        run: |
+          for variant in original fast; do
+            flags=""
+            if [ "$variant" = fast ]; then flags="-DSSI263_R8_FAST_SWELL=1"; fi
+            gcc -std=c99 -O3 -Wall -Wextra -Werror -fsingle-precision-constant $flags \
+              -Ireference/ssi263/pico-v1.0.1 \
+              tests/ssi263_hybrid/test_pico_r8_voiced_pcm.c \
+              reference/ssi263/pico-v1.0.1/ssi263.c \
+              reference/ssi263/pico-v1.0.1/ssi263dsp.c \
+              -lm -o /tmp/p10r8-$variant
+            /tmp/p10r8-$variant >/tmp/p10r8-$variant.pcm
+          done
+      - name: Quantify raw 16-bit PCM error, waveform correlation and noise spectrum
+        run: |
+          python3 - <<'PY'
+          import array,math
+          def load(p):
+              a=array.array("h")
+              with open(p,"rb") as f:a.frombytes(f.read())
+              assert len(a)==49152, len(a)
+              return a
+          x=load('/tmp/p10r8-original.pcm')
+          y=load('/tmp/p10r8-fast.pcm')
+          p=sum(v*v for v in x)
+          q=sum(v*v for v in y)
+          e=sum((a-b)**2 for a,b in zip(x,y))
+          c=sum(a*b for a,b in zip(x,y)) / math.sqrt(p*q)
+          snr=10*math.log10(p/max(e,1))
+          peak=max(abs(a-b) for a,b in zip(x,y))
+          print(f"PCM CORRELATION={c:.9f} SNR={snr:.3f} dB PEAK_SAMPLE_ERROR={peak} SAMPLES={len(x)}")
+          assert p>0 and c>0.9999 and snr>65.0
+          PY
+      - name: Preserve R7 edge shaper, idle-skip and stable Enhanced HID
+        run: |
+          gcc -std=c11 -O2 -Wall -Wextra -Werror \
+            -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host \
+            tests/ssi263_hybrid/test_ssi263_audio_edges.c -o /tmp/p10r8edges
+          /tmp/p10r8edges
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -fsyntax-only \
+            -Itests/ssi263_hybrid/stubs \
+            -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host \
+            -Ireference/ssi263/pico-v1.0.1 \
+            boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c
+          python3 - <<'PY'
+          from pathlib import Path
+          base=Path('boards/a2n20v2-Enhanced')
+          cm=(base/'src/a2n20_bl616/firmware_host/CMakeLists.txt').read_text()
+          usb=(base/'src/a2n20_bl616/firmware_host/usb_config.h').read_text()
+          top=(base/'hdl/top.sv').read_text()
+          assert 'SSI263_R8_FAST_SWELL=1' in cm
+          assert 'CONFIG_USBHOST_MAX_EHPORTS          8' in usb
+          assert 'CONFIG_USBHOST_REQUEST_BUFFER_LEN 1024' in usb
+          assert "MOCKINGBOARD_SSI263_HYBRID_ENABLE = 1'b1" in top
+          assert "IIE_SPEECH_VIDEO_TRIM = 1'b0" in top
+          print('PASS R8: BL616-only DSP flag, original Enhanced USB, IIgs VGC')
+          PY
