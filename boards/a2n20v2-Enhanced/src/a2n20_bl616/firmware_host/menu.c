@@ -43,7 +43,7 @@ typedef enum { VIEW_APPLE, VIEW_CONSOLE, VIEW_MENU } view_t;
 
 static view_t s_view       = VIEW_APPLE;
 static view_t s_mcu_view   = VIEW_MENU;    /* which MCU view SELECT returns to */
-#define MCU_SCREEN_TIMEOUT_US 15000000u
+#define MCU_SCREEN_TIMEOUT_US 180000000u
 static uint32_t s_last_mcu_input_us;
 
 /* ---- item model ---------------------------------------------------------- */
@@ -1159,7 +1159,7 @@ void menu_input(uint16_t buttons)
     uint16_t pressed = buttons & (uint16_t)~s_prev_buttons;
     s_prev_buttons = buttons;
 
-    /* Auto-return to Apple video after 15 s idle. The startup console can
+    /* Auto-return to Apple video after 180 s idle. The startup console can
      * appear with s_view == VIEW_APPLE after a failed USB mount, so it has a
      * separate log-idle timer. Firmware/FPGA installation is exempt because
      * the s_fw_installing guard above returns before we reach this code. */
