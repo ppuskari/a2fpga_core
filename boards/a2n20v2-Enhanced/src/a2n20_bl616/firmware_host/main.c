@@ -1282,10 +1282,13 @@ int main(void)
     /* Disk II image serving: mount SD, serve track-on-demand requests. */
     usb_osal_thread_create("disk", 3072, CONFIG_USBHOST_PSC_PRIO + 1, disk_thread, NULL);
 
-    /* P10-R4: render speech below USB enumeration/input and disk service.
-     * The native Pico model is currently much slower than real-time on BL616,
-     * so it MUST NOT preempt USB PSC or the 20ms menu tick indefinitely. */
-    usb_osal_thread_create("ssi263", 6144, CONFIG_USBHOST_PSC_PRIO,
+    /* R8: keep speech below BOTH the USB PSC host-service task (28)
+     * and the HID/menu poll task (29). R7 accidentally ran the hot
+     * DSP task at the SAME priority as USB PSC, allowing ~10ms speech
+     * runs to delay USB HID report servicing and make TAB unresponsive.
+     * The speech FIFO may absorb brief preemptions; UI must never
+     * wait for a quiet phoneme to receive a keyboard report. */
+    usb_osal_thread_create("ssi263", 6144, CONFIG_USBHOST_PSC_PRIO - 1,
                            ssi263_hybrid_task, NULL);
 
     /* Remote console/menu mirror on TCP port 23. */
