@@ -1,0 +1,40 @@
+name: P10 R9B zero attack and carrier A/B test
+on:
+  push:
+    branches:
+      - petar/ssi263-p10r9b-zeroattack-carrier-ab-20261110
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check true zero-attack bypass and retained R8 features
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          b=Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host")
+          c=(b/"ssi263_hybrid.c").read_text()
+          assert "#define SSI263_R7_ATTACK_US 0u" in c
+          assert "#if SSI263_R7_ATTACK_US > 0u" in c
+          assert "shaped=signed_samples[j];" in c
+          assert "SSI263_R9B_CARRIER_QUIET_TEST 0u" in c
+          assert "params.carrier_rel_db=-200.0f;" in c
+          assert "P10 R9B: ATTACK BYPASSED" in c
+          assert "R9 CTL=%02X R4=%02X MODE=%d" in c
+          assert "#define SSI263_PCM_RATE_DIV 2u" in c
+          assert "CONFIG_USBHOST_PSC_PRIO - 1" in (b/"main.c").read_text()
+          assert "MCU_SCREEN_TIMEOUT_US 180000000u" in (b/"menu.c").read_text()
+          assert "SSI263_R8_FAST_SWELL=1" in (b/"CMakeLists.txt").read_text()
+          assert "SSI263_R9B" not in Path("reference/ssi263/pico-v1.0.1/ssi263.c").read_text()
+          print("PASS: genuine 0us shaper bypass; carrier A/B param; R8 preserved")
+          PY
+      - name: Compile and run Pico carrier origin fixture
+        run: |
+          gcc -std=c99 -O3 -fsingle-precision-constant -Wall -Wextra -Werror -Ireference/ssi263/pico-v1.0.1 tests/ssi263_hybrid/test_pico_r9b_carrier.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/r9b-carrier
+          /tmp/r9b-carrier
+      - name: Host syntax check R9B MCU renderer
+        run: |
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -fsyntax-only -DSSI263_PCM_RATE_DIV=2 -Itests/ssi263_hybrid/stubs -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Ireference/ssi263/pico-v1.0.1 boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c
