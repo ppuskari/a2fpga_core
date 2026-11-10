@@ -161,6 +161,7 @@ void ssi263_hybrid_task(void *arg)
     ring_reset();
     osd_log("P10 SSI263: Pico C hybrid online");
     osd_log("P10 SOURCE=%uHZ DIV=%u",pcm_hz,pcm_rate_div);
+    osd_log("P10 R8: FAST VOICED COS LUT512");
     for(;;) {
         if(!read_status()) {
             active=false;seq_valid=false;fault=true;
