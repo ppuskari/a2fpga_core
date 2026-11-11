@@ -55,7 +55,7 @@ int main(int argc,char **argv) {
     ssi263_write(chip,3,0x80);
     ssi263_write(chip,0,0xC0);  /* latch mode 3 on power up */
     ssi263_write(chip,4,0xE8);
-    ssi263_write(chip,2,0x68);
+    ssi263_write(chip,2,0x48);
     ssi263_write(chip,1,0x63);
     ssi263_write(chip,3,0x69);
 
