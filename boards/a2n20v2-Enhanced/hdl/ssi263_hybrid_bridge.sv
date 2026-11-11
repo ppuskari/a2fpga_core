@@ -202,7 +202,12 @@ module ssi263_hybrid_bridge #(
                 pcm_wrptr_r<=0;pcm_rdptr_r<=0;
                 pcm_lo_valid_r<=0;playing_r<=0;
                 speech_pcm_o<=0;
-                underrun_r<=0;overrun_r<=0;
+                // A deliberate R11 suspend/resume is NOT a statistics
+                // reset. Keep accumulated UND/OVR observable across cycles.
+                if(pcm_reset_w || pcm_rate_set_w ||
+                   (speech_power_prev_r && !speech_powered_i)) begin
+                    underrun_r<=0;overrun_r<=0;
+                end
             end else begin
                 if(pcm_stream_wr_w)begin
                     if(!spi_wr_addr_i[0])begin
