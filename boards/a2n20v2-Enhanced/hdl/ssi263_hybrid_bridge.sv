@@ -3,6 +3,10 @@
 // XFER SPACE 4: PCM16 little-endian stream (write address 0 onward);
 //   status is read from address 0x800000 (24 bytes).
 //   write 0x800000 => clear PCM ring and error counters.
+//   write 0x800002 <= {0,1} => RESUME, SUSPEND PCM delivery.
+//   Suspended audio outputs digital zero without underrun accounting, and
+//   event XCK tracking + Apple SSI registers remain live and independent.
+//   status bytes 26/27 => 0xB7 capability + bit0 suspended ACK.
 // XFER SPACE 5: 8-byte SSI CPU-write events (read, address 0 onward).
 //   Event bytes: reg, data, seq_lo, seq_hi, tick[7:0]..tick[31:24].
 //   Consuming byte 7 pops an event. Never pop on an empty queue.
@@ -48,7 +52,7 @@ module ssi263_hybrid_bridge #(
     wire [PCM_AW:0] pcm_count_w=pcm_wrptr_r-pcm_rdptr_r;
     wire [PCM_AW:0] pcm_free_w=PCM_DEPTH-pcm_count_w;
     logic [7:0] pcm_lo_r;
-    logic pcm_lo_valid_r,playing_r;
+    logic pcm_lo_valid_r,playing_r,pcm_suspended_r;
     logic [1:0] pcm_rate_mode_r,pcm_div_phase_r;
     wire pcm_consume_tick_w = pcm_rate_mode_r==2'd0 ||
         (pcm_rate_mode_r==2'd1 && !pcm_div_phase_r[0]) ||
@@ -67,12 +71,15 @@ module ssi263_hybrid_bridge #(
     wire audio_tick_w=sample_sync_r[2] && !sample_sync_r[1];
 
     wire pcm_stream_wr_w=spi_wr_i && spi_wr_space_i==3'd4 &&
-                           !spi_wr_addr_i[23];
+                           !spi_wr_addr_i[23] && !pcm_suspended_r;
     wire pcm_reset_w=spi_wr_i && spi_wr_space_i==3'd4 &&
                        spi_wr_addr_i==24'h800000;
     wire pcm_rate_set_w=spi_wr_i && spi_wr_space_i==3'd4 &&
                          spi_wr_addr_i==24'h800001 &&
                          spi_wr_data_i<=8'd2;
+    wire pcm_suspend_cmd_w=spi_wr_i && spi_wr_space_i==3'd4 &&
+                           spi_wr_addr_i==24'h800002 &&
+                           spi_wr_data_i<=8'd1;
     wire pcm_write_sample_w=pcm_stream_wr_w && spi_wr_addr_i[0] &&
                             pcm_lo_valid_r && (pcm_count_w<PCM_DEPTH);
     wire evt_pop_w=spi_rd_i && spi_rd_space_i==3'd5 &&
@@ -125,6 +132,8 @@ module ssi263_hybrid_bridge #(
           23:status_byte=8'h31;
           24:status_byte=8'hA6; // R6 PCM rate-select capability marker
           25:status_byte={6'b0,pcm_rate_mode_r}; // 0=44k,1=22k,2=11k
+          26:status_byte=8'hB7; // R11 explicit PCM suspend capability
+          27:status_byte={7'b0,pcm_suspended_r}; // acknowledged state
           default:status_byte=8'hff;
         endcase
     endfunction
@@ -133,6 +142,7 @@ module ssi263_hybrid_bridge #(
         if (!reset_n_i) begin
             pcm_wrptr_r<=0;pcm_rdptr_r<=0;
             pcm_lo_r<=0;pcm_lo_valid_r<=0;
+            pcm_suspended_r<=0;
             pcm_rate_mode_r<=0;pcm_div_phase_r<=0;
             speech_power_prev_r<=0;
             speech_pcm_o<=0;playing_r<=0;
@@ -181,9 +191,13 @@ module ssi263_hybrid_bridge #(
 
             // Never replay buffered old-phoneme PCM across CTL powerdown.
             // Reset the FIFO even if the BL616 is delayed or absent.
-            if(pcm_reset_w || pcm_rate_set_w ||
+            if(pcm_reset_w || pcm_rate_set_w || pcm_suspend_cmd_w ||
                (speech_power_prev_r && !speech_powered_i))begin
                 if(pcm_rate_set_w)pcm_rate_mode_r<=spi_wr_data_i[1:0];
+                // Preserve the paused state across an Apple powerdown edge;
+                // the MCU will acknowledge any next write before re-priming.
+                if(pcm_suspend_cmd_w)pcm_suspended_r<=spi_wr_data_i[0];
+                else if(pcm_reset_w || pcm_rate_set_w)pcm_suspended_r<=0;
                 pcm_div_phase_r<=0;
                 pcm_wrptr_r<=0;pcm_rdptr_r<=0;
                 pcm_lo_valid_r<=0;playing_r<=0;
@@ -213,7 +227,7 @@ module ssi263_hybrid_bridge #(
                       2'd1:pcm_div_phase_r<={1'b0,~pcm_div_phase_r[0]};
                       default:pcm_div_phase_r<=pcm_div_phase_r+2'd1;
                     endcase
-                    if(!speech_powered_i)
+                    if(!speech_powered_i || pcm_suspended_r)
                         speech_pcm_o<=0;
                     else if(pcm_consume_tick_w)begin
                         if(playing_r && pcm_count_w!=0)begin
