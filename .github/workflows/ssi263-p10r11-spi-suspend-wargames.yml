@@ -46,3 +46,29 @@ jobs:
           assert "SSI263_DIGITAL_NO_CARRIER" in Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/CMakeLists.txt").read_text()
           print("PASS: R11 SPI PCM suspend handshake + R10 fallback")
           PY
+      - name: Assemble Apple II slot-4 WOPR test and build SSI digital speech preview
+        run: |
+          ca65 -o /tmp/wargames.o examples/ssi263_wargames/wargames_slot4.s
+          ld65 -C examples/ssi263_wargames/apple2_6000.cfg -o /tmp/wargames.raw /tmp/wargames.o
+          test $(stat -c%s /tmp/wargames.raw) -gt 30
+          gcc -std=c99 -O3 -fsingle-precision-constant -Wall -Wextra -Werror -DSSI263_DIGITAL_NO_CARRIER=1 -DSSI263_R8_FAST_SWELL=1 -Ireference/ssi263/pico-v1.0.1 examples/ssi263_wargames/render_wargames.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/wargames_preview
+          /tmp/wargames_preview /tmp/wargames_ssi263.wav
+          test $(stat -c%s /tmp/wargames_ssi263.wav) -gt 44044
+          python3 - <<'PY'
+          from pathlib import Path
+          a=Path('examples/ssi263_wargames/wargames_slot4.s').read_text()
+          b=Path('examples/ssi263_wargames/render_wargames.c').read_text()
+          import re
+          asm=re.findall(r'\.byte\s+((?:\$[0-9a-fA-F]{2}(?:\s*,\s*)?)+)',a)
+          values=[int(h,16) for group in asm for h in re.findall(r'\$([0-9a-fA-F]{2})',group)]
+          cvals=[int(h,16) for h in re.findall(r'0x([0-9a-fA-F]{2})',b.split('static const uint8_t phrase[]=',1)[1].split('};',1)[0])]
+          assert values[:len(cvals)]==cvals,(values,cvals)
+          print('PASS: Apple II source and Pico preview use identical SSI-263 phoneme bytes')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r11-wargames-ssi263-demo
+          path: |
+            /tmp/wargames.raw
+            /tmp/wargames_ssi263.wav
+          if-no-files-found: error
