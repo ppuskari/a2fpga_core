@@ -41,8 +41,8 @@ IFR_CA1 = $02
     sta SSI_R0             ; PA (code 0), mode 3 for A/R handshake
     lda #$E8
     sta SSI_R4             ; Demo Disk-compatible filter clock divider
-    lda #$68
-    sta SSI_R2             ; slower syllable rate than Disk 1 ($A8)
+    lda #$48
+    sta SSI_R2             ; slower ~2.1s WOPR cadence (Disk 1=$A8)
     lda #$63
     sta SSI_R1             ; nearly fixed inflection (WOPR-like flatness)
     lda #$69
