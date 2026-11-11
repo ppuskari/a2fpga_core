@@ -31,6 +31,8 @@
 #define SSI_EVENTS_SPACE   5u
 #define SSI_STATUS_ADDR    0x800000u
 #define SSI_RATE_ADDR      0x800001u
+#define SSI_SUSPEND_ADDR   0x800002u
+#define SSI_SUSPEND_CAP    0xB7u
 #ifndef SSI263_PCM_RATE_DIV
 #define SSI263_PCM_RATE_DIV 2u /* 1=44.1k; 2=22.05k default; 4=11.025k */
 #endif
@@ -40,7 +42,7 @@
 #define BLOCK_SAMPLES      128u
 #define BLOCK_BYTES        (2u*BLOCK_SAMPLES)
 #define EVENTS_PER_BURST   12u
-#define STATUS_LEN         26u /* legacy 24 bytes plus R6 capability/rate */
+#define STATUS_LEN         28u /* + R11 PCM suspend capability/ACK */
 #define TARGET_BUFFER      1024u
 #define XCK_HZ             1020000.0f
 /* R10: conservative powered-idle threshold. A/R alone never gates audio. */
@@ -73,6 +75,22 @@ static void ring_reset(void)
 {
     uint8_t one=1;
     fpga_spi_xfer_write(SSI_PCM_SPACE,SSI_STATUS_ADDR,&one,1);
+}
+
+/* R11: new FPGA capability is mandatory for the pause handshake. An old
+ * R6 FPGA must continue operating with unchanged R10 zero-PCM behavior.
+ * Acknowledgment is a readback of the state; never infer success from SPI
+ * write completion alone. Paused means ONLY PCM is stopped: events remain live. */
+static bool set_pcm_suspend(bool suspend)
+{
+    const uint8_t request=suspend ? 1u : 0u;
+    for(unsigned attempt=0;attempt<3u;attempt++) {
+        fpga_spi_xfer_write(SSI_PCM_SPACE,SSI_SUSPEND_ADDR,&request,1u);
+        if(read_status() && status_buf[26]==SSI_SUSPEND_CAP &&
+           status_buf[27]==request)return true;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    return false;
 }
 
 /* Old P10 FPGA returns 0x31 for the optional capability byte and must
@@ -134,9 +152,15 @@ void ssi263_hybrid_task(void *arg)
     uint32_t prev_skipped_blocks=0u;
 
     ring_reset();
+    (void)read_status(); /* re-read after reset/rate selection for capability */
+    bool pcm_suspend_supported=(status_buf[26]==SSI_SUSPEND_CAP);
+    bool pcm_suspended=false;
+    uint64_t suspend_begin_us=0;
+    uint32_t pcm_pause_count=0,pcm_resume_count=0,pcm_pause_failures=0;
     osd_log("P10 SSI263: Pico C hybrid online");
     osd_log("P10 SOURCE=%uHZ DIV=%u",pcm_hz,pcm_rate_div);
     osd_log("P10 R10: NATIVE ATTACK, NO CARRIER");
+    osd_log("P10 R11: SPI PCM PAUSE CAP=%u",(unsigned)pcm_suspend_supported);
     osd_log("P10 R10: IDLE SKIP AFTER 2500MS");
     osd_log("P10 R8: FAST VOICED COS LUT512");
     for(;;) {
@@ -152,6 +176,24 @@ void ssi263_hybrid_task(void *arg)
                EVENTS_PER_BURST : event_count;
 
         if(burst) {
+            /* Resume the FPGA before consuming Apple SSI events. On failure,
+             * leave the event FIFO intact and retry; no first phoneme lost. */
+            if(pcm_suspended) {
+                if(!set_pcm_suspend(false)) {
+                    ++pcm_pause_failures;
+                    osd_log("P10 R11: PCM RESUME ACK FAILED");
+                    vTaskDelay(pdMS_TO_TICKS(2));
+                    continue;
+                }
+                pcm_suspended=false;
+                ++pcm_resume_count;
+                uint64_t now_us=bflb_mtimer_get_time_us();
+                if(now_us>suspend_begin_us) {
+                    /* Lazy virtual-time catchup. The model was already
+                     * outputting exact zero and A/R ready before sleep. */
+                    ssi263_skip(chip,(real)(now_us-suspend_begin_us)/1000000.0f);
+                }
+            }
             /* Any SSI write wakes BEFORE applying it; no time-since-write mute. */
             ssi263_digital_idle_write(&idle);
             fpga_spi_xfer_read(SSI_EVENTS_SPACE,0,events_buf,
@@ -184,6 +226,7 @@ void ssi263_hybrid_task(void *arg)
             // Preserve Apple-visible bus operation, but never emit audio
             // from an unknown/dropped phoneme sequence.
             ring_reset();
+            pcm_suspended=false;
             active=false;
             ssi263_digital_idle_reset(&idle);
             if(read16(status_buf+14)==0)
@@ -193,7 +236,7 @@ void ssi263_hybrid_task(void *arg)
         }
         const unsigned buffered=(unsigned)read16(status_buf+4);
         const unsigned free_space=(unsigned)read16(status_buf+6);
-        if(active && buffered<TARGET_BUFFER &&
+        if(active && !pcm_suspended && buffered<TARGET_BUFFER &&
            free_space>=BLOCK_SAMPLES) {
             uint64_t begin=bflb_mtimer_get_time_us();
             if(ssi263_digital_idle_can_skip(&idle,ssi263_request(chip)!=0)) {
@@ -230,6 +273,26 @@ void ssi263_hybrid_task(void *arg)
             if(model_us>peak_model_us)peak_model_us=model_us;
             if(spi_us>peak_spi_us)peak_spi_us=spi_us;
             ++total_blocks;
+            /* Enter FPGA PCM suspension only after the same R10 2.5s
+             * exact-zero/A-R qualification. The FPGA flushes queued
+             * zeros and outputs silence without underrun accounting.
+             * Events and XCK timestamps remain available for wake. */
+            if(pcm_suspend_supported && idle.skipping && !pcm_suspended) {
+                if(set_pcm_suspend(true)) {
+                    pcm_suspended=true;
+                    suspend_begin_us=bflb_mtimer_get_time_us();
+                    ++pcm_pause_count;
+                } else {
+                    ++pcm_pause_failures;
+                    osd_log("P10 R11: PCM PAUSE ACK FAILED");
+                    /* A paused FPGA that cannot ACK is not safe for audio.
+                     * Explicit ring reset clears suspend, so fall back
+                     * to R10 zero-PCM feed on this session. */
+                    ring_reset();
+                    pcm_suspend_supported=false;
+                    ssi263_digital_idle_reset(&idle);
+                }
+            }
             /* 128 samples: 2.902/5.805/11.610 ms at div 1/2/4.
              * Scale the prior 2.5 ms guard with the source rate so SLOW
              * means comparable headroom across all three modes. */
@@ -266,6 +329,10 @@ void ssi263_hybrid_task(void *arg)
                     (unsigned long)read16(status_buf+10));
             /* SK is this reporting window. WAKE is cumulative events
              * that arrived while synthesis was skipped; Q is current state. */
+            osd_log("P10 R11 PA=%lu RE=%lu ERR=%lu",
+                    (unsigned long)pcm_pause_count,
+                    (unsigned long)pcm_resume_count,
+                    (unsigned long)pcm_pause_failures);
             osd_log("P10 R10 SK=%lu WAKE=%lu Q=%u",
                     (unsigned long)(idle.skipped_blocks-prev_skipped_blocks),
                     (unsigned long)idle.wakes,
