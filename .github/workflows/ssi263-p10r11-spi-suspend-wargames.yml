@@ -1,0 +1,48 @@
+name: P10 R11 acknowledged SPI PCM suspend/resume
+on:
+  push:
+    branches:
+      - petar/ssi263-p10r11-spi-suspend-wargames-20261111
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install HDL and optional Apple II tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq iverilog verilator cc65
+      - name: R11 + existing FPGA bridge regressions
+        run: |
+          iverilog -g2012 -Wall -s tb_ssi263_hybrid_bridge -o /tmp/p10.vvp boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv tests/ssi263_hybrid/tb_ssi263_hybrid_bridge.sv
+          vvp /tmp/p10.vvp
+          iverilog -g2012 -Wall -s tb_ssi263_p10r6_multirate -o /tmp/p10r6.vvp boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv tests/ssi263_hybrid/tb_ssi263_p10r6_multirate.sv
+          vvp /tmp/p10r6.vvp
+          iverilog -g2012 -Wall -s tb_ssi263_p10r11_pcm_suspend -o /tmp/p10r11.vvp boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv tests/ssi263_hybrid/tb_ssi263_p10r11_pcm_suspend.sv
+          vvp /tmp/p10r11.vvp
+          verilator --lint-only --timing -Wno-fatal --top-module ssi263_hybrid_bridge boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv
+      - name: Host syntax and R10 model continuity
+        run: |
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -fsyntax-only -DSSI263_PCM_RATE_DIV=2 -Itests/ssi263_hybrid/stubs -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Ireference/ssi263/pico-v1.0.1 boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c
+          gcc -std=c99 -O2 -Wall -Wextra -Werror -fsyntax-only -DSSI263_PCM_RATE_DIV=4 -Itests/ssi263_hybrid/stubs -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Ireference/ssi263/pico-v1.0.1 boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c
+          gcc -std=c99 -O3 -fsingle-precision-constant -Wall -Wextra -Werror -DSSI263_DIGITAL_NO_CARRIER=1 -DSSI263_R8_FAST_SWELL=1 -Ireference/ssi263/pico-v1.0.1 -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host tests/ssi263_hybrid/test_p10_r10_idle_resume.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/r10-idle
+          /tmp/r10-idle
+      - name: Assert R11 protocol capability and safe fallback
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          sv=Path("boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv").read_text()
+          c=Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/ssi263_hybrid.c").read_text()
+          assert "24'h800002" in sv and "8'hB7" in sv
+          assert "pcm_suspended_r" in sv
+          assert "SSI_SUSPEND_CAP    0xB7u" in c
+          assert "set_pcm_suspend(false)" in c
+          assert "set_pcm_suspend(true)" in c
+          assert "if(pcm_suspended)" in c
+          assert "pcm_suspend_supported" in c
+          assert "SSI263_DIGITAL_NO_CARRIER" in Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/CMakeLists.txt").read_text()
+          print("PASS: R11 SPI PCM suspend handshake + R10 fallback")
+          PY
