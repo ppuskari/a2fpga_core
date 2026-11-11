@@ -57,7 +57,7 @@ int main(int argc,char **argv) {
     ssi263_write(chip,4,0xE8);
     ssi263_write(chip,2,0x68);
     ssi263_write(chip,1,0x63);
-    ssi263_write(chip,3,0x6D);
+    ssi263_write(chip,3,0x69);
 
     uint32_t total=0,nonzero=0;
     uint32_t peak=0;
@@ -91,7 +91,7 @@ int main(int argc,char **argv) {
     fprintf(stderr,"WOPR ROM=%zu phoneme records duration=%.3fs samples=%lu nonzero=%lu peak=%lu\n",
             sizeof(phrase),(double)total/SAMPLE_RATE,(unsigned long)total,
             (unsigned long)nonzero,(unsigned long)peak);
-    return (nonzero && peak>100 && total>SAMPLE_RATE && total<8*SAMPLE_RATE)?0:1;
+    return (nonzero && peak>100 && peak<32767 && total>SAMPLE_RATE && total<8*SAMPLE_RATE)?0:1;
 fail:
     fclose(f);
     ssi263_free(chip);
