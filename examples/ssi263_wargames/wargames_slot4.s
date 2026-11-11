@@ -45,8 +45,8 @@ IFR_CA1 = $02
     sta SSI_R2             ; slower syllable rate than Disk 1 ($A8)
     lda #$63
     sta SSI_R1             ; nearly fixed inflection (WOPR-like flatness)
-    lda #$6D
-    sta SSI_R3             ; power on, articulation 6, volume 13
+    lda #$69
+    sta SSI_R3             ; power on, articulation 6, volume 9
 
     ldy #$00
 next_phoneme:
