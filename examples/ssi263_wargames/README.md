@@ -1,3 +1,17 @@
+## Take 5 — pronounce "A" as AY, steady-pitch GAME, film-timed staccato
+
+The previous versions used `AH` for the standalone article, resulting in an audible **"uh"**. Take 5 replaces it with the ROM's **AY** phoneme (`R0=$85`, 2 frames) to get the unmistakable spoken letter **"A"** in **"Shall we play A game?"**. This is a pronunciation choice requested by the listener, not a claim about the film's phonetic transcription.
+
+- **No late GAME pitch sweep.** Single pitch target `R1=$97` (~142Hz) is issued on the PA before the initial `KV` /g/ closure; the existing SSI-native pitch glide occurs in the pause/mostly unvoiced closure before the voiced vowel, then GAME's AY and M continue without new R1 writes.
+- **Same exact 45-frame timing** as the movie-timed Take 4: the five word groups still begin at cumulative SSI frames **0, 12, 19, 27, 32**, and the completed sentence remains approximately **2.19 seconds**.
+- **Moderate added staccato:** SHALL, WE and PLAY each lose one vowel frame, with that frame allocated to a longer pause after each word. The standalone AY gets two frames and its following PA gets three frames. The starting timestamps of the words therefore do not move.
+- **Not an engine patch:** no FPGA, MCU, or Pico C model source changes.
+- **Files:** `wargames_slot4_fixed_game.s`, `render_wargames_fixed_game.c` → `wargames_fixed_game.raw` and `wargames_ssi263_fixed_game.wav` in the latest GitHub Actions artifact.
+- **To play on the Apple IIe:** import raw binary at `$6000`, then call `24576`. R3=$80 remains the explicit power-off command on exit.
+
+The `R1` program uses native mode-3 SSI pitch glide and may not achieve mathematically identical pitch on every microsecond of the unvoiced /g/ onset; the acceptance target is a **steady, elevated pitch for the audible GAME vowel and nasal**, verified first in the real C model and then by optical capture if desired.
+
+---
 ## Take 4 / Take 4B — movie-like pitch rise, verified standalone SSI demos
 
 **Start here:** The uploaded film-plus-preview recording mistakenly appended **Take 1**, not Take 3. It was matched sample-for-sample against GitHub artifacts. Take 3 already has R1 pitch automation, but the final pitch does not rise far enough.
