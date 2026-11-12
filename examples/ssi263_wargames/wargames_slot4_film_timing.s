@@ -110,18 +110,19 @@ done:
 ; SH is called SCH in the reconciled ROM; "G" uses voiced KV.
 ; Calculated at R2=$48: 1 frame ~= 48.19ms; total 45 frames
 ; = 2.1685s before Pico model timer/rounding; film reference 2.1943s.
-; Target word start phases 0.00 / 0.58 / 0.96 / 1.35 / 1.64s.
+; Target voiced phases 0.00 / 0.58 / 0.96 / 1.35 / 1.59s.
+; GAME's initial /g/ closure (~145ms) precedes its voiced onset ~1.74s.
 phrase:
-    .byte $B2,$0C,$60      ; SHALL: SCH 2f + AE 4f + L 3f = 9 frames
-    .byte $40              ; PA 3f: pronounced ~145ms boundary
+    .byte $72,$0C,$20      ; SHALL: SCH 3f + AE 4f + L 4f = 11 frames
+    .byte $C0              ; PA 1f: ~48ms, movie valley 0.55-0.59s
     .byte $A3,$01          ; WE: W 2f + E 4f = 6 frames
-    .byte $80              ; PA 2f: ~96ms gap
+    .byte $80              ; PA 2f: ~96ms, movie valley 0.87-0.95s
     .byte $E7,$A0,$05      ; PLAY: P 1f + L 2f + AY 4f = 7 frames
-    .byte $C0              ; PA 1f: ~48ms clipped transition
-    .byte $0E              ; A: AH 4f: ~193ms
-    .byte $80              ; PA 2f: ~96ms, low-energy movie transition
-    .byte $A6,$05,$B7      ; GAME: KV 2f + AY 4f + M 2f = 8 frames
-    .byte $40              ; PA 3f: ~145ms post-word release/tail
+    .byte $C0              ; PA 1f: ~48ms, movie valley 1.31-1.35s
+    .byte $0E              ; A: AH 4f: ~193ms, clipped ending
+    .byte $C0              ; PA 1f: ~48ms, pre-glide to GAME
+    .byte $66,$05,$77      ; GAME: KV 3f closure + AY 4f + M 3f = 10f
+    .byte $80              ; PA 2f: ~96ms final release/tail
 phrase_end:
 
 old_pcr:    .byte $00
