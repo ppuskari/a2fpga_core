@@ -1,3 +1,32 @@
+## Take 2: punchier WOPR word boundaries (November 11, 2026)
+
+The first preview rendered correctly but sounded too connected and hurried compared with the film. The revised demo is **an alternate program**, not a change to the R11 FPGA, BL616, Pico ROM, or speech synthesis parameters.
+
+- **Apple II source:** `wargames_slot4_staccato.s` → `wargames_staccato.raw`
+- **Host source:** `render_wargames_staccato.c` → `wargames_ssi263_staccato.wav`
+- The original `wargames_slot4.s`, `render_wargames.c`, `wargames.raw` and `wargames_ssi263.wav` remain available as **Take 1**.
+- Both new files share the same 22 physical SSI phoneme/pause bytes, verified in GitHub CI; we do not splice or redistribute MGM film dialogue.
+
+The new cadence at SSI rate `R2=$48` (approximately 48.19ms per frame):
+
+| Word | Phoneme duration | Subsequent PA pause | Main change |
+|---|---:|---:|---|
+| SHALL | ~289ms | ~482ms | Shorter AE/L, longer separation |
+| WE | ~193ms | ~386ms | Shorter E, more distinct transition |
+| PLAY | ~289ms | ~386ms | Shorter AY, sharply separated from A |
+| A | ~96ms | ~193ms | Separate unstressed syllable |
+| GAME | ~289ms | ~193ms final | Clipped-off, isolated terminal word |
+
+Target spoken-program duration is approximately **2.8s**, versus Take 1's ~2.15s. These timings are **from the synthetic SSI ROM/controller**, not yet measurements of the MGM audio. The original soundboard labels a ~4-second movie clip, which may include lead-in/release padding. We have identified a reference clip at:
+- https://datacore.sciflicks.com/wargames/sounds/wargames_play_game.wav
+- https://www.youtube.com/watch?v=YIh41wZEd5c (official MGM scene)
+
+An original WAV upload or optical-recorded A/B comparison would allow finer alignment of each word onset, vowel length, pitch inflection and digital pauses. Until then, Take 2 is an **ear-directed approximation** of the staccato delivery, not a claim of sample-matched film cadence.
+
+**To try Take 2 without reflashing anything:** import `wargames_staccato.raw` from the latest CI artifact as a binary at Apple II address `$6000`, replacing (or separately naming) the earlier `WARGAMES` disk file, then run `CALL 24576`. The source still explicitly sends SSI `R3=$80` on exit. No FPGA or BL616 firmware update is involved.
+
+---
+
 # WarGames / Joshua-inspired SSI-263 demo — "Shall we play a game?"
 
 **Intent:** Play the correct brief `WarGames` (1983) WOPR line from an actual SSI-263 phoneme stream on the Apple IIe slot-4 Enhanced Mockingboard. This does **not** embed John Wood's copyrighted soundtrack or pretend the movie used the SSI-263 chip.
