@@ -172,6 +172,39 @@ jobs:
           assert 2.0<duration<2.4,duration
           print(f'PASS WOPR TAKE4B: 17 identical R0 bytes, all R1 changes, {duration:.3f}s')
           PY
+      - name: WOPR Take 5 'ay game' with fixed high GAME pitch
+        run: |
+          ca65 -o /tmp/wargames_fixed_game.o examples/ssi263_wargames/wargames_slot4_fixed_game.s
+          ld65 -C examples/ssi263_wargames/apple2_6000.cfg -o /tmp/wargames_fixed_game.raw /tmp/wargames_fixed_game.o
+          test $(stat -c%s /tmp/wargames_fixed_game.raw) -gt 30
+          gcc -std=c99 -O3 -fsingle-precision-constant -Wall -Wextra -Werror -DSSI263_DIGITAL_NO_CARRIER=1 -DSSI263_R8_FAST_SWELL=1 -Ireference/ssi263/pico-v1.0.1 examples/ssi263_wargames/render_wargames_fixed_game.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/wargames_fixed_game_preview
+          /tmp/wargames_fixed_game_preview /tmp/wargames_ssi263_fixed_game.wav
+          python3 - <<'PY'
+          from pathlib import Path
+          import re,wave,struct
+          a=Path('examples/ssi263_wargames/wargames_slot4_fixed_game.s').read_text()
+          b=Path('examples/ssi263_wargames/render_wargames_fixed_game.c').read_text()
+          score=a.split('phrase:',1)[1].split('phrase_end:',1)[0]
+          vals=[int(h,16) for h in re.findall(r'\$([0-9A-Fa-f]{2})',score)]
+          arr=b.split('static const uint8_t phrase[]={',1)[1].split('};',1)[0]
+          cvals=[int(h,16) for h in re.findall(r'0x([0-9A-Fa-f]{2})',arr)]
+          assert vals==cvals and len(vals)==17,(vals,cvals)
+          assert vals[11]==0x85 and vals[12]==0x40,(vals[11],vals[12])
+          assert all(v not in a for v in ['lda #$AB','not_final_rise'])
+          assert 'if(i==14)ssi263_write(chip,1,' not in b
+          assert 'cpy #12' in a and 'lda #$97' in a and 'if(i==12)ssi263_write(chip,1,0x97)' in b
+          durations=[4-(v>>6) for v in vals]
+          assert sum(durations)==45,sum(durations)
+          assert [sum(durations[:i]) for i in [4,7,11,13]]==[12,19,27,32]
+          with wave.open('/tmp/wargames_ssi263_fixed_game.wav','rb') as w:
+            assert (w.getframerate(),w.getnchannels(),w.getsampwidth())==(22050,1,2)
+            duration=w.getnframes()/w.getframerate()
+            data=w.readframes(w.getnframes())
+          peak=max(abs(v) for v in struct.unpack('<%dh'%(len(data)//2),data))
+          assert 2.0<duration<2.4,duration
+          assert peak<32767,peak
+          print(f'PASS TAKE5: {duration:.3f}s, same 45 frames/movie word boundaries, short AY before GAME, peak={peak}')
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: r11-wargames-ssi263-demo
@@ -186,4 +219,6 @@ jobs:
             /tmp/wargames_ssi263_movie_curve.wav
             /tmp/wargames_punctuated.raw
             /tmp/wargames_ssi263_punctuated.wav
+            /tmp/wargames_fixed_game.raw
+            /tmp/wargames_ssi263_fixed_game.wav
           if-no-files-found: error
