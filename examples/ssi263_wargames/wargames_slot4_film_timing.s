@@ -66,9 +66,9 @@ not_we:
     lda #$53             ; PLAY: ~91Hz
     sta SSI_R1
 not_play:
-    cpy #13
+    cpy #12
     bne not_game
-    lda #$83             ; GAME: deliberate raised final pitch
+    lda #$83             ; pre-glide during A->GAME pause; ~124Hz target
     sta SSI_R1
 not_game:
     lda #IFR_CA1
@@ -110,7 +110,7 @@ done:
 ; SH is called SCH in the reconciled ROM; "G" uses voiced KV.
 ; Calculated at R2=$48: 1 frame ~= 48.19ms; total 45 frames
 ; = 2.1685s before Pico model timer/rounding; film reference 2.1943s.
-; Target word starting phases 0.00 / 0.58 / 0.96 / 1.35 / 1.73s.
+; Target word start phases 0.00 / 0.58 / 0.96 / 1.35 / 1.64s.
 phrase:
     .byte $B2,$0C,$60      ; SHALL: SCH 2f + AE 4f + L 3f = 9 frames
     .byte $40              ; PA 3f: pronounced ~145ms boundary
@@ -119,9 +119,9 @@ phrase:
     .byte $E7,$A0,$05      ; PLAY: P 1f + L 2f + AY 4f = 7 frames
     .byte $C0              ; PA 1f: ~48ms clipped transition
     .byte $0E              ; A: AH 4f: ~193ms
-    .byte $00              ; PA 4f: ~193ms dramatic pause before GAME
+    .byte $80              ; PA 2f: ~96ms, low-energy movie transition
     .byte $A6,$05,$B7      ; GAME: KV 2f + AY 4f + M 2f = 8 frames
-    .byte $C0              ; PA 1f: brief post-word release
+    .byte $40              ; PA 3f: ~145ms post-word release/tail
 phrase_end:
 
 old_pcr:    .byte $00
