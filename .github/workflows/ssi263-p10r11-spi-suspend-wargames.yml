@@ -77,8 +77,8 @@ jobs:
           import re, wave
           a=Path('examples/ssi263_wargames/wargames_slot4_staccato.s').read_text()
           b=Path('examples/ssi263_wargames/render_wargames_staccato.c').read_text()
-          asm=re.findall(r'\\.byte\\s+((?:\\$[0-9a-fA-F]{2}(?:\\s*,\\s*)?)+)',a)
-          values=[int(h,16) for group in asm for h in re.findall(r'\\$([0-9a-fA-F]{2})',group)]
+          asm=re.findall(r'\.byte\s+((?:\$[0-9a-fA-F]{2}(?:\s*,\s*)?)+)',a)
+          values=[int(h,16) for group in asm for h in re.findall(r'\$([0-9a-fA-F]{2})',group)]
           cvals=[int(h,16) for h in re.findall(r'0x([0-9a-fA-F]{2})',b.split('static const uint8_t phrase[]=',1)[1].split('};',1)[0])]
           assert values[:len(cvals)]==cvals and len(cvals)==22,(values,cvals)
           with wave.open('/tmp/wargames_ssi263.wav','rb') as w:
