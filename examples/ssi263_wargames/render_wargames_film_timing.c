@@ -23,8 +23,8 @@ static const uint8_t phrase[]={
     0xB2,0x0C,0x60,0x40,
     0xA3,0x01,0x80,
     0xE7,0xA0,0x05,0xC0,
-    0x0E,0x00,
-    0xA6,0x05,0xB7,0xC0
+    0x0E,0x80,
+    0xA6,0x05,0xB7,0x40
 };
 
 static void le16(FILE *f,uint32_t v) {
@@ -70,7 +70,7 @@ int main(int argc,char **argv) {
     for(size_t i=0;i<sizeof(phrase);++i) {
         if(i==4) ssi263_write(chip,1,0x43);  /* WE: ~83Hz */
         if(i==7) ssi263_write(chip,1,0x53);  /* PLAY and A: ~91Hz */
-        if(i==13)ssi263_write(chip,1,0x83);  /* GAME: ~124Hz */
+        if(i==12)ssi263_write(chip,1,0x83);  /* anticipate GAME pitch in gap, ~124Hz */
         ssi263_write(chip,0,phrase[i]);
         unsigned blocks=0;
         do {
