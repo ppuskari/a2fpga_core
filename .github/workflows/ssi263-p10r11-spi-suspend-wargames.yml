@@ -89,6 +89,35 @@ jobs:
           assert v2_sec>v1_sec+0.45,(v1_sec,v2_sec)
           print(f'PASS: WOPR original={v1_sec:.3f}s staccato={v2_sec:.3f}s; identical 22 ROM phoneme bytes in Apple II and C preview')
           PY
+      - name: Build and validate Take 3 film-timed SSI-263 phrase
+        run: |
+          ca65 -o /tmp/wargames_film_timing.o examples/ssi263_wargames/wargames_slot4_film_timing.s
+          ld65 -C examples/ssi263_wargames/apple2_6000.cfg -o /tmp/wargames_film_timing.raw /tmp/wargames_film_timing.o
+          test $(stat -c%s /tmp/wargames_film_timing.raw) -gt 30
+          gcc -std=c99 -O3 -fsingle-precision-constant -Wall -Wextra -Werror -DSSI263_DIGITAL_NO_CARRIER=1 -DSSI263_R8_FAST_SWELL=1 -Ireference/ssi263/pico-v1.0.1 examples/ssi263_wargames/render_wargames_film_timing.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/wargames_film_timing_preview
+          /tmp/wargames_film_timing_preview /tmp/wargames_ssi263_film_timing.wav
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, wave
+          a=Path('examples/ssi263_wargames/wargames_slot4_film_timing.s').read_text()
+          b=Path('examples/ssi263_wargames/render_wargames_film_timing.c').read_text()
+          score=a.split('phrase:',1)[1].split('phrase_end:',1)[0]
+          vals=[int(x,16) for x in re.findall(r'\$([0-9A-Fa-f]{2})',score)]
+          arr=b.split('static const uint8_t phrase[]={',1)[1].split('};',1)[0]
+          cvals=[int(x,16) for x in re.findall(r'0x([0-9A-Fa-f]{2})',arr)]
+          assert vals==cvals and len(cvals)==17,(vals,cvals)
+          for j,n in [(4,0x43),(7,0x53),(13,0x83)]:
+            assert f'cpy #{j}' in a
+            assert f'lda #${n:02X}' in a
+            assert f'if(i=={j})' in b and f'0x{n:02X}' in b
+          duration=[]
+          for f in ['/tmp/wargames_ssi263.wav','/tmp/wargames_ssi263_staccato.wav','/tmp/wargames_ssi263_film_timing.wav']:
+            with wave.open(f,'rb') as w:
+              duration.append(w.getnframes()/w.getframerate())
+          assert 2.00<duration[2]<2.45,duration
+          assert duration[2]<duration[1]-0.30,duration
+          print(f'PASS WOPR: Take1={duration[0]:.3f}s Take2={duration[1]:.3f}s Film-timed={duration[2]:.3f}s; identical 17 ROM bytes')
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: r11-wargames-ssi263-demo
@@ -97,4 +126,6 @@ jobs:
             /tmp/wargames_ssi263.wav
             /tmp/wargames_staccato.raw
             /tmp/wargames_ssi263_staccato.wav
+            /tmp/wargames_film_timing.raw
+            /tmp/wargames_ssi263_film_timing.wav
           if-no-files-found: error
