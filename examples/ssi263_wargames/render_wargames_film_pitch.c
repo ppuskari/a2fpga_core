@@ -70,7 +70,7 @@ int main(int argc,char **argv) {
     for(size_t i=0;i<sizeof(phrase);++i) {
         if(i==2) ssi263_write(chip,1,0x53); /* SHALL rises 69->~91Hz at L */
         if(i==4) ssi263_write(chip,1,0x3B); /* WE ~80Hz */
-        if(i==7) ssi263_write(chip,1,0x63); /* PLAY begins ~100Hz */
+        if(i==6) ssi263_write(chip,1,0x63); /* PLAY pre-glide during WE PA */
         if(i==9) ssi263_write(chip,1,0x53); /* PLAY end and standalone A ~91Hz */
         if(i==12)ssi263_write(chip,1,0x83); /* GAME ~124.5Hz, set AFTER A */
         ssi263_write(chip,0,phrase[i]);
