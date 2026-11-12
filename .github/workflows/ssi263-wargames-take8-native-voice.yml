@@ -1,0 +1,83 @@
+name: SSI263 WarGames Take8 native chip voice controls
+on:
+  push:
+    branches:
+      - petar/ssi263-p10r11-spi-suspend-wargames-20261111
+    paths:
+      - examples/ssi263_wargames/**
+      - reference/ssi263/pico-v1.0.1/**
+      - .github/workflows/ssi263-wargames-take8-native-voice.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  take8:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ca65 and ld65
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cc65
+      - name: Build Take7 and all native SSI R4/T experiments
+        run: |
+          mkdir -p /tmp/ssi263-native-voice
+          for variant in film_pitch r4e4 r4e0 r4de r4e0_t7; do
+            ca65 -o /tmp/ssi263-native-voice/$variant.o examples/ssi263_wargames/wargames_slot4_$variant.s
+            ld65 -C examples/ssi263_wargames/apple2_6000.cfg -o /tmp/ssi263-native-voice/wargames_$variant.raw /tmp/ssi263-native-voice/$variant.o
+            gcc -std=c99 -O3 -fsingle-precision-constant -Wall -Wextra -Werror -DSSI263_DIGITAL_NO_CARRIER=1 -DSSI263_R8_FAST_SWELL=1 -Ireference/ssi263/pico-v1.0.1 examples/ssi263_wargames/render_wargames_$variant.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/ssi263-native-voice/preview_$variant
+            /tmp/ssi263-native-voice/preview_$variant /tmp/ssi263-native-voice/wargames_ssi263_$variant.wav
+          done
+      - name: Verify same R0/R1 score, native filter+articulation variants, clean WAV
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re,wave,struct,math,hashlib
+          base=Path('examples/ssi263_wargames')
+          out=Path('/tmp/ssi263-native-voice')
+          spec={'film_pitch':(0xE8,0x68),'r4e4':(0xE4,0x68),'r4e0':(0xE0,0x68),'r4de':(0xDE,0x68),'r4e0_t7':(0xE0,0x78)}
+          reference=None
+          audio_hashes=set()
+          for variant,(r4,r3) in spec.items():
+            a=(base/f'wargames_slot4_{variant}.s').read_text()
+            c=(base/f'render_wargames_{variant}.c').read_text()
+            score=a.split('phrase:',1)[1].split('phrase_end:',1)[0]
+            vals=[int(v,16) for v in re.findall(r'\$([0-9a-fA-F]{2})',score)]
+            arr=c.split('static const uint8_t phrase[]={',1)[1].split('};',1)[0]
+            cvals=[int(v,16) for v in re.findall(r'0x([0-9a-fA-F]{2})',arr)]
+            assert vals==cvals and len(vals)==17,(variant,'R0 mismatch',vals,cvals)
+            assert sum(4-(v>>6) for v in vals)==45
+            if reference is None: reference=vals
+            assert vals==reference,(variant,'changed phonemes or timing')
+            for i,v in [(2,'53'),(4,'3B'),(6,'63'),(9,'53'),(12,'83')]:
+              assert f'cpy #{i}' in a and ('lda #$'+v) in a
+              assert f'if(i=={i})' in c and ('0x'+v) in c
+            assert ('lda #$%02X'%r4) in a
+            assert ('ssi263_write(chip,4,0x%02X)'%r4) in c
+            assert ('lda #$%02X'%r3) in a
+            assert ('ssi263_write(chip,3,0x%02X)'%r3) in c
+            with wave.open(str(out/f'wargames_ssi263_{variant}.wav'),'rb') as f:
+              assert (f.getframerate(),f.getnchannels(),f.getsampwidth())==(22050,1,2)
+              duration=f.getnframes()/f.getframerate()
+              raw=f.readframes(f.getnframes())
+            samples=struct.unpack('<%dh'%(len(raw)//2),raw)
+            peak=max(abs(v) for v in samples)
+            rms=math.sqrt(sum(v*v for v in samples)/len(samples))/32768
+            assert 2.18<duration<2.21,(variant,duration)
+            assert 50<peak<32767,(variant,peak)
+            assert rms>0.01,(variant,rms)
+            digest=hashlib.sha256(raw).hexdigest()
+            assert digest not in audio_hashes,('unchanged PCM',variant)
+            audio_hashes.add(digest)
+            filter_hz=1020000/(2*(256-r4))
+            print(f'PASS {variant}: R4=0x{r4:02X}, T={(r3>>4)&7}, filter={filter_hz:.1f} Hz, duration={duration:.4f}s, peak={peak}, rms={rms:.4f}, SHA={digest[:12]}')
+          assert len(audio_hashes)==len(spec)
+          print('PASS native SSI: same 17 R0 phonemes, same 45 frames, same R1 pitch; changed R4/T only')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wargames-take8-native-ssi-only
+          path: |
+            /tmp/ssi263-native-voice/*.wav
+            /tmp/ssi263-native-voice/*.raw
+          if-no-files-found: error
