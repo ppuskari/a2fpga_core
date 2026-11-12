@@ -1,3 +1,17 @@
+## Take 3: timed to the uploaded HQ film reference (November 12, 2026)
+
+**Latest recommendation:** Start with `wargames_ssi263_film_timing.wav`, rather than Take 2, and compare it to the 2.194-second movie clip.
+
+- The exact movie WAV is **not** included or uploaded to the repository.
+- Movie clip: **2.194s**; newly generated SSI-263 Take 3: **2.191s** (3ms difference).
+- Movie low-energy word boundaries: approximately **0.579, 0.898, 1.332 and 1.636s**; gaps near **45, 75, 35 and 30ms**, respectively.
+- Take 3 uses 17 authentic SSI-263 phoneme/pause records, with 45 frames overall, a 22.05kHz carrierless renderer, tightly controlled word ends and **different R1 pitch settings per word**. The final “game” target rises toward ~124Hz.
+- Apple II binary: `wargames_film_timing.raw` (load at `$6000`, `CALL 24576`).
+- New source files: `wargames_slot4_film_timing.s` and `render_wargames_film_timing.c`.
+- No R11 FPGA or MCU firmware change; no flash needed. Original Take 1 and staccato Take 2 remain in the same CI ZIP for A/B comparisons.
+- Complete measured analysis, note of uncertainties and the word-by-word SSI register score: [TAKE3_FILM_REFERENCE_ANALYSIS.md](TAKE3_FILM_REFERENCE_ANALYSIS.md).
+
+---
 ## Take 2: punchier WOPR word boundaries (November 11, 2026)
 
 The first preview rendered correctly but sounded too connected and hurried compared with the film. The revised demo is **an alternate program**, not a change to the R11 FPGA, BL616, Pico ROM, or speech synthesis parameters.
