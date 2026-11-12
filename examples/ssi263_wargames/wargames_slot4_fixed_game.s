@@ -47,8 +47,8 @@ IFR_CA1 = $02
     sta SSI_R2             ; slower ~2.1s WOPR cadence (Disk 1=$A8)
     lda #$1B
     sta SSI_R1             ; target ~69Hz for SHALL (HQ movie reference)
-    lda #$69
-    sta SSI_R3             ; power on, articulation 6, volume 9
+    lda #$68
+    sta SSI_R3             ; power on, articulation 6, volume 8 (headroom)
 
     ldy #$00
 next_phoneme:
@@ -67,9 +67,9 @@ not_we:
     lda #$53             ; PLAY: ~91Hz
     sta SSI_R1
 not_play:
-    cpy #12
+    cpy #11
     bne not_game
-    lda #$97             ; pre-glide to ~142Hz during gap + /g/ closure
+    lda #$97             ; pre-glide through A, PA, /g/ to settle before GAME vowel
     sta SSI_R1
 not_game:
     ; No mid-word R1 writes: the GAME vowel and nasal stay at one F0.
@@ -113,7 +113,7 @@ done:
 ; Calculated at R2=$48: 1 frame ~= 48.19ms; total 45 frames
 ; = 2.1685s before Pico model timer/rounding; film reference 2.1943s.
 ; Target voiced phases 0.00 / 0.58 / 0.96 / 1.35 / 1.59s.
-; The 145ms pre-GAME PA and 145ms /g/ closure hide the pitch glide.
+; The AY syllable, 96ms PA, and 145ms /g/ closure pre-set GAME pitch.
 ; No pitch change occurs within the audible GAME vowel or nasal.
 phrase:
     .byte $72,$4C,$20      ; SHALL: SCH 3f + AE 3f + L 4f = 10f
@@ -122,8 +122,8 @@ phrase:
     .byte $80              ; PA 2f: ~96ms gap; total group 7f
     .byte $E7,$A0,$45      ; PLAY: P 1f + L 2f + AY 3f = 6f
     .byte $80              ; PA 2f: ~96ms gap; total group 8f
-    .byte $85              ; A: AY 2f (letter "ay"), not AH/"uh"
-    .byte $40              ; PA 3f: ~145ms gap, starts high pitch glide
+    .byte $45              ; A: AY 3f, clearly spoken "ay" (not AH/"uh")
+    .byte $80              ; PA 2f: ~96ms before /g/, unchanged group timing
     .byte $66,$05,$37      ; GAME: KV 3f + AY 4f + M 4f = 11f
     .byte $80              ; PA 2f final tail; group 13f
 phrase_end:
