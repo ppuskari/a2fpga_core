@@ -1,3 +1,16 @@
+## Take 6 — game one-half step down from Take 5 (November 12, 2026)
+
+The listener found Take 5's elevated `GAME` pitch too high. Rather than normalizing the processed movie voice as if it contained clean unprocessed fundamentals, this version uses the listener's requested **midpoint** between the prior word (about **90.6Hz**) and Take 5 GAME (**142.3Hz**). The mathematical midpoint is **116.4Hz**; SSI mode-3 register `R1=$7B` gives an exact native-model target of **117.19Hz**.
+
+- Keep the **correct A = AY** (R0 `$45`, 3 frames), not AH / "uh."
+- Keep the **same 45-frame movie-timed score**, ~2.191 seconds, and the moderate ~96ms staccato word boundaries.
+- Keep GAME stable through its vowel and final M: write `R1=$7B` once at R0 index 11, early in the preceding AY, and **do not pitch-slide within GAME**. SSI's native glide finishes before its voiced vowel.
+- Preserve Take 5 for A/B listening and preserve all other releases and firmware unchanged.
+- Files: `wargames_slot4_lower_game.s` (Apple II source), `render_wargames_lower_game.c` (Pico reference renderer). The workflow publishes `wargames_lower_game.raw` (load at `$6000`, `CALL 24576`) and `wargames_ssi263_lower_game.wav` (22.05kHz mono preview).
+
+This is a deliberate **listening-based timbral adjustment**, not a definitive measurement of the edited film actor's original pitch. It can be tested without FPGA or BL616 flashing.
+
+---
 ## Take 5 — pronounce "A" as AY, steady-pitch GAME, film-timed staccato
 
 The previous versions used `AH` for the standalone article, resulting in an audible **"uh"**. Take 5 replaces it with the ROM's **AY** phoneme (`R0=$45`, 3 frames) to get the unmistakable spoken letter **"A"** in **"Shall we play A game?"**. This is a pronunciation choice requested by the listener, not a claim about the film's phonetic transcription.
