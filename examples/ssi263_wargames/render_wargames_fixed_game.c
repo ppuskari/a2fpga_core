@@ -23,7 +23,7 @@ static const uint8_t phrase[]={
     0x72,0x4C,0x20,0x80, /* SHALL: shorter vowel, ~96ms word gap */
     0xA3,0x41,0x80,      /* WE: shorter vowel, ~96ms word gap */
     0xE7,0xA0,0x45,0x80, /* PLAY: short AY, ~96ms word gap */
-    0x85,0x40,           /* A: AY/"ay" 2f; 3f PA pre-GAME */
+    0x45,0x80,           /* A: AY/"ay" 3f; 2f PA pre-GAME */
     0x66,0x05,0x37,0x80  /* GAME: fixed pitch after hidden pre-glide */
 };
 
@@ -61,7 +61,7 @@ int main(int argc,char **argv) {
     ssi263_write(chip,4,0xE8);
     ssi263_write(chip,2,0x48);
     ssi263_write(chip,1,0x1B); /* SHALL initial ~69Hz */
-    ssi263_write(chip,3,0x69);
+    ssi263_write(chip,3,0x68); /* volume 8 for full-band headroom */
 
     uint32_t total=0,nonzero=0;
     uint32_t peak=0;
@@ -70,7 +70,7 @@ int main(int argc,char **argv) {
     for(size_t i=0;i<sizeof(phrase);++i) {
         if(i==4) ssi263_write(chip,1,0x3B);  /* WE: ~80Hz */
         if(i==7) ssi263_write(chip,1,0x53);  /* PLAY and A: ~91Hz */
-        if(i==12)ssi263_write(chip,1,0x97);  /* pre-glide to ~142Hz before voiced GAME */
+        if(i==11)ssi263_write(chip,1,0x97);  /* pre-glide during A + PA + /g/ closure */
         ssi263_write(chip,0,phrase[i]);
         unsigned blocks=0;
         do {
@@ -102,7 +102,8 @@ int main(int argc,char **argv) {
             if((i==3 && (f0<65.0 || f0>77.0)) ||
                (i==6 && (f0<74.0 || f0>87.0)) ||
                (i==10 && (f0<86.0 || f0>96.0)) ||
-               (i==14 && (f0<132.0 || f0>147.0)) ||
+               (i==13 && (f0<140.0 || f0>147.0)) ||
+               (i==14 && (f0<140.0 || f0>147.0)) ||
                (i==15 && (f0<138.0 || f0>147.0)))goto fail;
         }
     }
