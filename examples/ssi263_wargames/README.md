@@ -1,3 +1,17 @@
+## Take 4 / Take 4B — movie-like pitch rise, verified standalone SSI demos
+
+**Start here:** The uploaded film-plus-preview recording mistakenly appended **Take 1**, not Take 3. It was matched sample-for-sample against GitHub artifacts. Take 3 already has R1 pitch automation, but the final pitch does not rise far enough.
+
+Two new **separate, firmware-independent** alternatives are now provided:
+
+- **Take 4:** `wargames_ssi263_movie_curve.wav`, source `wargames_slot4_movie_curve.s`, Apple II binary `wargames_movie_curve.raw`. Pitch ramps from ~69Hz to ~181Hz, with film-aligned short word valleys, **2.191s**.
+- **Take 4B (punctuated):** `wargames_ssi263_punctuated.wav`, source `wargames_slot4_punctuated.s`, Apple II binary `wargames_punctuated.raw`. Same pitch and **2.191s** duration, but takes one ~48ms frame from each early word's vowel and adds it to the pause. This emphasizes words more mechanically, even though it departs somewhat from the movie's shorter gaps.
+
+Both outputs are generated from physical SSI-263 ROM phoneme codes, compile in GitHub Actions, and have no clipping or FPGA/BL616 firmware changes. Load a raw `.raw` at `$6000`, then `CALL 24576`.
+
+See [TAKE4_MOVIE_CURVE_AND_PUNCTUATION.md](TAKE4_MOVIE_CURVE_AND_PUNCTUATION.md) for confirmed film/source audio comparison, measured pitch, emitted phoneme bytes and validated build outputs.
+
+---
 ## Take 3: timed to the uploaded HQ film reference (November 12, 2026)
 
 **Latest recommendation:** Start with `wargames_ssi263_film_timing.wav`, rather than Take 2, and compare it to the 2.194-second movie clip.
