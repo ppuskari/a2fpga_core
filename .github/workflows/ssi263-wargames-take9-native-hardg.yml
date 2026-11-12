@@ -1,0 +1,89 @@
+name: SSI263 WarGames Take9 native hard-G and tone
+on:
+  push:
+    branches:
+      - petar/ssi263-p10r11-spi-suspend-wargames-20261111
+    paths:
+      - examples/ssi263_wargames/**
+      - reference/ssi263/pico-v1.0.1/**
+      - .github/workflows/ssi263-wargames-take9-native-hardg.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  take9:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Apple II compiler
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cc65
+      - name: Render four authentic SSI native-chip Take9 variants
+        run: |
+          mkdir -p /tmp/ssi263-take9
+          for variant in r4e5 r4e5_k1kv2 r4e5_k2kv1 r4e6_k1kv2; do
+            ca65 -o /tmp/ssi263-take9/$variant.o examples/ssi263_wargames/wargames_slot4_$variant.s
+            ld65 -C examples/ssi263_wargames/apple2_6000.cfg -o /tmp/ssi263-take9/wargames_$variant.raw /tmp/ssi263-take9/$variant.o
+            gcc -std=c99 -O3 -fsingle-precision-constant -Wall -Wextra -Werror -DSSI263_DIGITAL_NO_CARRIER=1 -DSSI263_R8_FAST_SWELL=1 -Ireference/ssi263/pico-v1.0.1 examples/ssi263_wargames/render_wargames_$variant.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/ssi263-take9/preview_$variant
+            /tmp/ssi263-take9/preview_$variant /tmp/ssi263-take9/wargames_ssi263_$variant.wav
+          done
+      - name: Validate original ROM allophones, stop closure, timing, and PCM fidelity
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re,wave,struct,hashlib,math,csv
+          base=Path('examples/ssi263_wargames')
+          out=Path('/tmp/ssi263-take9')
+          spec={
+            'r4e5':(0xE5, [0x66,0x05,0x37,0x80]),
+            'r4e5_k1kv2':(0xE5,[0xE9,0xA6,0x05,0x37,0x80]),
+            'r4e5_k2kv1':(0xE5,[0xA9,0xE6,0x05,0x37,0x80]),
+            'r4e6_k1kv2':(0xE6,[0xE9,0xA6,0x05,0x37,0x80])}
+          with (Path('reference/ssi263/pico-v1.0.1/rom_bits.csv')).open() as stream:
+            rows=list(csv.reader(x for x in stream if not x.startswith('#')))
+          rom={row[1]:row for row in rows[1:]}
+          assert int(rom['K'][0],16)==0x29 and int(rom['KV'][0],16)==0x26
+          # b00=0 is the actual closure condition in the pinned Pico model:
+          assert rom['K'][2]=='0' and rom['KV'][2]=='1'
+          hashes=set()
+          for variant,(r4,gbytes) in spec.items():
+            a=(base/f'wargames_slot4_{variant}.s').read_text()
+            c=(base/f'render_wargames_{variant}.c').read_text()
+            s=a.split('phrase:',1)[1].split('phrase_end:',1)[0]
+            vals=[int(h,16) for h in re.findall(r'\$([0-9a-fA-F]{2})',s)]
+            array=c.split('static const uint8_t phrase[]={',1)[1].split('};',1)[0]
+            v2=[int(h,16) for h in re.findall(r'0x([0-9a-fA-F]{2})',array)]
+            assert vals==v2,(variant,vals,v2)
+            assert vals[13:]==gbytes,(variant,vals[13:])
+            assert len(vals)==13+len(gbytes)
+            assert sum(4-(v>>6) for v in vals)==45,(variant,'duration changed')
+            assert [sum(4-(v>>6) for v in vals[:i]) for i in [4,7,11,13]]==[12,19,27,32],(variant,'word boundaries changed')
+            for i,p in [(2,'53'),(4,'3B'),(6,'63'),(9,'53'),(12,'83')]:
+              assert f'cpy #{i}' in a and ('lda #$'+p) in a
+              assert f'if(i=={i})' in c and ('0x'+p) in c
+            assert ('lda #$%02X'%r4) in a
+            assert ('ssi263_write(chip,4,0x%02X)'%r4) in c
+            assert 'lda #$68' in a and 'ssi263_write(chip,3,0x68)' in c
+            with wave.open(str(out/f'wargames_ssi263_{variant}.wav'),'rb') as f:
+              assert (f.getframerate(),f.getnchannels(),f.getsampwidth())==(22050,1,2)
+              sec=f.getnframes()/f.getframerate()
+              raw=f.readframes(f.getnframes())
+            samples=struct.unpack('<%dh'%(len(raw)//2),raw)
+            peak=max(abs(v) for v in samples)
+            rms=math.sqrt(sum(v*v for v in samples)/len(samples))/32768
+            assert 2.18<sec<2.24,(variant,sec)
+            assert 100<peak<32767,(variant,'clipping')
+            digest=hashlib.sha256(raw).hexdigest()
+            assert digest not in hashes,(variant,'duplicate waveform')
+            hashes.add(digest)
+            print(f'PASS {variant}: {len(vals)} ROM writes, 45 frames, {sec:.4f}s, peak={peak}, RMS={rms:.4f}, SHA={digest[:12]}')
+          print('PASS Take9: native K closure plus KV voiced onset, no added DSP, word boundaries preserved')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wargames-take9-r4e5-hardg
+          path: |
+            /tmp/ssi263-take9/*.wav
+            /tmp/ssi263-take9/*.raw
+          if-no-files-found: error
