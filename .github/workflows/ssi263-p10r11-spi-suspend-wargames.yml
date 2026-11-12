@@ -106,7 +106,7 @@ jobs:
           arr=b.split('static const uint8_t phrase[]={',1)[1].split('};',1)[0]
           cvals=[int(x,16) for x in re.findall(r'0x([0-9A-Fa-f]{2})',arr)]
           assert vals==cvals and len(cvals)==17,(vals,cvals)
-          for j,n in [(4,0x43),(7,0x53),(13,0x83)]:
+          for j,n in [(4,0x43),(7,0x53),(12,0x83)]:
             assert f'cpy #{j}' in a
             assert f'lda #${n:02X}' in a
             assert f'if(i=={j})' in b and f'0x{n:02X}' in b
