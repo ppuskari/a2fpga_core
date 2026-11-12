@@ -1,3 +1,20 @@
+## Take 7 — Direct measured pitch of the uploaded movie WAV (recommended)
+
+Take 7 retains Take 6's **17 phoneme records / 45-frame (~2.191s) score**, its distinctly pronounced standalone **AY** for "A," and the moderate staccato rests. It changes only the pitch schedule based on analyzing the actual uploaded `shallweplayagame(1).wav`:
+
+- **SHALL**: ~69Hz, rising to ~91Hz on the terminal L
+- **WE**: ~80Hz
+- **PLAY**: ~100Hz initially, falling to ~91Hz on its AY
+- **A**: stays at ~91Hz for the entire word (previous Takes 5/6 changed it prematurely)
+- **GAME**: hold ~124.5Hz, nearest SSI register pitch to the movie's central ~128Hz, with no mid-word pitch rise
+
+The PLAY pitch transition is initiated during the *preceding* pause; GAME's pitch likewise begins during the PA after A, then settles during the unvoiced /g/ closure. Both approaches preserve word boundaries and avoid audible glides on the wrong word.
+
+**Files:** `wargames_ssi263_film_pitch.wav` (listen) and `wargames_film_pitch.raw` (Apple II executable, load at $6000, call 24576). All previous takes are retained. No FPGA or BL616 flash required.
+
+See [TAKE7_DIRECT_MOVIE_PITCH.md](TAKE7_DIRECT_MOVIE_PITCH.md) for the direct YIN measurement method, movie pitch ranges, native SSI register quantization, and byte/CI validation.
+
+---
 ## Take 6 — game one-half step down from Take 5 (November 12, 2026)
 
 The listener found Take 5's elevated `GAME` pitch too high. Rather than normalizing the processed movie voice as if it contained clean unprocessed fundamentals, this version uses the listener's requested **midpoint** between the prior word (about **90.6Hz**) and Take 5 GAME (**142.3Hz**). The mathematical midpoint is **116.4Hz**; SSI mode-3 register `R1=$7B` gives an exact native-model target of **117.19Hz**.
