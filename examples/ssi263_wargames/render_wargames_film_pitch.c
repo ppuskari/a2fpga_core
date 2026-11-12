@@ -92,7 +92,7 @@ int main(int argc,char **argv) {
                 goto fail;
             }
         } while(!ssi263_request(chip));
-        if(i==1 || i==3 || i==6 || i==8 || i==10 || i==11 || i==12 || i==13 || i==14 || i==15) {
+        if(i==1 || i==3 || i==5 || i==8 || i==10 || i==11 || i==12 || i==13 || i==14 || i==15) {
             real state[40];
             if(ssi263_state(chip,state,40)<14)goto fail;
             /* Exact glottal oscillator frequency from the real Pico model;
@@ -103,7 +103,7 @@ int main(int argc,char **argv) {
                     i,ssi263_reg(chip,1),f0,(double)state[3]);
             if((i==1 && (f0<65.0 || f0>73.0)) ||
                (i==3 && (f0<84.0 || f0>94.0)) ||
-               (i==6 && (f0<74.0 || f0>87.0)) ||
+               (i==5 && (f0<74.0 || f0>87.0)) ||
                (i==8 && (f0<95.0 || f0>105.0)) ||
                (i==10 && (f0<86.0 || f0>96.0)) ||
                (i==11 && (f0<86.0 || f0>96.0)) ||
