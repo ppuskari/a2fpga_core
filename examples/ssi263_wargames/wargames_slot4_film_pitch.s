@@ -69,9 +69,9 @@ not_shall_tail:
     lda #$3B             ; WE: 80Hz
     sta SSI_R1
 not_we:
-    cpy #7
+    cpy #6
     bne not_play
-    lda #$63             ; PLAY initial P/L: ~100Hz
+    lda #$63             ; PLAY pitch during preceding PA, so initial P/L reach ~100Hz
     sta SSI_R1
 not_play:
     cpy #9
