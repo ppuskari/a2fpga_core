@@ -189,10 +189,10 @@ jobs:
           arr=b.split('static const uint8_t phrase[]={',1)[1].split('};',1)[0]
           cvals=[int(h,16) for h in re.findall(r'0x([0-9A-Fa-f]{2})',arr)]
           assert vals==cvals and len(vals)==17,(vals,cvals)
-          assert vals[11]==0x85 and vals[12]==0x40,(vals[11],vals[12])
+          assert vals[11]==0x45 and vals[12]==0x80,(vals[11],vals[12])
           assert all(v not in a for v in ['lda #$AB','not_final_rise'])
           assert 'if(i==14)ssi263_write(chip,1,' not in b
-          assert 'cpy #12' in a and 'lda #$97' in a and 'if(i==12)ssi263_write(chip,1,0x97)' in b
+          assert 'cpy #11' in a and 'lda #$97' in a and 'if(i==11)ssi263_write(chip,1,0x97)' in b
           durations=[4-(v>>6) for v in vals]
           assert sum(durations)==45,sum(durations)
           assert [sum(durations[:i]) for i in [4,7,11,13]]==[12,19,27,32]
