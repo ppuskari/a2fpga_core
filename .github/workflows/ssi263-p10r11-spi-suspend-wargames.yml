@@ -89,6 +89,10 @@ jobs:
           assert v2_sec>v1_sec+0.45,(v1_sec,v2_sec)
           print(f'PASS: WOPR original={v1_sec:.3f}s staccato={v2_sec:.3f}s; identical 22 ROM phoneme bytes in Apple II and C preview')
           PY
+      - name: Instrument Pico pitch target and realized oscillator by word
+        run: |
+          gcc -std=c99 -O3 -fsingle-precision-constant -Wall -Wextra -Werror -DSSI263_DIGITAL_NO_CARRIER=1 -DSSI263_R8_FAST_SWELL=1 -Ireference/ssi263/pico-v1.0.1 tests/ssi263_hybrid/test_wargames_pitch_probe.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/wargames_pitch_probe
+          /tmp/wargames_pitch_probe
       - name: Build and validate Take 3 film-timed SSI-263 phrase
         run: |
           ca65 -o /tmp/wargames_film_timing.o examples/ssi263_wargames/wargames_slot4_film_timing.s
