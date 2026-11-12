@@ -259,7 +259,7 @@ jobs:
           assert all(v not in a for v in ['lda #$AB','not_final_rise'])
           assert 'if(i==14)ssi263_write(chip,1,' not in b
           assert 'cpy #11' not in a and 'if(i==11)ssi263_write(chip,1,' not in b
-          for j,p in [(2,'53'),(4,'3B'),(7,'63'),(9,'53'),(12,'83')]:
+          for j,p in [(2,'53'),(4,'3B'),(6,'63'),(9,'53'),(12,'83')]:
             assert f'cpy #{j}' in a and ('lda #$'+p) in a
             assert f'if(i=={j})' in b and ('0x'+p) in b
           durations=[4-(v>>6) for v in vals]
