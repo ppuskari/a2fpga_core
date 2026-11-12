@@ -91,6 +91,20 @@ int main(int argc,char **argv) {
                 goto fail;
             }
         } while(!ssi263_request(chip));
+        if(i==3 || i==6 || i==10 || i==12 || i==14 || i==15) {
+            real state[40];
+            if(ssi263_state(chip,state,40)<14)goto fail;
+            /* Exact glottal oscillator frequency from the real Pico model;
+             * not a claim of actor pitch and not a host-side DSP effect. */
+            double f0=(double)p.xck_hz/
+                ((double)p.pitch_xck_div*(4096.0-2048.0-(double)state[2]));
+            fprintf(stderr,"Take4 F0 i=%zu R1=%02X model=%.1fHz target=%.0f\n",
+                    i,ssi263_reg(chip,1),f0,(double)state[3]);
+            if((i==3 && (f0<65.0 || f0>77.0)) ||
+               (i==6 && (f0<74.0 || f0>87.0)) ||
+               (i==10 && (f0<86.0 || f0>96.0)) ||
+               (i==15 && (f0<165.0 || f0>190.0)))goto fail;
+        }
     }
     ssi263_write(chip,3,0x80);
     if(write_wav_header(f,total))goto fail;
