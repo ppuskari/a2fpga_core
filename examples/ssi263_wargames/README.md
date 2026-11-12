@@ -1,3 +1,14 @@
+## Take 9 — Native R4 midpoint + more guttural G (latest experiment)
+
+The user preferred a voice **just brighter than Take 8 R4=$E4**, but found the word **GAME** too soft/mushy at its initial **G**. Take 9 uses the original SSI **R4=$E5** (and an E6 option), retaining **the exact 2.191-second movie-timed utterance** and all previous R1 and AY settings.
+
+The pinned physical SSI ROM has a **K** stop (`$29`, actual closure) and **KV** voiced velar-like phoneme (`$26`, no closure). We now compare soft `KV` versus **K 1 frame + KV 2 frames** and **K 2 frames + KV 1 frame**, holding the GAME consonant to the same original **3-frame** duration. A control version at R4=$E6 checks whether slightly brighter timbre helps.
+
+**Start by listening to `wargames_ssi263_r4e5_k1kv2.wav`** against `wargames_ssi263_r4e5.wav`. If it still lacks an initial stop, try the K2/KV1 version. These are native phoneme ROM and SSI register experiments; no extra DSP or FPGA/BL616 changes.
+
+For the exact files, CI evidence, Windows `gh run download` and Apple II execution steps, read [TAKE9_NATIVE_HARDG.md](TAKE9_NATIVE_HARDG.md).
+
+---
 ## Take 7 — Direct measured pitch of the uploaded movie WAV (recommended)
 
 Take 7 retains Take 6's **17 phoneme records / 45-frame (~2.191s) score**, its distinctly pronounced standalone **AY** for "A," and the moderate staccato rests. It changes only the pitch schedule based on analyzing the actual uploaded `shallweplayagame(1).wav`:
