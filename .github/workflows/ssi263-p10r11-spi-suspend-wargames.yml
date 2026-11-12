@@ -147,6 +147,31 @@ jobs:
           assert 2.0<duration<2.4,duration
           print(f'PASS WOPR TAKE4: 17 identical R0 bytes, all R1 changes, {duration:.3f}s')
           PY
+      - name: WOPR Take 4B extra staccato real-model + ROM parity
+        run: |
+          ca65 -o /tmp/wargames_punctuated.o examples/ssi263_wargames/wargames_slot4_punctuated.s
+          ld65 -C examples/ssi263_wargames/apple2_6000.cfg -o /tmp/wargames_punctuated.raw /tmp/wargames_punctuated.o
+          test $(stat -c%s /tmp/wargames_punctuated.raw) -gt 30
+          gcc -std=c99 -O3 -fsingle-precision-constant -Wall -Wextra -Werror -DSSI263_DIGITAL_NO_CARRIER=1 -DSSI263_R8_FAST_SWELL=1 -Ireference/ssi263/pico-v1.0.1 examples/ssi263_wargames/render_wargames_punctuated.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/wargames_punctuated_preview
+          /tmp/wargames_punctuated_preview /tmp/wargames_ssi263_punctuated.wav
+          python3 - <<'PY'
+          import re,wave
+          from pathlib import Path
+          a=Path('examples/ssi263_wargames/wargames_slot4_punctuated.s').read_text()
+          b=Path('examples/ssi263_wargames/render_wargames_punctuated.c').read_text()
+          score=a.split('phrase:',1)[1].split('phrase_end:',1)[0]
+          vals=[int(h,16) for h in re.findall(r'\$([0-9a-fA-F]{2})',score)]
+          phrase=b.split('static const uint8_t phrase[]={',1)[1].split('};',1)[0]
+          cvals=[int(h,16) for h in re.findall(r'0x([0-9a-fA-F]{2})',phrase)]
+          assert vals==cvals and len(vals)==17,(vals,cvals)
+          for j,n in [(4,0x3B),(7,0x53),(12,0x83),(14,0xAB)]:
+            assert f'cpy #{j}' in a and ('lda #$'+f'{n:02X}') in a
+            assert f'if(i=={j})' in b and f'0x{n:02X}' in b
+          with wave.open('/tmp/wargames_ssi263_punctuated.wav','rb') as w:
+            duration=w.getnframes()/w.getframerate()
+          assert 2.0<duration<2.4,duration
+          print(f'PASS WOPR TAKE4B: 17 identical R0 bytes, all R1 changes, {duration:.3f}s')
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: r11-wargames-ssi263-demo
@@ -159,4 +184,6 @@ jobs:
             /tmp/wargames_ssi263_film_timing.wav
             /tmp/wargames_movie_curve.raw
             /tmp/wargames_ssi263_movie_curve.wav
+            /tmp/wargames_punctuated.raw
+            /tmp/wargames_ssi263_punctuated.wav
           if-no-files-found: error
