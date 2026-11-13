@@ -25,6 +25,11 @@ module mb_doc_bridge #(
     parameter bit PIANO_ENVELOPE_ENABLE = 1'b1,
     parameter bit REST_MUTE_ENABLE = 1'b1,
     parameter bit FX_AY_BYPASS_ENABLE = 1'b1,
+    // M6.4 low-resource, per-voice DOC volume ramps. Default off to
+    // preserve the M6 RTL test baseline; Enhanced top enables explicitly.
+    parameter bit DECLICK_ENABLE = 1'b0,
+    parameter logic [7:0] DECLICK_ATTACK_STEP = 8'd16,
+    parameter logic [7:0] DECLICK_RELEASE_STEP = 8'd12,
     // Hold the verified title FX glide between ~51.8ms VIA T1 updates.
     // Default 70ms at the 54MHz logic clock; bench overrides it.
     parameter int FX_GLIDE_HOLD_CYCLES = 3780000
@@ -97,6 +102,11 @@ module mb_doc_bridge #(
     logic [7:0] piano_env_r [0:5];
     logic [3:0] piano_tick_r [0:5];
     logic note_restart_r;
+    // One byte of DOC volume history and one pending transition bit per
+    // melodic oscillator (0..5). No changes to the shared DOC5503 engine.
+    logic [7:0] declick_volume_r [0:5];
+    logic declick_pending_r [0:5];
+    logic voice_declick_hold_r, voice_reset_n_r;
 
     // One shared, 17-clock non-restoring? No: standard restoring
     // unsigned divider, constant dividend 93623 / AY period.
@@ -193,6 +203,47 @@ module mb_doc_bridge #(
     wire note_restart_w = selected_note_active_w &&
         (!prev_active_r[voice_r] || note_step_w || amp_attack_w ||
          selected_zone_w != prev_zone_r[voice_r]);
+
+    // Fade the old note to zero before HALT/retrigger, retaining its
+    // shadow registers until the new note is safe to start.
+    wire declick_hold_w = DECLICK_ENABLE && selected_reset_n_w &&
+        (declick_volume_r[voice_r] != 8'd0) &&
+        (declick_pending_r[voice_r] || !selected_note_active_w ||
+         (prev_active_r[voice_r] && note_restart_w));
+    wire note_restart_effective_w = note_restart_w ||
+        (DECLICK_ENABLE && declick_pending_r[voice_r] &&
+         selected_note_active_w);
+
+    function automatic logic [7:0] declick_slew(
+        input logic [7:0] current_volume,
+        input logic [7:0] target_volume
+    );
+        if (current_volume < target_volume) begin
+            if ((target_volume - current_volume) <= DECLICK_ATTACK_STEP)
+                declick_slew = target_volume;
+            else
+                declick_slew = current_volume + DECLICK_ATTACK_STEP;
+        end else if (current_volume > target_volume) begin
+            if ((current_volume - target_volume) <= DECLICK_RELEASE_STEP)
+                declick_slew = target_volume;
+            else
+                declick_slew = current_volume - DECLICK_RELEASE_STEP;
+        end else declick_slew = current_volume;
+    endfunction
+
+    wire [7:0] calculated_volume_w = !voice_level_active_r ? 8'd0 :
+        voice_level_direct_r ? voice_level_base_r :
+        8'((({8'b0,voice_level_base_r} *
+             {8'b0,voice_level_decay_r}) + 16'd255) >> 8);
+    wire [7:0] declick_next_volume_w = !voice_reset_n_r ? 8'd0 :
+        voice_declick_hold_r ?
+            declick_slew(declick_volume_r[voice_r],8'd0) :
+        note_restart_r ? 8'd0 :
+            declick_slew(declick_volume_r[voice_r],calculated_volume_w);
+    // Run the oscillator at VOL=0 so it starts silently before attack.
+    wire voice_should_run_w = (voice_volume_r != 8'd0) ||
+        (DECLICK_ENABLE && note_restart_r && voice_level_active_r &&
+         !voice_declick_hold_r);
 
     // M6: The old 'mixer==1C and two loud channels' test also matched
     // ordinary MCS music chords. Since top.sv selects native AY for the
@@ -397,6 +448,8 @@ module mb_doc_bridge #(
             voice_level_active_r <= 1'b0;
             voice_tone_r     <= 1'b0;
             note_restart_r    <= 1'b0;
+            voice_declick_hold_r <= 1'b0;
+            voice_reset_n_r <= 1'b0;
             for (vi=0;vi<6;vi=vi+1) begin
                 prev_period_r[vi] <= 12'd0;
                 prev_amp_r[vi]    <= 4'd0;
@@ -404,6 +457,8 @@ module mb_doc_bridge #(
                 prev_active_r[vi] <= 1'b0;
                 piano_env_r[vi]   <= 8'd0;
                 piano_tick_r[vi]  <= 4'd0;
+                declick_volume_r[vi] <= 8'd0;
+                declick_pending_r[vi] <= 1'b0;
             end
             dividend_r       <= 17'd0;
             quotient_r       <= 17'd0;
@@ -458,23 +513,30 @@ module mb_doc_bridge #(
                     // Live AY shadow captures take effect at the next
                     // voice scan, not asynchronously in the DOC.
                     voice_tone_r <= tone_allowed_w;
-                    note_restart_r <= note_restart_w;
-                    prev_active_r[voice_r] <= selected_note_active_w;
-                    prev_period_r[voice_r] <= selected_period_w;
-                    prev_amp_r[voice_r] <= selected_amp_w[4] ? 4'd0 : selected_amp_w[3:0];
-                    prev_zone_r[voice_r] <= selected_zone_w;
-                    if (!selected_note_active_w) begin
-                        piano_env_r[voice_r] <= 8'd0;
-                        piano_tick_r[voice_r] <= 4'd0;
-                    end else if (note_restart_w) begin
-                        piano_env_r[voice_r] <= 8'hFF;
-                        piano_tick_r[voice_r] <= 4'd0;
-                    end else if (!selected_amp_w[4] && PIANO_ENVELOPE_ENABLE) begin
-                        if (piano_tick_r[voice_r] == 4'd15) begin
+                    voice_reset_n_r <= selected_reset_n_w;
+                    voice_declick_hold_r <= declick_hold_w;
+                    note_restart_r <= note_restart_effective_w;
+                    if (DECLICK_ENABLE)
+                        declick_pending_r[voice_r] <= declick_hold_w;
+                    // Do not change pitch, WTP, or AY shadow during release.
+                    if (!declick_hold_w) begin
+                        prev_active_r[voice_r] <= selected_note_active_w;
+                        prev_period_r[voice_r] <= selected_period_w;
+                        prev_amp_r[voice_r] <= selected_amp_w[4] ? 4'd0 : selected_amp_w[3:0];
+                        prev_zone_r[voice_r] <= selected_zone_w;
+                        if (!selected_note_active_w) begin
+                            piano_env_r[voice_r] <= 8'd0;
                             piano_tick_r[voice_r] <= 4'd0;
-                            if (piano_env_r[voice_r] != 8'd0)
-                                piano_env_r[voice_r] <= piano_env_r[voice_r] - 1'b1;
-                        end else piano_tick_r[voice_r] <= piano_tick_r[voice_r]+1'b1;
+                        end else if (note_restart_effective_w) begin
+                            piano_env_r[voice_r] <= 8'hFF;
+                            piano_tick_r[voice_r] <= 4'd0;
+                        end else if (!selected_amp_w[4] && PIANO_ENVELOPE_ENABLE) begin
+                            if (piano_tick_r[voice_r] == 4'd15) begin
+                                piano_tick_r[voice_r] <= 4'd0;
+                                if (piano_env_r[voice_r] != 8'd0)
+                                    piano_env_r[voice_r] <= piano_env_r[voice_r] - 1'b1;
+                            end else piano_tick_r[voice_r] <= piano_tick_r[voice_r]+1'b1;
+                        end
                     end
                     // AY amplitude bit 4 selects the actual, clocked 32-step
                     // envelope from the existing YM2149 core. Fixed levels
@@ -487,7 +549,7 @@ module mb_doc_bridge #(
                     voice_level_base_r <= ym_level(
                         selected_amp_w[4] ? selected_env_level_w :
                         {selected_amp_w[3:0],selected_amp_w[3]});
-                    voice_level_decay_r <= note_restart_w ? 8'hFF :
+                    voice_level_decay_r <= note_restart_effective_w ? 8'hFF :
                                            piano_env_r[voice_r];
                     voice_level_direct_r <= selected_amp_w[4] ||
                                             !PIANO_ENVELOPE_ENABLE;
@@ -505,11 +567,12 @@ module mb_doc_bridge #(
                     // The first of 17 divider cycles is free for the
                     // registered 8x8 volume operation; volume isn't consumed
                     // until VOICE_COMMAND's later VOL write.
-                    if (division_count_r == 5'd17)
-                        voice_volume_r <= !voice_level_active_r ? 8'd0 :
-                            voice_level_direct_r ? voice_level_base_r :
-                            8'((({8'b0,voice_level_base_r} *
-                                 {8'b0,voice_level_decay_r}) + 16'd255) >> 8);
+                    if (division_count_r == 5'd17) begin
+                        voice_volume_r <= DECLICK_ENABLE ?
+                            declick_next_volume_w : calculated_volume_w;
+                        if (DECLICK_ENABLE)
+                            declick_volume_r[voice_r] <= declick_next_volume_w;
+                    end
                     remainder_r <= subtract_valid_w ?
                                    subtract_w : shifted_remainder_w;
                     dividend_r <= {dividend_r[15:0], 1'b0};
@@ -520,7 +583,9 @@ module mb_doc_bridge #(
                         voice_freq_r <= next_quotient_w[16] ?
                                         16'hFFFF :
                                         next_quotient_w[15:0];
-                        command_step_r <= (first_scan_r || note_restart_r) ? 3'd0 : 3'd3;
+                        // Fade-only scans must not touch FC/WTP/RTS.
+                        command_step_r <= voice_declick_hold_r ? 3'd5 :
+                            (first_scan_r || note_restart_r) ? 3'd0 : 3'd3;
                         state_r <= VOICE_COMMAND;
                     end
                 end
@@ -558,9 +623,9 @@ module mb_doc_bridge #(
                         default: begin
                             cmd_addr_r <= 8'hA0 + {5'b0, voice_r};
                             cmd_data_r <= (voice_r < 3'd3) ?
-                                         ((voice_volume_r != 8'd0) ?
+                                         (voice_should_run_w ?
                                           8'h10 : 8'h11) :
-                                         ((voice_volume_r != 8'd0) ?
+                                         (voice_should_run_w ?
                                           8'h00 : 8'h01);
                         end
                     endcase
