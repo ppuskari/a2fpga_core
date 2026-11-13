@@ -50,7 +50,10 @@ module top #(
     parameter bit MB_DOC_MULTISAMPLE_ENABLE = 1'b1,
     parameter bit MB_DOC_PIANO_ARTICULATION_ENABLE = 1'b1,
     parameter bit MB_DOC_REST_MUTE_ENABLE = 1'b1,
-    parameter bit MB_DOC_FX_AY_BYPASS_ENABLE = 1'b1,
+    // M6.3 physical stable baseline: no whole-chip native AY FX mux.
+    parameter bit MB_DOC_FX_AY_BYPASS_ENABLE = 1'b0,
+    // M6.4 switchable per-voice piano volume ramp and quiet retrigger.
+    parameter bit MB_DOC_DECLICK_ENABLE = 1'b1,
     parameter bit MOCKINGBOARD_ENABLE = 0,
     // SSI speech can coexist with exclusive AY-to-DOC music ownership.
     parameter bit MOCKINGBOARD_SSI263_ENABLE = 1'b1,
@@ -1396,7 +1399,8 @@ wire [7:0] doc_128k_status_w;
                 .MULTISAMPLE_ENABLE(MB_DOC_MULTISAMPLE_ENABLE),
                 .PIANO_ENVELOPE_ENABLE(MB_DOC_PIANO_ARTICULATION_ENABLE),
                 .REST_MUTE_ENABLE(MB_DOC_REST_MUTE_ENABLE),
-                .FX_AY_BYPASS_ENABLE(MB_DOC_FX_AY_BYPASS_ENABLE)
+                .FX_AY_BYPASS_ENABLE(MB_DOC_FX_AY_BYPASS_ENABLE),
+                .DECLICK_ENABLE(MB_DOC_DECLICK_ENABLE)
             ) bridge (
                 .clk_i(clk_logic_w),
                 .reset_n_i(system_reset_n_w),
@@ -1853,7 +1857,7 @@ wire [15:0] audio_sample_word[1:0];
 
     DebugOverlay #(
         .VERSION(`BUILD_DATETIME),  // 14-digit timestamp version
-        .ENABLE(1'b1),
+        .ENABLE(1'b0),  // M6.3: remove critical-path debug overlay from synthesis
         .NUM_BITS_FIELDS(4),
         .X_OFFSET(24),
         .Y_OFFSET(19)
