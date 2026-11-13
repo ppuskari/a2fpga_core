@@ -28,6 +28,13 @@ module mb_doc_bridge #(
     // M6.4 low-resource, per-voice DOC volume ramps. Default off to
     // preserve the M6 RTL test baseline; Enhanced top enables explicitly.
     parameter bit DECLICK_ENABLE = 1'b0,
+    // M6.4.1: coherently publish AY register bursts to the DOC
+    // instrument translator. Never gate or delay native YM2149 writes.
+    // MCS writes registers 0..14 in sequence, interleaving both chips,
+    // at ~79 Apple CPU cycles per register (~77us). A 200us idle
+    // fallback also accommodates individual-register software.
+    parameter bit COHERENT_PUBLISH_ENABLE = 1'b0,
+    parameter int COHERENT_IDLE_CYCLES = 10800,
     parameter logic [7:0] DECLICK_ATTACK_STEP = 8'd16,
     parameter logic [7:0] DECLICK_RELEASE_STEP = 8'd12,
     // Hold the verified title FX glide between ~51.8ms VIA T1 updates.
@@ -78,6 +85,15 @@ module mb_doc_bridge #(
     // YM2149-compatible shadow state. Only valid addresses 0..15
     // reach here; the original YM2149 still owns VIA readback.
     logic [7:0] ay_regs [0:1][0:15];
+    // Native-register shadow above remains immediate for FX detection;
+    // DOC observes this separately published snapshot only. The last
+    // R14 write is included in the same commit (nonblocking-write bypass).
+    logic [7:0] doc_regs [0:1][0:15];
+    localparam int COHERENT_IDLE_W =
+        (COHERENT_IDLE_CYCLES <= 1) ? 1 : $clog2(COHERENT_IDLE_CYCLES+1);
+    logic [COHERENT_IDLE_W-1:0] pub_idle_r [0:1];
+    logic pub_dirty_r [0:1];
+    logic [3:0] pub_next_reg_r [0:1];
 
     logic [10:0] wave_word_r;
     logic [2:0] voice_r;
@@ -135,13 +151,13 @@ module mb_doc_bridge #(
     wire [3:0] amplitude_idx_w = 4'd8 + {2'b00, selected_channel_w};
 
     wire [11:0] selected_period_w = {
-        ay_regs[selected_chip_w][tone_hi_idx_w][3:0],
-        ay_regs[selected_chip_w][tone_lo_idx_w]
+        doc_regs[selected_chip_w][tone_hi_idx_w][3:0],
+        doc_regs[selected_chip_w][tone_lo_idx_w]
     };
     wire [7:0] selected_amp_w =
-        ay_regs[selected_chip_w][amplitude_idx_w];
+        doc_regs[selected_chip_w][amplitude_idx_w];
     wire [7:0] selected_mixer_w =
-        ay_regs[selected_chip_w][7];
+        doc_regs[selected_chip_w][7];
     wire tone_allowed_w = !selected_mixer_w[selected_channel_w];
     wire [4:0] selected_env_level_w =
         selected_chip_w ? ay_r_env_level_i : ay_l_env_level_i;
@@ -401,32 +417,67 @@ module mb_doc_bridge #(
     assign doc_data_o = cmd_data_r;
     assign active_voice_o = voice_r;
 
-    integer chip, reg_index;
     integer vi;
-    always_ff @(posedge clk_i) begin
-        if (!reset_n_i) begin
-            for (chip = 0; chip < 2; chip = chip + 1)
-                for (reg_index = 0; reg_index < 16;
-                     reg_index = reg_index + 1)
-                    ay_regs[chip][reg_index] <= 8'h00;
-        end else begin
-            // Mockingboard software may stop a song by pulling VIA PB2 low
-            // rather than zeroing AY amplitude registers. Clear per-chip
-            // shadows so stale DOC notes cannot return after PSG RESET.
-            if (!ay_l_reset_n_i) begin
-                for (reg_index = 0; reg_index < 16; reg_index = reg_index + 1)
-                    ay_regs[0][reg_index] <= 8'h00;
-            end else if (ay_l_wr_i) begin
-                ay_regs[0][ay_l_reg_i] <= ay_l_data_i;
-            end
-            if (!ay_r_reset_n_i) begin
-                for (reg_index = 0; reg_index < 16; reg_index = reg_index + 1)
-                    ay_regs[1][reg_index] <= 8'h00;
-            end else if (ay_r_wr_i) begin
-                ay_regs[1][ay_r_reg_i] <= ay_r_data_i;
+    genvar pub_chip;
+    generate for (pub_chip=0; pub_chip<2; pub_chip=pub_chip+1) begin : gen_doc_publish
+        wire chip_wr_w = (pub_chip == 0) ? ay_l_wr_i : ay_r_wr_i;
+        wire [3:0] chip_reg_w = (pub_chip == 0) ? ay_l_reg_i : ay_r_reg_i;
+        wire [7:0] chip_data_w = (pub_chip == 0) ? ay_l_data_i : ay_r_data_i;
+        wire chip_reset_n_w = (pub_chip == 0) ?
+            ay_l_reset_n_i : ay_r_reset_n_i;
+        integer pub_r;
+        always_ff @(posedge clk_i) begin
+            if (!reset_n_i || !chip_reset_n_w) begin
+                for (pub_r=0; pub_r<16; pub_r=pub_r+1) begin
+                    ay_regs[pub_chip][pub_r] <= 8'h00;
+                    doc_regs[pub_chip][pub_r] <= 8'h00;
+                end
+                pub_dirty_r[pub_chip] <= 1'b0;
+                pub_next_reg_r[pub_chip] <= 4'd0;
+                pub_idle_r[pub_chip] <= '0;
+            end else if (chip_wr_w) begin
+                // Immediately reflect every physical AY write. The native
+                // YM2149 still receives it on the original write strobe.
+                ay_regs[pub_chip][chip_reg_w] <= chip_data_w;
+                if (!COHERENT_PUBLISH_ENABLE) begin
+                    doc_regs[pub_chip][chip_reg_w] <= chip_data_w;
+                end else begin
+                    pub_dirty_r[pub_chip] <= 1'b1;
+                    pub_idle_r[pub_chip] <= '0;
+                    // Recognize the original MCS R0..R14 burst. Do not
+                    // publish after a partial low/high period update.
+                    if (chip_reg_w == pub_next_reg_r[pub_chip]) begin
+                        if (chip_reg_w == 4'd14) begin
+                            for (pub_r=0; pub_r<16; pub_r=pub_r+1)
+                                doc_regs[pub_chip][pub_r] <=
+                                    (pub_r == 14) ? chip_data_w :
+                                    ay_regs[pub_chip][pub_r];
+                            pub_dirty_r[pub_chip] <= 1'b0;
+                            pub_next_reg_r[pub_chip] <= 4'd0;
+                        end else
+                            pub_next_reg_r[pub_chip] <= chip_reg_w + 4'd1;
+                    end else
+                        pub_next_reg_r[pub_chip] <=
+                            (chip_reg_w == 4'd0) ? 4'd1 : 4'd0;
+                end
+            end else if (COHERENT_PUBLISH_ENABLE &&
+                         pub_dirty_r[pub_chip]) begin
+                // Bounded publication for keyboard, games and other
+                // non-MCS software which write only selected AY registers.
+                // 10,800 cycles / 54MHz ~= 200us after the final write.
+                if (pub_idle_r[pub_chip] >=
+                    COHERENT_IDLE_W'(COHERENT_IDLE_CYCLES-1)) begin
+                    for (pub_r=0; pub_r<16; pub_r=pub_r+1)
+                        doc_regs[pub_chip][pub_r] <=
+                            ay_regs[pub_chip][pub_r];
+                    pub_dirty_r[pub_chip] <= 1'b0;
+                    pub_next_reg_r[pub_chip] <= 4'd0;
+                    pub_idle_r[pub_chip] <= '0;
+                end else
+                    pub_idle_r[pub_chip] <= pub_idle_r[pub_chip]+1'b1;
             end
         end
-    end
+    end endgenerate
 
     always_ff @(posedge clk_i) begin
         if (!reset_n_i) begin
