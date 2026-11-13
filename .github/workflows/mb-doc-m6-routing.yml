@@ -24,6 +24,11 @@ jobs:
         run: python3 tools/extract_synthlab_piano.py --download
       - name: Simulate AY capture and MB DOC music/FX routing at all three DOC resolutions
         run: sh tests/mb_doc/run_capture_test.sh
+      - name: Build and validate original DOC FX bank diagnostic fixtures
+        run: |
+          python3 -m py_compile tools/build_mb_doc_fx_bank.py tests/mb_doc/test_fx_bank.py
+          python3 tests/mb_doc/test_fx_bank.py
+          python3 tools/build_mb_doc_fx_bank.py --fixtures --out /tmp/mbfx
       - name: Test real YM envelope and register-13 retrigger
         run: |
           verilator --binary --timing -Wno-fatal --top-module tb_ym2149_envelope hdl/support/YM2149.sv tests/mb_doc/tb_ym2149_envelope.sv
@@ -42,3 +47,12 @@ jobs:
           assert "fx_ay_l_o(mb_fx_ay_l_w)" in top
           print('PASS: R11 combined speech/mixer intact; only verified title glide may bypass DOC for mixer $1C')
           PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m6-doc-fx-sample-bank-diagnostic-only
+          path: |
+            /tmp/mbfx/*.wav
+            /tmp/mbfx/*.bin
+            /tmp/mbfx/*.mem
+            /tmp/mbfx/*.json
+          if-no-files-found: error
