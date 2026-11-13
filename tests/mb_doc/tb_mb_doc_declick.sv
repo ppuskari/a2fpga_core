@@ -1,6 +1,7 @@
 // M6.4 DOC-only de-click regression: no Gowin IP needed.
 `timescale 1ns/1ps
 module tb_mb_doc_declick;
+    parameter integer TEST_RES = 0;
     logic clk = 0;
     always #5 clk = ~clk;
     logic reset_n = 0, sdram_ready = 0;
@@ -19,6 +20,7 @@ module tb_mb_doc_declick;
     mb_doc_bridge #(
         .HOST_SPACING_CYCLES(16),
         .SCAN_PAUSE_CYCLES(64),
+        .SUSTAIN_RES(3'(TEST_RES)),
         .DECLICK_ENABLE(1'b1),
         .DECLICK_ATTACK_STEP(8'd16),
         .DECLICK_RELEASE_STEP(8'd12),
@@ -177,7 +179,7 @@ module tb_mb_doc_declick;
         if (attack_steps<25)
             $fatal(1,"Retrigger lacked post-HALT attack");
         $display("PASS: MCS same-pitch re-strike fades out/in without abrupt HALT");
-        $display("PASS: DOC-only M6.4 six-voice de-click RTL simulation");
+        $display("PASS: DOC-only M6.4 six-voice de-click RTL simulation RES=%0d",TEST_RES);
         $finish;
     end
 
