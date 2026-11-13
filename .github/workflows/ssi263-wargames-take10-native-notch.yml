@@ -1,0 +1,100 @@
+name: SSI263 WarGames Take10 native one-notch voice
+on:
+  push:
+    branches:
+      - petar/ssi263-p10r11-spi-suspend-wargames-20261111
+    paths:
+      - examples/ssi263_wargames/**
+      - reference/ssi263/pico-v1.0.1/**
+      - .github/workflows/ssi263-wargames-take10-native-notch.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  take10:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Apple II cross assembler
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cc65
+      - name: Render preferred Take9 plus two native-only Take10 variants
+        run: |
+          mkdir -p /tmp/wargames-take10
+          for variant in r4e5_k2kv1 r4e4_k2kv1 r4e5_gamee4_k2kv1; do
+            ca65 -o /tmp/wargames-take10/$variant.o examples/ssi263_wargames/wargames_slot4_$variant.s
+            ld65 -C examples/ssi263_wargames/apple2_6000.cfg -o /tmp/wargames-take10/wargames_$variant.raw /tmp/wargames-take10/$variant.o
+            gcc -std=c99 -O3 -fsingle-precision-constant -Wall -Wextra -Werror -DSSI263_DIGITAL_NO_CARRIER=1 -DSSI263_R8_FAST_SWELL=1 -Ireference/ssi263/pico-v1.0.1 examples/ssi263_wargames/render_wargames_$variant.c reference/ssi263/pico-v1.0.1/ssi263.c reference/ssi263/pico-v1.0.1/ssi263dsp.c -lm -o /tmp/wargames-take10/preview_$variant
+            /tmp/wargames-take10/preview_$variant /tmp/wargames-take10/wargames_ssi263_$variant.wav
+          done
+      - name: Validate SSI R4-only differences, unchanged phonemes, duration and headroom
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re,wave,struct,math,hashlib
+          base=Path('examples/ssi263_wargames')
+          out=Path('/tmp/wargames-take10')
+          labels=['r4e5_k2kv1','r4e4_k2kv1','r4e5_gamee4_k2kv1']
+          expected_g=[0xA9,0xE6,0x05,0x37,0x80]
+          samples={}
+          old_rom=None
+          for variant in labels:
+            a=(base/f'wargames_slot4_{variant}.s').read_text()
+            c=(base/f'render_wargames_{variant}.c').read_text()
+            score=a.split('phrase:',1)[1].split('phrase_end:',1)[0]
+            vals=[int(h,16) for h in re.findall(r'\$([0-9a-fA-F]{2})',score)]
+            arr=c.split('static const uint8_t phrase[]={',1)[1].split('};',1)[0]
+            cvals=[int(h,16) for h in re.findall(r'0x([0-9a-fA-F]{2})',arr)]
+            assert vals==cvals and len(vals)==18,(variant,'Apple/C ROM mismatch')
+            assert vals[13:]==expected_g,(variant,'lost K2+KV1')
+            assert sum(4-(v>>6) for v in vals)==45,(variant,'duration changed')
+            assert [sum(4-(v>>6) for v in vals[:i]) for i in (4,7,11,13)]==[12,19,27,32]
+            if old_rom is None: old_rom=vals
+            assert vals==old_rom,(variant,'phoneme table changed')
+            assert vals[11]==0x45,(variant,'A must be AY')
+            for i,p in [(2,'53'),(4,'3B'),(6,'63'),(9,'53'),(12,'83')]:
+              assert f'cpy #{i}' in a and ('lda #$'+p) in a
+              assert f'if(i=={i})' in c and ('0x'+p) in c
+            assert 'lda #$68' in a and 'ssi263_write(chip,3,0x68)' in c
+            if variant=='r4e5_k2kv1':
+              assert 'lda #$E5' in a and 'ssi263_write(chip,4,0xE5)' in c
+              assert a.count('sta SSI_R4')==1
+            elif variant=='r4e4_k2kv1':
+              assert 'lda #$E4' in a and 'ssi263_write(chip,4,0xE4)' in c
+              assert a.count('sta SSI_R4')==1
+            else:
+              assert a.count('sta SSI_R4')==2,(variant,'must retune only once after A')
+              assert 'lda #$E5' in a and 'lda #$E4' in a
+              assert 'cpy #12' in a and 'ssi263_write(chip,4,0xE4)' in c
+              assert 'if(i==12){ ssi263_write(chip,1,0x83); ssi263_write(chip,4,0xE4); }' in c
+              assert a.index('lda #$E4')>a.index('cpy #12')
+            with wave.open(str(out/f'wargames_ssi263_{variant}.wav'),'rb') as w:
+              assert (w.getnchannels(),w.getsampwidth(),w.getframerate())==(1,2,22050)
+              sec=w.getnframes()/w.getframerate()
+              raw=w.readframes(w.getnframes())
+            pcm=struct.unpack('<%dh'%(len(raw)//2),raw)
+            peak=max(abs(x) for x in pcm)
+            assert 2.18<sec<2.22,(variant,sec)
+            assert 100<peak<32767,(variant,peak)
+            samples[variant]=pcm
+            print(f'PASS {variant}: {sec:.4f}s; K2KV1; peak={peak}; SHA={hashlib.sha256(raw).hexdigest()[:12]}')
+          a=samples[labels[0]]
+          b=samples[labels[1]]
+          c=samples[labels[2]]
+          assert len(a)==len(b)==len(c)
+          assert a!=b and a!=c and b!=c,'R4 changes must audibly alter samples'
+          # Game-only R4 write occurs after the standalone AY at ~1.4s.
+          # Earlier SHALL, WE, PLAY are by construction and by PCM identical.
+          pre=int(1.20*22050)
+          assert a[:pre]==c[:pre], 'GAME-only R4 must not modify earlier word audio'
+          assert a[pre:]!=c[pre:]
+          print('PASS Take10: earlier speech bit-identical for GAME-only version; all 45 frames preserved; native SSI R4 only')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wargames-take10-final-notch-native-ssi
+          path: |
+            /tmp/wargames-take10/*.wav
+            /tmp/wargames-take10/*.raw
+          if-no-files-found: error
