@@ -32,7 +32,8 @@ module tb_mb_doc_bridge;
     mb_doc_bridge #(
         .HOST_SPACING_CYCLES(80),
         .SCAN_PAUSE_CYCLES(128),
-        .SUSTAIN_RES(3'(TEST_RES))
+        .SUSTAIN_RES(3'(TEST_RES)),
+        .FX_GLIDE_HOLD_CYCLES(200)
     ) dut (
         .clk_i(clk), .reset_n_i(reset_n),
         .sdram_ready_i(sdram_ready),
@@ -279,17 +280,50 @@ module tb_mb_doc_bridge;
             $fatal(1, "P4 PSG reset failed");
 
         $display("PASS: native AY envelope level, zero-vol note-off, PB2 reset");
-        // Title animation FX signature ($1C, 15/15) and native AY noise.
+        // M6: mixer $1C with two fixed-volume voices also occurs in
+        // classical MCS music. It MUST stay on the Ensoniq piano path
+        // unless we confirm the timer-driven title sweep.
         ay_write(1'b0, 4'h7, 8'h1C);
         ay_write(1'b0, 4'h8, 8'h0F);
         ay_write(1'b0, 4'h9, 8'h0F);
-        if (fx_l !== 1'b1) $fatal(1, "Startup 2-tone glide AY bypass missing");
+        if (fx_l !== 1'b0) $fatal(1, "Ordinary two-voice chord hijacked by native AY");
+        ay_write(1'b0, 4'h0, 8'hF4);
+        ay_write(1'b0, 4'h2, 8'hE6);
+        ay_write(1'b0, 4'h6, 8'h10);
+        if (fx_l !== 1'b0) $fatal(1, "Unconfirmed title sweep hijacked piano");
+        // Actual BLOCK GRAPHICS IRQ pattern: decrement R0 and R2,
+        // increment R6, and preserve $1C/15/15.
+        ay_write(1'b0, 4'h0, 8'hF3);
+        ay_write(1'b0, 4'h2, 8'hE5);
+        ay_write(1'b0, 4'h6, 8'h11);
+        if (fx_l !== 1'b1) $fatal(1, "Confirmed title glide missing AY FX");
+        // Two VIA T1 updates are ~51.8ms apart; in the test the hold
+        // counter is shortened to 200 logic clocks for fast validation.
+        repeat (202) @(negedge clk);
+        if (fx_l !== 1'b0) $fatal(1, "Title FX held beyond its timeout");
         ay_write(1'b0, 4'h7, 8'h3E);
         if (fx_l !== 1'b0) $fatal(1, "Keyboard wrongly bypasses sampled piano");
+        // Triple envelope title chord remains native AY, but the regular
+        // one-channel R13 keyboard ($3E) must remain DOC.
+        ay_write(1'b0, 4'h7, 8'h38);
+        ay_write(1'b0, 4'h8, 8'h10);
+        ay_write(1'b0, 4'h9, 8'h10);
+        ay_write(1'b0, 4'hA, 8'h10);
+        if (fx_l !== 1'b1) $fatal(1, "Triple-envelope title AY effect lost");
+        ay_write(1'b0, 4'h7, 8'h3E);
+        if (fx_l !== 1'b0) $fatal(1, "Triple-envelope FX stuck after keyboard transition");
+        // A real active noise channel remains on native AY for title
+        // explosions until our future DOC percussion sample bank is ready.
         ay_write(1'b1, 4'h7, 8'h07);
         ay_write(1'b1, 4'h8, 8'h10);
         if (fx_r !== 1'b1) $fatal(1, "AY noise bypass missing");
+        if (fx_l !== 1'b0) $fatal(1, "Left piano switched by right FX");
+        r_reset_n = 1'b0;
+        repeat (3) @(negedge clk);
+        if (fx_r !== 1'b0) $fatal(1, "PSG reset did not terminate native AY FX");
+        r_reset_n = 1'b1;
 
+        $display("PASS: M6 classical chord stays DOC; title sweep/noise/triple-env use AY; FX timeout/reset independent");
         $display("PASS: seven authentic PCM zones 5632B; RES=%0d, period-one rest, note restart, FX bypass", TEST_RES);
         $display("      continued phase, mute, and period-zero pitch clamp");
         $finish;
