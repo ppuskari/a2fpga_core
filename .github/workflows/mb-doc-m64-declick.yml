@@ -1,0 +1,43 @@
+name: M6.4 DOC-only music de-click regression
+on:
+  push:
+    branches:
+      - petar/mb-doc-m64-declick-20261113
+    paths:
+      - 'boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv'
+      - 'boards/a2n20v2-Enhanced/hdl/top.sv'
+      - 'tests/mb_doc/**'
+      - 'tools/extract_synthlab_piano.py'
+      - '.github/workflows/mb-doc-m64-declick.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  doc-declick:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Icarus Verilog
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iverilog
+      - name: Restore checksum-verified authentic SynthLAB sample memory
+        run: python3 tools/extract_synthlab_piano.py --download
+      - name: Check original M6 RTL behavior with de-click disabled
+        run: sh tests/mb_doc/run_capture_test.sh
+      - name: Check six-voice DOC de-click attacks/releases/retriggers
+        run: sh tests/mb_doc/run_declick_test.sh
+      - name: Verify stable physical baseline and unchanged speech routing
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          top=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text()
+          bridge=Path('boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv').read_text()
+          assert "parameter bit MB_DOC_FX_AY_BYPASS_ENABLE = 1'b0" in top
+          assert "parameter bit MB_DOC_DECLICK_ENABLE = 1'b1" in top
+          assert ".DECLICK_ENABLE(MB_DOC_DECLICK_ENABLE)" in top
+          assert ".ENABLE(1'b0),  // M6.3" in top
+          for marker in ('mb_speech_pre_mix_w','mb_speech_sum_l_w','MB_DOC_SUSTAIN_RES'):
+              assert marker in top,marker
+          for marker in ('declick_hold_w','declick_next_volume_w','voice_should_run_w'):
+              assert marker in bridge,marker
+          print('PASS: no AY FX override, no diagnostic video overlay, speech unchanged')
+          PY
