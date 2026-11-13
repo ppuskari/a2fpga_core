@@ -141,7 +141,7 @@ def main():
     ap.add_argument("--out",type=Path,required=True)
     args=ap.parse_args()
     bank=build(args.out,args.input_dir,args.fixtures)
-    for patch in bank:
+    for patch in bank["patches"]:
         print("%s: WTP=%02X WTS=%d bytes=%d"%
               (patch["name"],patch["wtp"],patch["wts"],patch["bytes"]))
 if __name__=="__main__":
