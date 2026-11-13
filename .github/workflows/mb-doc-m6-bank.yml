@@ -1,0 +1,28 @@
+name: M6 Ensoniq DOC sample bank codec and fixture checks
+on:
+  push:
+    branches:
+      - petar/mb-doc-m6-music-fx-routing-20261113
+    paths:
+      - tools/build_mb_doc_fx_bank.py
+      - tests/mb_doc/test_fx_bank.py
+      - .github/workflows/mb-doc-m6-bank.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sample-bank:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify source syntax and DOC sample-bank encoding
+        run: |
+          python3 -m py_compile tools/build_mb_doc_fx_bank.py tests/mb_doc/test_fx_bank.py
+          python3 tests/mb_doc/test_fx_bank.py
+      - name: Publish clearly marked diagnostic FX assets
+        run: python3 tools/build_mb_doc_fx_bank.py --fixtures --out /tmp/mbdocfx
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m6-doc-fx-diagnostic-fixtures-NOT-YET-IN-FPGA
+          path: /tmp/mbdocfx/
+          if-no-files-found: error
