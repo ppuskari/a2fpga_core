@@ -24,7 +24,10 @@ module mb_doc_bridge #(
     parameter bit MULTISAMPLE_ENABLE = 1'b1,
     parameter bit PIANO_ENVELOPE_ENABLE = 1'b1,
     parameter bit REST_MUTE_ENABLE = 1'b1,
-    parameter bit FX_AY_BYPASS_ENABLE = 1'b1
+    parameter bit FX_AY_BYPASS_ENABLE = 1'b1,
+    // Hold the verified title FX glide between ~51.8ms VIA T1 updates.
+    // Default 70ms at the 54MHz logic clock; bench overrides it.
+    parameter int FX_GLIDE_HOLD_CYCLES = 3780000
 ) (
     input  logic        clk_i,
     input  logic        reset_n_i,
@@ -191,26 +194,87 @@ module mb_doc_bridge #(
         (!prev_active_r[voice_r] || note_step_w || amp_attack_w ||
          selected_zone_w != prev_zone_r[voice_r]);
 
-    // Bypass the piano for genuinely noise-driven AY effects, the
-    // two-tone fixed-volume timer sweep and three-channel envelope effects.
-    // This is tonal-instrument classification, not a hardcoded disk address.
+    // M6: The old 'mixer==1C and two loud channels' test also matched
+    // ordinary MCS music chords. Since top.sv selects native AY for the
+    // WHOLE chip when fx_ay_* is high, that made piano songs revert to
+    // chip tunes. Require evidence of the actual synchronized title
+    // sweep: tone A AND B low bytes each descend by one while R6 rises
+    // by one in the same AY register-write batch. The real title code
+    // does this ~51.8ms apart; ordinary two-voice chords do not.
+    //
+    // Preserve native AY noise and triple-envelope title effects for now,
+    // until the later DOC percussion/FX sample bank replaces them.
+    localparam int FX_GLIDE_CNT_W =
+        (FX_GLIDE_HOLD_CYCLES <= 1) ? 1 : $clog2(FX_GLIDE_HOLD_CYCLES + 1);
+    logic fx_sweep_a_dec_r [0:1];
+    logic fx_sweep_b_dec_r [0:1];
+    logic [FX_GLIDE_CNT_W-1:0] fx_glide_hold_r [0:1];
+
+    genvar fx_chip;
+    generate for (fx_chip=0; fx_chip<2; fx_chip=fx_chip+1) begin : gen_fx_glide
+        wire fx_wr_i = (fx_chip == 0) ? ay_l_wr_i : ay_r_wr_i;
+        wire [3:0] fx_reg_i = (fx_chip == 0) ? ay_l_reg_i : ay_r_reg_i;
+        wire [7:0] fx_data_i = (fx_chip == 0) ? ay_l_data_i : ay_r_data_i;
+        wire fx_psg_reset_n_i = (fx_chip == 0) ? ay_l_reset_n_i : ay_r_reset_n_i;
+        always_ff @(posedge clk_i or negedge reset_n_i) begin
+            if (!reset_n_i) begin
+                fx_sweep_a_dec_r[fx_chip] <= 1'b0;
+                fx_sweep_b_dec_r[fx_chip] <= 1'b0;
+                fx_glide_hold_r[fx_chip] <= '0;
+            end else if (!fx_psg_reset_n_i) begin
+                fx_sweep_a_dec_r[fx_chip] <= 1'b0;
+                fx_sweep_b_dec_r[fx_chip] <= 1'b0;
+                fx_glide_hold_r[fx_chip] <= '0;
+            end else begin
+                if (fx_glide_hold_r[fx_chip] != '0)
+                    fx_glide_hold_r[fx_chip] <= fx_glide_hold_r[fx_chip] - 1'b1;
+                if (fx_wr_i) begin
+                    case (fx_reg_i)
+                        4'd0: fx_sweep_a_dec_r[fx_chip] <=
+                            (ay_regs[fx_chip][0] == (fx_data_i + 8'd1));
+                        4'd2: fx_sweep_b_dec_r[fx_chip] <=
+                            (ay_regs[fx_chip][2] == (fx_data_i + 8'd1));
+                        4'd6: begin
+                            if (fx_sweep_a_dec_r[fx_chip] &&
+                                fx_sweep_b_dec_r[fx_chip] &&
+                                fx_data_i == (ay_regs[fx_chip][6] + 8'd1) &&
+                                ay_regs[fx_chip][7] == 8'h1C &&
+                                |ay_regs[fx_chip][8][3:0] &&
+                                |ay_regs[fx_chip][9][3:0])
+                                fx_glide_hold_r[fx_chip] <=
+                                    FX_GLIDE_CNT_W'(FX_GLIDE_HOLD_CYCLES);
+                            // End this write batch: no stale evidence
+                            // may carry over to unrelated later chords.
+                            fx_sweep_a_dec_r[fx_chip] <= 1'b0;
+                            fx_sweep_b_dec_r[fx_chip] <= 1'b0;
+                        end
+                        default: begin end
+                    endcase
+                end
+            end
+        end
+    end endgenerate
+
     function automatic logic uses_ay_fx(
         input logic [7:0] mixer,
         input logic [7:0] a,
         input logic [7:0] b,
-        input logic [7:0] c
+        input logic [7:0] c,
+        input logic glide_confirmed
     );
         uses_ay_fx =
             ((!mixer[3] && |a[4:0]) ||
              (!mixer[4] && |b[4:0]) ||
              (!mixer[5] && |c[4:0])) ||
-            (mixer==8'h1C && |a[3:0] && |b[3:0]) ||
+            (mixer==8'h1C && |a[3:0] && |b[3:0] && glide_confirmed) ||
             (mixer==8'h38 && a[4] && b[4] && c[4]);
     endfunction
     assign fx_ay_l_o = FX_AY_BYPASS_ENABLE && ay_l_reset_n_i &&
-        uses_ay_fx(ay_regs[0][7],ay_regs[0][8],ay_regs[0][9],ay_regs[0][10]);
+        uses_ay_fx(ay_regs[0][7],ay_regs[0][8],ay_regs[0][9],ay_regs[0][10],
+                   (fx_glide_hold_r[0] != '0));
     assign fx_ay_r_o = FX_AY_BYPASS_ENABLE && ay_r_reset_n_i &&
-        uses_ay_fx(ay_regs[1][7],ay_regs[1][8],ay_regs[1][9],ay_regs[1][10]);
+        uses_ay_fx(ay_regs[1][7],ay_regs[1][8],ay_regs[1][9],ay_regs[1][10],
+                   (fx_glide_hold_r[1] != '0));
 
     // 5-bit upper range can occur when dividend=93623 and P=1.
     // Saturate to DOC's maximum 16-bit frequency.
