@@ -8,7 +8,7 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT INT TERM
 for res in 0 1 2; do
   iverilog -g2012 -Wall -s tb_mb_doc_declick \
-    -Pmb_doc_bridge.SUSTAIN_RES="$res" \
+    -Ptb_mb_doc_declick.TEST_RES="$res" \
     -o "$tmpdir/mb_doc_declick_res${res}.vvp" \
     boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv \
     tests/mb_doc/tb_mb_doc_declick.sv
