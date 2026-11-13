@@ -95,18 +95,31 @@ module tb_mb_doc_publish;
     // Real MCS order: 0..14, interleaved L/R. With 500 intervening
     // clocks, the DOC voice scanner visits each oscillator repeatedly.
     task automatic mcs_frame(input bit require_atomic);
-        logic [7:0] old_l0,old_r0,old_l1;
+        logic [7:0] old_l0,old_r0,old_l1,old_l7,old_r7,old_l8,old_r8;
+        integer old_halts;
         old_l0=dut.doc_regs[0][0];
         old_l1=dut.doc_regs[0][1];
         old_r0=dut.doc_regs[1][0];
+        old_l7=dut.doc_regs[0][7];
+        old_r7=dut.doc_regs[1][7];
+        old_l8=dut.doc_regs[0][8];
+        old_r8=dut.doc_regs[1][8];
+        old_halts=halt_count;
         for(integer idx=0;idx<15;idx++) begin
             write_ay(0,4'(idx),mcs_l[idx]);
             write_ay(1,4'(idx),mcs_r[idx]);
             if(require_atomic && idx<14) begin
                 if(dut.doc_regs[0][0]!==old_l0 ||
                    dut.doc_regs[0][1]!==old_l1 ||
-                   dut.doc_regs[1][0]!==old_r0)
-                    $fatal(1,"DOC published an intermediate R%0d snapshot",idx);
+                   dut.doc_regs[1][0]!==old_r0 ||
+                   dut.doc_regs[0][7]!==old_l7 ||
+                   dut.doc_regs[1][7]!==old_r7 ||
+                   dut.doc_regs[0][8]!==old_l8 ||
+                   dut.doc_regs[1][8]!==old_r8)
+                    $fatal(1,"DOC published intermediate pitch/mixer/volume R%0d",idx);
+                if(idx>1 && halt_count!=old_halts)
+                    $fatal(1,"DOC HALT/retrigger occurred before MCS frame end");
+
             end
             repeat(500) @(negedge clk);
         end
