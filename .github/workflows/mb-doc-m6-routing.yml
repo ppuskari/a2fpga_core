@@ -1,0 +1,44 @@
+name: M6 Mockingboard music DOC and title FX routing
+on:
+  push:
+    branches:
+      - petar/mb-doc-m6-music-fx-routing-20261113
+    paths:
+      - boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv
+      - boards/a2n20v2-Enhanced/hdl/top.sv
+      - tests/mb_doc/**
+      - tools/extract_synthlab_piano.py
+      - tools/generate_mb_fx_bank.py
+      - .github/workflows/mb-doc-m6-routing.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  music-routing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install RTL simulator and Verilator
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iverilog verilator
+      - name: Restore checksum-verified seven-zone SynthLAB piano ROM
+        run: python3 tools/extract_synthlab_piano.py --download
+      - name: Simulate AY capture and MB DOC music/FX routing at all three DOC resolutions
+        run: sh tests/mb_doc/run_capture_test.sh
+      - name: Test real YM envelope and register-13 retrigger
+        run: |
+          verilator --binary --timing -Wno-fatal --top-module tb_ym2149_envelope hdl/support/YM2149.sv tests/mb_doc/tb_ym2149_envelope.sv
+          ./obj_dir/Vtb_ym2149_envelope
+      - name: Verify combined R11 speech and full-chip audio mux remain unchanged
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          top=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text()
+          bridge=Path('boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv').read_text()
+          for marker in ('mb_speech_gain_w','mb_speech_pre_mix_w','mb_speech_sum_l_w','MB_DOC_FX_AY_BYPASS_ENABLE'):
+              assert marker in top,marker
+          for marker in ('FX_GLIDE_HOLD_CYCLES','fx_sweep_a_dec_r','fx_sweep_b_dec_r','gen_fx_glide'):
+              assert marker in bridge,marker
+          assert "(mixer==8'h1C && |a[3:0] && |b[3:0] && glide_confirmed)" in bridge
+          assert "fx_ay_l_o(mb_fx_ay_l_w)" in top
+          print('PASS: R11 combined speech/mixer intact; only verified title glide may bypass DOC for mixer $1C')
+          PY
