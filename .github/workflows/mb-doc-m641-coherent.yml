@@ -1,0 +1,50 @@
+name: M6.4.1 coherent DOC publication validation
+on:
+  push:
+    branches:
+      - petar/mb-doc-m641-coherent-20261113
+    paths:
+      - 'boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv'
+      - 'boards/a2n20v2-Enhanced/hdl/top.sv'
+      - 'tests/mb_doc/**'
+      - 'tools/extract_synthlab_piano.py'
+      - '.github/workflows/mb-doc-m641-coherent.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  coherent-doc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Icarus Verilog
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iverilog
+      - name: Restore checksum-verified seven-zone SynthLAB piano ROM
+        run: python3 tools/extract_synthlab_piano.py --download
+      - name: Original M6 music routing and AY capture compatibility RES=0/1/2
+        run: sh tests/mb_doc/run_capture_test.sh
+      - name: M6.4 de-click attack/release and retrigger compatibility RES=0/1/2
+        run: sh tests/mb_doc/run_declick_test.sh
+      - name: M6.4.1 coherent publication MCS and fallback RES=0/1/2
+        run: sh tests/mb_doc/run_publish_test.sh
+      - name: Verify stable hardware configuration and untouched speech mux
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          top=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text()
+          bridge=Path('boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv').read_text()
+          expected=[
+            "parameter bit MB_DOC_FX_AY_BYPASS_ENABLE = 1'b0",
+            "parameter bit MB_DOC_DECLICK_ENABLE = 1'b1",
+            "parameter bit MB_DOC_COHERENT_PUBLISH_ENABLE = 1'b1",
+            ".COHERENT_PUBLISH_ENABLE(MB_DOC_COHERENT_PUBLISH_ENABLE)",
+            ".ENABLE(1'b0),  // M6.3",
+            'mb_speech_pre_mix_w',
+            'mb_speech_sum_l_w'
+          ]
+          for marker in expected:
+            assert marker in top,marker
+          for marker in ('gen_doc_publish','doc_regs','COHERENT_IDLE_CYCLES','pub_next_reg_r'):
+            assert marker in bridge,marker
+          print('PASS: DOC publication on; stable video/FX config and R11 speech mux untouched')
+          PY
