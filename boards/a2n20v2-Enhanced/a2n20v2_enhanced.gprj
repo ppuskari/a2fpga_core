@@ -111,7 +111,6 @@
         <File path="hdl/bl616/fpga_sd_spi.sv" type="file.verilog" enable="1"/>
         <File path="hdl/bl616/a2bus_event_fifo.sv" type="file.verilog" enable="1"/>
         <File path="hdl/piano_multisustain.mem" type="file.other" enable="1"/>
-        <File path="hdl/mb_hdmi_audio_pilot.sv" type="file.verilog" enable="1"/>
         <File path="hdl/mb_doc_bridge.sv" type="file.verilog" enable="1"/>
         <File path="hdl/top.sv" type="file.verilog" enable="1"/>
     </FileList>
