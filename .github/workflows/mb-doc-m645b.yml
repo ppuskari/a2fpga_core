@@ -29,7 +29,7 @@ jobs:
               "parameter bit MB_DOC_COHERENT_PUBLISH_ENABLE = 1'b1",
               ".ENABLE(1'b0),  // M6.3",
               "mb_speech_sum_l_w","mb_speech_sum_r_w",
-              "packet_picker #("
+              ".clk_audio(clk_audio_w)"
           ):
               assert x in top,x
           print("PASS: preserved piano, speech and video settings")
