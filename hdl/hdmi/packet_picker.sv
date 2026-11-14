@@ -63,41 +63,20 @@ localparam int AUDIO_BIT_WIDTH_COMPARATOR = AUDIO_BIT_WIDTH < 20 ? 20 : AUDIO_BI
 localparam bit [2:0] WORD_LENGTH = 3'(AUDIO_BIT_WIDTH_COMPARATOR - AUDIO_BIT_WIDTH);
 localparam bit WORD_LENGTH_LIMIT = AUDIO_BIT_WIDTH <= 20 ? 1'b0 : 1'b1;
 
-// M6.4.5b: the HDMI PCM producer and packet picker already use the
-// SAME clk_pixel domain. The prior 2FF toggle 'synchronizer' was therefore
-// redundant, and its mux allowed stale buffered values to be reselected.
-// Capture each audio strobe directly into the existing four-frame buffer.
-// A clock enable is not a separate clock domain; no CDC is needed here.
-logic sample_buffer_current = 1'b0;
-logic [1:0] samples_remaining = 2'd0;
-logic [23:0] audio_sample_word_buffer [1:0] [3:0] [1:0];
+// M6.4.5b: same-clock packet capture is separate and locally testable.
+wire sample_buffer_current;
+wire sample_buffer_ready;
+wire [23:0] audio_sample_word_buffer [1:0] [3:0] [1:0];
 logic sample_buffer_used = 1'b0;
-logic sample_buffer_ready = 1'b0;
-always_ff @(posedge clk_pixel)
-begin
-    if (reset) begin
-        sample_buffer_current <= 1'b0;
-        samples_remaining <= 2'd0;
-        sample_buffer_ready <= 1'b0;
-    end else begin
-        if (sample_buffer_used)
-            sample_buffer_ready <= 1'b0;
-
-        if (clk_audio) begin
-            audio_sample_word_buffer[sample_buffer_current][samples_remaining][0]
-                <= 24'(audio_sample_word[0]) << (24-AUDIO_BIT_WIDTH);
-            audio_sample_word_buffer[sample_buffer_current][samples_remaining][1]
-                <= 24'(audio_sample_word[1]) << (24-AUDIO_BIT_WIDTH);
-            if (samples_remaining == 2'd3) begin
-                samples_remaining <= 2'd0;
-                sample_buffer_ready <= 1'b1;
-                sample_buffer_current <= ~sample_buffer_current;
-            end else begin
-                samples_remaining <= samples_remaining + 1'b1;
-            end
-        end
-    end
-end
+mb_packet_pcm_capture #(.AUDIO_BIT_WIDTH(AUDIO_BIT_WIDTH))
+    mb_pcm_capture (
+        .clk_pixel(clk_pixel), .reset(reset), .clk_audio(clk_audio),
+        .sample_buffer_used(sample_buffer_used),
+        .audio_sample_word(audio_sample_word),
+        .sample_buffer_current(sample_buffer_current),
+        .sample_buffer_ready(sample_buffer_ready),
+        .audio_sample_word_buffer(audio_sample_word_buffer)
+    );
 
 logic [23:0] audio_sample_word_packet [3:0] [1:0];
 logic [3:0] audio_sample_word_present_packet;
@@ -183,4 +162,42 @@ begin
     end
 end
 
+endmodule
+
+// M6.4.5b: direct 27MHz pixel-clock-domain 4x stereo PCM capture.
+// clk_audio is a one-cycle enable in this SAME clock domain; no CDC,
+// redundant toggle, or sample mux is required.
+module mb_packet_pcm_capture #(
+    parameter integer AUDIO_BIT_WIDTH=16
+)(
+    input wire clk_pixel,
+    input wire reset,
+    input wire clk_audio,
+    input wire sample_buffer_used,
+    input wire [AUDIO_BIT_WIDTH-1:0] audio_sample_word [1:0],
+    output reg sample_buffer_current=1'b0,
+    output reg sample_buffer_ready=1'b0,
+    output reg [23:0] audio_sample_word_buffer [1:0][3:0][1:0]
+);
+    reg [1:0] samples_remaining=2'd0;
+    always @(posedge clk_pixel) begin
+        if (reset) begin
+            samples_remaining <= 2'd0;
+            sample_buffer_current <= 1'b0;
+            sample_buffer_ready <= 1'b0;
+        end else begin
+            if (sample_buffer_used) sample_buffer_ready <= 1'b0;
+            if (clk_audio) begin
+                audio_sample_word_buffer[sample_buffer_current][samples_remaining][0]
+                    <= 24'(audio_sample_word[0]) << (24-AUDIO_BIT_WIDTH);
+                audio_sample_word_buffer[sample_buffer_current][samples_remaining][1]
+                    <= 24'(audio_sample_word[1]) << (24-AUDIO_BIT_WIDTH);
+                if (samples_remaining == 2'd3) begin
+                    samples_remaining <= 2'd0;
+                    sample_buffer_ready <= 1'b1;
+                    sample_buffer_current <= ~sample_buffer_current;
+                end else samples_remaining <= samples_remaining + 1'b1;
+            end
+        end
+    end
 endmodule
