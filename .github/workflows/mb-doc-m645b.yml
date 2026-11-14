@@ -1,0 +1,46 @@
+name: M6.4.5b direct HDMI packet buffering
+on:
+  push:
+    branches:
+      - petar/mb-doc-m645b-packet-direct-20261114
+    paths:
+      - 'boards/a2n20v2-Enhanced/**'
+      - 'hdl/hdmi/packet_picker.sv'
+      - 'tests/mb_doc/**'
+      - '.github/workflows/mb-doc-m645b.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Icarus Verilog
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iverilog
+      - name: Verify preserved music settings
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          top=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text()
+          for x in (
+              "parameter bit MB_DOC_FX_AY_BYPASS_ENABLE = 1'b0",
+              "parameter bit MB_DOC_DECLICK_ENABLE = 1'b1",
+              "parameter bit MB_DOC_COHERENT_PUBLISH_ENABLE = 1'b1",
+              ".ENABLE(1'b0),  // M6.3",
+              "mb_speech_sum_l_w","mb_speech_sum_r_w",
+              "packet_picker #("
+          ):
+              assert x in top,x
+          print("PASS: preserved piano, speech and video settings")
+          PY
+      - name: Restore SynthLAB piano memory
+        run: python3 tools/extract_synthlab_piano.py --download
+      - name: M6 baseline routing regression
+        run: sh tests/mb_doc/run_capture_test.sh
+      - name: M6.4 de-click regression
+        run: sh tests/mb_doc/run_declick_test.sh
+      - name: M6.4.1 publication regression
+        run: sh tests/mb_doc/run_publish_test.sh
+      - name: M6.4.5b targeted HDL test
+        run: sh tests/mb_doc/run_packet_direct_test.sh
