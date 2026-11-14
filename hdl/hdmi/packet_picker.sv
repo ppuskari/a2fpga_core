@@ -63,52 +63,39 @@ localparam int AUDIO_BIT_WIDTH_COMPARATOR = AUDIO_BIT_WIDTH < 20 ? 20 : AUDIO_BI
 localparam bit [2:0] WORD_LENGTH = 3'(AUDIO_BIT_WIDTH_COMPARATOR - AUDIO_BIT_WIDTH);
 localparam bit WORD_LENGTH_LIMIT = AUDIO_BIT_WIDTH <= 20 ? 1'b0 : 1'b1;
 
-logic [AUDIO_BIT_WIDTH-1:0] audio_sample_word_transfer [1:0];
-logic audio_sample_word_transfer_control = 1'd0;
-always_ff @(posedge clk_pixel)
-begin
-    if (clk_audio) begin
-        audio_sample_word_transfer <= audio_sample_word;
-        audio_sample_word_transfer_control <= !audio_sample_word_transfer_control;
-    end
-end
-
-logic [1:0] audio_sample_word_transfer_control_synchronizer_chain = 2'd0;
-always_ff @(posedge clk_pixel)
-    audio_sample_word_transfer_control_synchronizer_chain <= {audio_sample_word_transfer_control, audio_sample_word_transfer_control_synchronizer_chain[1]};
-
+// M6.4.5b: the HDMI PCM producer and packet picker already use the
+// SAME clk_pixel domain. The prior 2FF toggle 'synchronizer' was therefore
+// redundant, and its mux allowed stale buffered values to be reselected.
+// Capture each audio strobe directly into the existing four-frame buffer.
+// A clock enable is not a separate clock domain; no CDC is needed here.
 logic sample_buffer_current = 1'b0;
 logic [1:0] samples_remaining = 2'd0;
 logic [23:0] audio_sample_word_buffer [1:0] [3:0] [1:0];
-logic [AUDIO_BIT_WIDTH-1:0] audio_sample_word_transfer_mux [1:0];
-always_comb
-begin
-    if (audio_sample_word_transfer_control_synchronizer_chain[0] ^ audio_sample_word_transfer_control_synchronizer_chain[1])
-        audio_sample_word_transfer_mux = audio_sample_word_transfer;
-    else
-        audio_sample_word_transfer_mux = '{audio_sample_word_buffer[sample_buffer_current][samples_remaining][1][23:(24-AUDIO_BIT_WIDTH)], audio_sample_word_buffer[sample_buffer_current][samples_remaining][0][23:(24-AUDIO_BIT_WIDTH)]};
-end
-
 logic sample_buffer_used = 1'b0;
 logic sample_buffer_ready = 1'b0;
-
 always_ff @(posedge clk_pixel)
 begin
-    if (sample_buffer_used)
+    if (reset) begin
+        sample_buffer_current <= 1'b0;
+        samples_remaining <= 2'd0;
         sample_buffer_ready <= 1'b0;
+    end else begin
+        if (sample_buffer_used)
+            sample_buffer_ready <= 1'b0;
 
-    if (audio_sample_word_transfer_control_synchronizer_chain[0] ^ audio_sample_word_transfer_control_synchronizer_chain[1])
-    begin
-        audio_sample_word_buffer[sample_buffer_current][samples_remaining][0] <=  24'(audio_sample_word_transfer_mux[0])<<(24-AUDIO_BIT_WIDTH);
-        audio_sample_word_buffer[sample_buffer_current][samples_remaining][1] <=  24'(audio_sample_word_transfer_mux[1])<<(24-AUDIO_BIT_WIDTH);
-        if (samples_remaining == 2'd3)
-        begin
-            samples_remaining <= 2'd0;
-            sample_buffer_ready <= 1'b1;
-            sample_buffer_current <= !sample_buffer_current;
+        if (clk_audio) begin
+            audio_sample_word_buffer[sample_buffer_current][samples_remaining][0]
+                <= 24'(audio_sample_word[0]) << (24-AUDIO_BIT_WIDTH);
+            audio_sample_word_buffer[sample_buffer_current][samples_remaining][1]
+                <= 24'(audio_sample_word[1]) << (24-AUDIO_BIT_WIDTH);
+            if (samples_remaining == 2'd3) begin
+                samples_remaining <= 2'd0;
+                sample_buffer_ready <= 1'b1;
+                sample_buffer_current <= ~sample_buffer_current;
+            end else begin
+                samples_remaining <= samples_remaining + 1'b1;
+            end
         end
-        else
-            samples_remaining <= samples_remaining + 1'd1;
     end
 end
 
