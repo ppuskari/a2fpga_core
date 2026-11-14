@@ -1639,6 +1639,37 @@ wire [7:0] doc_128k_status_w;
         .data_out(cdc_audio_r)
     );
 
+    // M6.4.5c diagnostic: mark the signal BEFORE audio_out resampling,
+    // DC blocking and HDMI packetization. Pilot is ~1002Hz at +/-16 PCM
+    // before 8x HDMI music gain (post-filter amplitude can differ).
+    // S2 toggles the mark at runtime, default ON; normal left unaffected.
+    reg m645c_enable_logic_r;
+    reg [1:0] m645c_enable_pixel_r;
+    always @(posedge clk_logic_w or negedge device_reset_n_w) begin
+        if (!device_reset_n_w) m645c_enable_logic_r <= 1'b1;
+        else if (button_s2_posedge_w)
+            m645c_enable_logic_r <= ~m645c_enable_logic_r;
+    end
+    always @(posedge clk_pixel_w or negedge device_reset_n_w) begin
+        if (!device_reset_n_w) m645c_enable_pixel_r <= 2'b11;
+        else m645c_enable_pixel_r <= {m645c_enable_pixel_r[0],m645c_enable_logic_r};
+    end
+    wire signed [15:0] m645c_audio_r_w;
+    mb_hdmi_audio_pilot #(
+        .ENABLE(1'b1),
+        .AMPLITUDE(16'sd16),
+        .CEILING(16'sd32767)
+    ) m645c_pre_audio_out_pilot (
+        .clk_pixel_i(clk_pixel_w),
+        .reset_n_i(device_reset_n_w),
+        .sample_tick_i(clk_audio_w),
+        .pilot_enable_i(m645c_enable_pixel_r[1]),
+        .left_pcm_i(cdc_audio_l),
+        .right_pcm_i(cdc_audio_r),
+        .left_pcm_o(),
+        .right_pcm_o(m645c_audio_r_w)
+    );
+
     localparam [31:0] aflt_rate = 7_056_000;
     localparam [39:0] acx  = 4258969;
     localparam  [7:0] acx0 = 3;
@@ -1689,7 +1720,7 @@ wire [15:0] audio_sample_word[1:0];
 
         .is_signed(1'b1),
         .core_l(cdc_audio_l),
-        .core_r(cdc_audio_r),
+        .core_r(m645c_audio_r_w),
 
         .audio_clk(clk_audio_w),
 .audio_l(audio_sample_word_raw[0]),
