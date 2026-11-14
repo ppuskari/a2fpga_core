@@ -9,7 +9,7 @@ on:
       - 'boards/a2n20v2-Enhanced/hdl/mb_hdmi_audio_pilot.sv'
       - 'boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj'
       - 'tests/mb_doc/**'
-      - '.github/workflows/mb-doc-m642-audio-pilot.yml'
+      - '.github/workflows/mb-doc-m643-pilot-ab.yml'
   workflow_dispatch:
 permissions:
   contents: read
