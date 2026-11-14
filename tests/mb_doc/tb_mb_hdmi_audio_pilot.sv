@@ -1,16 +1,19 @@
 `timescale 1ns/1ps
 module tb_mb_hdmi_audio_pilot;
     logic clk=0, reset_n=0, sample_tick=0;
+    logic pilot_enable=1;
     always #5 clk=~clk;
     logic signed [15:0] left_in=0, right_in=0;
     wire signed [15:0] on_l,on_r,off_l,off_r;
     mb_hdmi_audio_pilot #(.ENABLE(1'b1)) enabled (
         .clk_pixel_i(clk),.reset_n_i(reset_n),.sample_tick_i(sample_tick),
+        .pilot_enable_i(pilot_enable),
         .left_pcm_i(left_in),.right_pcm_i(right_in),
         .left_pcm_o(on_l),.right_pcm_o(on_r)
     );
     mb_hdmi_audio_pilot #(.ENABLE(1'b0)) disabled (
         .clk_pixel_i(clk),.reset_n_i(reset_n),.sample_tick_i(sample_tick),
+        .pilot_enable_i(pilot_enable),
         .left_pcm_i(left_in),.right_pcm_i(right_in),
         .left_pcm_o(off_l),.right_pcm_o(off_r)
     );
@@ -62,6 +65,25 @@ module tb_mb_hdmi_audio_pilot;
         repeat(100) @(negedge clk);
         if(on_r!==16'sd26028)
             $fatal(1,"Pilot advanced without sample tick");
+
+        // Same FPGA bitstream A/B: OFF bypasses all pilot summing.
+        pilot_enable=0;
+        #1;
+        if(on_l!==16'sd1000 || on_r!==16'sd26000)
+            $fatal(1,"Pilot OFF did not preserve source music PCM");
+        left_in=0;right_in=0;
+        #1;
+        if(on_r!==16'sd0 || on_l!==16'sd0)
+            $fatal(1,"Pilot OFF failed to produce digital silence");
+        repeat(22) begin
+            @(negedge clk);sample_tick=1;
+            @(negedge clk);sample_tick=0;
+        end
+        pilot_enable=1;
+        #1;
+        if(on_l!==16'sd0 || on_r!==-16'sd256)
+            $fatal(1,"Pilot ON did not resume with continuous phase");
+        $display("PASS: runtime ON/OFF/ON, right PCM exact passthrough when OFF");
         $display("PASS: 1002.27 Hz right-only postgain HDMI diagnostic pilot");
         $display("PASS: independent of DOC zeros; ceiling +/-26028; disabled transparent");
         $finish;
