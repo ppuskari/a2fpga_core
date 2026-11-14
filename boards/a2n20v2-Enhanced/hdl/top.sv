@@ -1639,6 +1639,7 @@ wire [7:0] doc_128k_status_w;
         .data_out(cdc_audio_r)
     );
 
+    wire clk_audio_w; // 27MHz-domain one-cycle 44.1kHz sample enable
     // M6.4.5c diagnostic: mark the signal BEFORE audio_out resampling,
     // DC blocking and HDMI packetization. Pilot is ~1002Hz at +/-16 PCM
     // before 8x HDMI music gain (post-filter amplitude can differ).
@@ -1681,7 +1682,6 @@ wire [7:0] doc_128k_status_w;
 
     localparam AUDIO_RATE = 44100;
     localparam AUDIO_BIT_WIDTH = 16;
-    wire clk_audio_w;
     audio_timing #(
         .CLK_RATE(CLOCK_SPEED_HZ / 2),
         .AUDIO_RATE(AUDIO_RATE)
