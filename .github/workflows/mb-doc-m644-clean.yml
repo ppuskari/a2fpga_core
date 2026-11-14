@@ -1,0 +1,55 @@
+name: M6.4.4 Clean Music (no pilot)
+on:
+  push:
+    branches:
+      - petar/mb-doc-m644-clean-no-pilot-20261114
+    paths:
+      - 'boards/a2n20v2-Enhanced/**'
+      - 'tests/mb_doc/**'
+      - 'tools/extract_synthlab_piano.py'
+      - '.github/workflows/mb-doc-m644-clean.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  clean-music:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Icarus Verilog
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iverilog
+      - name: Confirm completely pilot-free synthesis and preserved M6.4.1 settings
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          top=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text()
+          project=Path('boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj').read_text()
+          for forbidden in (
+              'MB_DOC_HDMI_AUDIO_PILOT_ENABLE', 'mb_hdmi_audio_pilot',
+              'pilot_enable_pixel_r', 'pilot_enable_logic_r',
+              'm642_audio_pilot', 'm643_audio_pilot'
+          ):
+              assert forbidden not in top, forbidden
+              assert forbidden not in project, forbidden
+          assert not Path('boards/a2n20v2-Enhanced/hdl/mb_hdmi_audio_pilot.sv').exists()
+          for required in (
+              "parameter bit MB_DOC_FX_AY_BYPASS_ENABLE = 1'b0",
+              "parameter bit MB_DOC_DECLICK_ENABLE = 1'b1",
+              "parameter bit MB_DOC_COHERENT_PUBLISH_ENABLE = 1'b1",
+              ".ENABLE(1'b0),  // M6.3",
+              ".DECLICK_ENABLE(MB_DOC_DECLICK_ENABLE)",
+              ".COHERENT_PUBLISH_ENABLE(MB_DOC_COHERENT_PUBLISH_ENABLE)",
+              "mb_speech_sum_l_w",
+              "mb_speech_sum_r_w"
+          ):
+              assert required in top, required
+          print("PASS: no pilot, no S2 pilot control, no AY FX mux, no video overlay")
+          PY
+      - name: Restore verified SynthLAB piano sample memory
+        run: python3 tools/extract_synthlab_piano.py --download
+      - name: M6 original piano and AY compatibility tests
+        run: sh tests/mb_doc/run_capture_test.sh
+      - name: M6.4 de-click and rapid retrigger tests
+        run: sh tests/mb_doc/run_declick_test.sh
+      - name: M6.4.1 coherent publication and song repeat tests
+        run: sh tests/mb_doc/run_publish_test.sh
