@@ -11,6 +11,7 @@ module mb_hdmi_audio_pilot #(
     input logic clk_pixel_i,
     input logic reset_n_i,
     input logic sample_tick_i,   // one-cycle 44.1 kHz pulse from audio_timing
+    input logic pilot_enable_i,  // synchronized runtime A/B control
     input logic signed [15:0] left_pcm_i,
     input logic signed [15:0] right_pcm_i,
     output wire signed [15:0] left_pcm_o,
@@ -41,10 +42,13 @@ module mb_hdmi_audio_pilot #(
                          -$signed({AMPLITUDE[15], AMPLITUDE});
         wire signed [16:0] sum_w =
             $signed({right_pcm_i[15],right_pcm_i}) + pilot_w;
-        assign right_pcm_o =
+        wire signed [15:0] pilot_mixed_w =
             (sum_w > $signed({CEILING[15],CEILING})) ? CEILING :
             (sum_w < -$signed({CEILING[15],CEILING})) ? -CEILING :
             sum_w[15:0];
+        // Runtime on/off shares the identical routed FPGA bitstream.
+        // Disabling the pilot bypasses its extra sum and clamp exactly.
+        assign right_pcm_o = pilot_enable_i ? pilot_mixed_w : right_pcm_i;
     end else begin : gen_passthrough
         assign right_pcm_o = right_pcm_i;
     end endgenerate
