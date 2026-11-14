@@ -57,6 +57,9 @@ module top #(
     // M6.4.1: publish coherent musical snapshots to the DOC scanner.
     // Native AY/FM writes, SSI263 and the HDL video path stay unchanged.
     parameter bit MB_DOC_COHERENT_PUBLISH_ENABLE = 1'b1,
+    // M6.4.2 diagnostic: quiet ~1002 Hz tone on RIGHT HDMI PCM after
+    // the final limiter. Isolates DOC/music loss from HDMI packet loss.
+    parameter bit MB_DOC_HDMI_AUDIO_PILOT_ENABLE = 1'b1,
     parameter bit MOCKINGBOARD_ENABLE = 0,
     // SSI speech can coexist with exclusive AY-to-DOC music ownership.
     parameter bit MOCKINGBOARD_SSI263_ENABLE = 1'b1,
@@ -1839,13 +1842,29 @@ wire [15:0] audio_sample_word[1:0];
         end
     end
 
-    assign audio_sample_word[0] = AUDIO_MODE_MB_DOC ?
+    wire signed [15:0] audio_postgain_l_w = AUDIO_MODE_MB_DOC ?
         mb_doc_gain_minus_2db($signed(audio_sample_word_raw[0])) :
         hdmi_gain_plus_3db($signed(audio_sample_word_raw[0]));
-
-    assign audio_sample_word[1] = AUDIO_MODE_MB_DOC ?
+    wire signed [15:0] audio_postgain_r_w = AUDIO_MODE_MB_DOC ?
         mb_doc_gain_minus_2db($signed(audio_sample_word_raw[1])) :
         hdmi_gain_plus_3db($signed(audio_sample_word_raw[1]));
+
+    // Right-only diagnostic reference: injected after the DOC, music
+    // mixer, CDC, audio_out, and existing HDMI music limiter. With the
+    // pilot enabled, silence in the HDMI WAV but a continuing 1 kHz
+    // right tone means music vanished upstream. If the pilot vanishes
+    // too, focus on HDMI PCM transport or downstream capture.
+    mb_hdmi_audio_pilot #(
+        .ENABLE(AUDIO_MODE_MB_DOC && MB_DOC_HDMI_AUDIO_PILOT_ENABLE)
+    ) m642_audio_pilot (
+        .clk_pixel_i(clk_pixel_w),
+        .reset_n_i(device_reset_n_w),
+        .sample_tick_i(clk_audio_w),
+        .left_pcm_i(audio_postgain_l_w),
+        .right_pcm_i(audio_postgain_r_w),
+        .left_pcm_o(audio_sample_word[0]),
+        .right_pcm_o(audio_sample_word[1])
+    );
 
 
 
