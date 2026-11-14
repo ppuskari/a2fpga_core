@@ -2024,6 +2024,24 @@ wire [15:0] audio_sample_word[1:0];
         .o(s2_debounced_w)
     );
 
+    // M6.4.5a: sticky audio strobe loss independent of music/sample values.
+    // CDC: button level is asynchronous to pixel domain; synchronize it.
+    reg [1:0] s2_pixel_sync_r = 2'b00;
+    always @(posedge clk_pixel_w or negedge device_reset_n_w) begin
+        if (!device_reset_n_w) s2_pixel_sync_r <= 2'b00;
+        else s2_pixel_sync_r <= {s2_pixel_sync_r[0], s2_debounced_w};
+    end
+    wire m645a_stalled_w;
+    wire m645a_heartbeat_w;
+    mb_audio_strobe_watch m645a_watch (
+        .clk_pixel_i(clk_pixel_w),
+        .reset_n_i(device_reset_n_w),
+        .sample_tick_i(clk_audio_w),
+        .clear_i(s2_pixel_sync_r[1]),
+        .stalled_o(m645a_stalled_w),
+        .heartbeat_o(m645a_heartbeat_w)
+    );
+
     reg prev_button_s2 = 1'b0;
     wire button_s2_posedge_w = s2_debounced_w && !prev_button_s2;
     always @(posedge clk_logic_w) begin 
@@ -2032,7 +2050,10 @@ wire [15:0] audio_sample_word[1:0];
             show_debug_overlay_r <= !show_debug_overlay_r;
         end
         //if (!s2) 
-        led <= {!a2mem_if.TEXT_MODE, !a2mem_if.SHRG_MODE, !a2mem_if.HIRES_MODE, !a2mem_if.RAMWRT, !a2mem_if.STORE80};
+        // LED4 = 1 Hz heartbeat from the pixel-domain audio strobe.
+        // LED3 = sticky fault (ON if >=2ms without a sample pulse).
+        // LEDs 2..0 retain original semantics. Press S2 to clear fault.
+        led <= {~m645a_heartbeat_w, ~m645a_stalled_w, !a2mem_if.HIRES_MODE, !a2mem_if.RAMWRT, !a2mem_if.STORE80};
         //if (!s2) led <= {!a2mem_if.TEXT_MODE, !a2mem_if.MIXED_MODE, !a2mem_if.HIRES_MODE, !a2mem_if.RAMWRT, !a2mem_if.STORE80};
         //if (!s2) led <= {!a2mem_if.TEXT_MODE, !a2mem_if.MIXED_MODE, !a2mem_if.HIRES_MODE, !a2mem_if.AN3, !a2mem_if.STORE80};
         //else led <= {!vdp_unlocked_w, ~vdp_gmode_w};
