@@ -1,0 +1,46 @@
+name: M6.4.5a2 strobe watchdog clear
+on:
+  push:
+    branches:
+      - petar/mb-doc-m645a2-watchdog-clear-20261115
+    paths:
+      - 'boards/a2n20v2-Enhanced/**'
+      - 'hdl/hdmi/packet_picker.sv'
+      - 'tests/mb_doc/**'
+      - '.github/workflows/mb-doc-m645a2.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Icarus Verilog
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iverilog
+      - name: Verify preserved music settings
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          top=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text()
+          for x in (
+              "parameter bit MB_DOC_FX_AY_BYPASS_ENABLE = 1'b0",
+              "parameter bit MB_DOC_DECLICK_ENABLE = 1'b1",
+              "parameter bit MB_DOC_COHERENT_PUBLISH_ENABLE = 1'b1",
+              ".ENABLE(1'b0),  // M6.3",
+              "mb_speech_sum_l_w","mb_speech_sum_r_w",
+              "mb_audio_strobe_watch m645a_watch","sample_tick_i(clk_audio_w)","m645a_stalled_w","s2_pixel_changed_w"
+          ):
+              assert x in top,x
+          print("PASS: preserved piano, speech and video settings")
+          PY
+      - name: Restore SynthLAB piano memory
+        run: python3 tools/extract_synthlab_piano.py --download
+      - name: M6 baseline routing regression
+        run: sh tests/mb_doc/run_capture_test.sh
+      - name: M6.4 de-click regression
+        run: sh tests/mb_doc/run_declick_test.sh
+      - name: M6.4.1 publication regression
+        run: sh tests/mb_doc/run_publish_test.sh
+      - name: M6.4.5a targeted HDL test
+        run: sh tests/mb_doc/run_strobe_watch_test.sh
