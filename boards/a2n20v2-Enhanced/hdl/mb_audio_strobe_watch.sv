@@ -22,18 +22,26 @@ module mb_audio_strobe_watch #(
             heartbeat_o <= 1'b0;
             stalled_o <= 1'b0;
         end else begin
-            if (clear_i)
+            // A real S2 edge has priority over a previously saturated
+            // timeout. Reset elapsed-time accounting as well as the latch;
+            // otherwise the watchdog can override the clear every clock.
+            // A continuously absent strobe will relatch after 2 ms.
+            if (clear_i) begin
                 stalled_o <= 1'b0;
-            if (sample_tick_i) begin
                 since_tick_r <= '0;
-                if (heartbeat_count_r == HW'(HEARTBEAT_SAMPLES-1)) begin
-                    heartbeat_count_r <= '0;
-                    heartbeat_o <= ~heartbeat_o;
-                end else heartbeat_count_r <= heartbeat_count_r + 1'b1;
+            end else if (sample_tick_i) begin
+                since_tick_r <= '0;
             end else if (since_tick_r < CW'(TIMEOUT_CYCLES)) begin
                 since_tick_r <= since_tick_r + 1'b1;
             end else begin
                 stalled_o <= 1'b1;
+            end
+            // Heartbeat remains independent of clear operation.
+            if (sample_tick_i) begin
+                if (heartbeat_count_r == HW'(HEARTBEAT_SAMPLES-1)) begin
+                    heartbeat_count_r <= '0;
+                    heartbeat_o <= ~heartbeat_o;
+                end else heartbeat_count_r <= heartbeat_count_r + 1'b1;
             end
         end
     end
