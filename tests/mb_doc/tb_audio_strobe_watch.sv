@@ -27,14 +27,32 @@ module tb_audio_strobe_watch;
         repeat(20) @(negedge clk);
         #1;
         if (stalled!==1) $fatal(1,"2ms equivalent watchdog did not latch");
-        pulse();
-        if (stalled!==1) $fatal(1,"Fault should remain sticky");
+        // Critical regression: clear while the timeout has saturated
+        // AND the sample stream is still missing. In a faulty version,
+        // the later nonblocking timeout assignment overrides clear.
         clear=1;
         @(negedge clk);
         #1;
-        if (stalled!==0) $fatal(1,"S2 clear did not reset sticky flag");
+        if (stalled!==0) $fatal(1,"S2 clear lost to saturated timeout");
         clear=0;
-        $display("PASS: sample heartbeat, missing-clock watchdog, sticky clear");
+        repeat(10) @(negedge clk);
+        #1;
+        if (stalled!==0) $fatal(1,"Fault relatched too early after clear");
+        repeat(8) @(negedge clk);
+        #1;
+        if (stalled!==1) $fatal(1,"Fault failed to relatch on genuine missing pulses");
+        pulse();
+        #1;
+        if (stalled!==1) $fatal(1,"Fault should remain sticky after pulses resume");
+        clear=1;
+        @(negedge clk);
+        #1;
+        if (stalled!==0) $fatal(1,"S2 clear did not reset sticky flag after recovery");
+        clear=0;
+        repeat(12) pulse();
+        #1;
+        if(stalled!==0) $fatal(1,"False watchdog timeout with regular sample ticks");
+        $display("PASS: strobe heartbeat, saturated-timeout clear priority, true timeout relatch, recovery");
         $finish;
     end
     initial begin
