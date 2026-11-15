@@ -2031,13 +2031,22 @@ wire [15:0] audio_sample_word[1:0];
         if (!device_reset_n_w) s2_pixel_sync_r <= 2'b00;
         else s2_pixel_sync_r <= {s2_pixel_sync_r[0], s2_debounced_w};
     end
+    // S2 is board-polarity dependent. Edge-detect the synchronized,
+    // debounced state so either press or release clears the sticky latch.
+    // Holding the button no longer masks real watchdog timeouts.
+    reg s2_pixel_prev_r = 1'b0;
+    always @(posedge clk_pixel_w or negedge device_reset_n_w) begin
+        if (!device_reset_n_w) s2_pixel_prev_r <= 1'b0;
+        else s2_pixel_prev_r <= s2_pixel_sync_r[1];
+    end
+    wire s2_pixel_changed_w = s2_pixel_sync_r[1] ^ s2_pixel_prev_r;
     wire m645a_stalled_w;
     wire m645a_heartbeat_w;
     mb_audio_strobe_watch m645a_watch (
         .clk_pixel_i(clk_pixel_w),
         .reset_n_i(device_reset_n_w),
         .sample_tick_i(clk_audio_w),
-        .clear_i(s2_pixel_sync_r[1]),
+        .clear_i(s2_pixel_changed_w),
         .stalled_o(m645a_stalled_w),
         .heartbeat_o(m645a_heartbeat_w)
     );
@@ -2052,7 +2061,7 @@ wire [15:0] audio_sample_word[1:0];
         //if (!s2) 
         // LED4 = 1 Hz heartbeat from the pixel-domain audio strobe.
         // LED3 = sticky fault (ON if >=2ms without a sample pulse).
-        // LEDs 2..0 retain original semantics. Press S2 to clear fault.
+        // LEDs 2..0 retain original semantics. S2 press/release clears fault.
         led <= {~m645a_heartbeat_w, ~m645a_stalled_w, !a2mem_if.HIRES_MODE, !a2mem_if.RAMWRT, !a2mem_if.STORE80};
         //if (!s2) led <= {!a2mem_if.TEXT_MODE, !a2mem_if.MIXED_MODE, !a2mem_if.HIRES_MODE, !a2mem_if.RAMWRT, !a2mem_if.STORE80};
         //if (!s2) led <= {!a2mem_if.TEXT_MODE, !a2mem_if.MIXED_MODE, !a2mem_if.HIRES_MODE, !a2mem_if.AN3, !a2mem_if.STORE80};
