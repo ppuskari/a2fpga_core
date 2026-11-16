@@ -199,8 +199,13 @@ module mb_doc_bridge #(
         selected_chip_w ? ay_r_env_level_i : ay_l_env_level_i;
     wire selected_reset_n_w =
         selected_chip_w ? ay_r_reset_n_i : ay_l_reset_n_i;
+    // First select a fixed packed AY chip slice, then a channel bit.
+    // This avoids Icarus' variable-index restriction on nested packed
+    // arrays while synthesizing to the same small mux.
+    wire [2:0] selected_native_mask_w =
+        selected_chip_w ? fx_native_mask_w[1] : fx_native_mask_w[0];
     wire selected_native_fx_w =
-        fx_native_mask_w[selected_chip_w][selected_channel_w];
+        selected_native_mask_w[selected_channel_w];
 
     // Conservative zoning: preserve the calibrated C4..C5 keyboard using
     // the known-good ~Piano C3 sustain. Use other genuine source samples
