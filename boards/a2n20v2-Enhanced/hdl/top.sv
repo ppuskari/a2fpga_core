@@ -597,6 +597,7 @@ module top #(
     wire       mcu_ws2812_w;
     wire       mcu_ready_w;
     wire [39:0] mcu_scratch_w;   // 5 MCU scratch regs {s4,s3,s2,s1,s0} for debug overlay
+    wire [1:0]  mcu_audio_mode_w; // accepted selection; intentionally unused until A3
 
     // Uthernet2 (W5100) backing-store host link (SPI SPACE 3 <-> card port B)
     wire        u2_host_wr_w;
@@ -638,6 +639,7 @@ module top #(
         .mcu_ready_o(mcu_ready_w),
         .standalone_o(standalone_w),
         .scratch_o(mcu_scratch_w),
+        .audio_mode_o(mcu_audio_mode_w),
         .cardrom_active_i(!inh_n_w),
         .cardrom_release_o(cardrom_release_w),
         .button_i(s2),

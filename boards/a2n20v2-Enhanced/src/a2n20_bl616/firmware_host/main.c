@@ -1232,6 +1232,23 @@ int main(void)
                 settings_loaded_from_flash() ? "FLASH" : "DEFAULTS", dbg);
     }
 
+    /* AUDIOCFG A1/A2: latch and verify the requested mode BEFORE the
+     * slot-map strobe (0x6B), which can release Apple II reset. The FPGA
+     * keeps M641 audio routing unchanged until A3. An older core returns
+     * no 0xA0 signature, so report unsupported without delaying the boot. */
+    {
+        uint8_t mode = settings()->audio_mode;
+        int verified = 0;
+        if (ready) {
+            for (int attempt = 0; attempt < 5 && !verified; attempt++) {
+                fpga_spi_reg_write(0x6Fu, mode);
+                verified = (fpga_spi_reg_read(0x6Fu) == (uint8_t)(0xA0u | mode));
+            }
+        }
+        osd_log("AUDIOCFG A1/A2: REQ=%u %s (NO ROUTING)",
+                (unsigned)mode, verified ? "ACK" : "NO A2 CORE");
+    }
+
     /* Apply the persisted slot map EARLY -- the gateware gates the Apple II
      * /RES release on the 0x6B reconfig strobe (reset contract: the Apple
      * never boots before the virtual cards know their slots), so this is what

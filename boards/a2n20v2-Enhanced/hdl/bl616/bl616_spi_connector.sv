@@ -48,6 +48,7 @@ module bl616_spi_connector #(
     output wire        mcu_ready_o,
     output wire        standalone_o,   // high once standalone fallback engages (no BL616)
     output wire [39:0] scratch_o,      // 5 MCU scratch regs packed {s4,s3,s2,s1,s0} (0x07,0x0C-0x0F)
+    output wire [1:0]  audio_mode_o,   // A1/A2 requested profile; A3 will route audio
 
     // CardROM
     input  wire        cardrom_active_i,
@@ -116,6 +117,11 @@ module bl616_spi_connector #(
     wire [7:0]  reg_wdata;
     reg  [7:0]  reg_rdata;
     reg  [3:0]  ver_idx_r = 4'd0;   // reg 0x7F: version digit index
+
+    // Mode 0 preserves M641's existing Enhanced Mockingboard behavior.
+    // This register provides boot configuration/readback only (A1/A2).
+    reg [1:0] audio_mode_r;
+    assign audio_mode_o = audio_mode_r;
 
     wire        mem_wr_en;
     wire [2:0]  mem_space;
@@ -871,6 +877,7 @@ module bl616_spi_connector #(
             7'h6C: reg_rdata = {6'b0, sd_slow_clk_r, sd_cs_n_r};
             7'h6D: reg_rdata = sd_rx_data_w;
             7'h6E: reg_rdata = {7'b0, sd_busy_w};
+            7'h6F: reg_rdata = {6'b101000, audio_mode_r}; // 0xA0 | accepted request
 
             // Page 7: Bus event FIFO
             7'h70: reg_rdata = {fifo_empty, fifo_full, 6'b0};
@@ -944,6 +951,7 @@ module bl616_spi_connector #(
             slot_wr_slot_r   <= 3'd0;
             slot_wr_card_r   <= 8'd0;
             slot_reconfig_r  <= 1'b0;
+            audio_mode_r     <= 2'd0; // Enhanced legacy baseline at reset
             led_o            <= 5'd0;
             ws2812_o         <= 1'b0;
             capture_mode_o   <= 3'd0;
@@ -1079,6 +1087,8 @@ module bl616_spi_connector #(
                         sd_tx_data_r  <= reg_wdata;
                         sd_tx_start_r <= 1'b1;
                     end
+                    7'h6F: if (reg_wdata[7:2] == 6'd0)
+                        audio_mode_r <= reg_wdata[1:0];
 
                     // Page 7: Bus event FIFO control
                     7'h77: fifo_reg_pop_r  <= 1'b1;  // FIFO_POP
