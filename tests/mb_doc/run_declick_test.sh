@@ -10,6 +10,7 @@ for res in 0 1 2; do
   iverilog -g2012 -Wall -s tb_mb_doc_declick \
     -Ptb_mb_doc_declick.TEST_RES="$res" \
     -o "$tmpdir/mb_doc_declick_res${res}.vvp" \
+    boards/a2n20v2-Enhanced/hdl/mb_doc_ay_fx_router.sv \
     boards/a2n20v2-Enhanced/hdl/mb_doc_fx_events.sv \
     boards/a2n20v2-Enhanced/hdl/mb_doc_fx_wavegen.sv \
     boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv \
