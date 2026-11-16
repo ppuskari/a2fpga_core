@@ -983,11 +983,11 @@ void disk_poll(void)
                 uint8_t audio_req = fpga_spi_reg_read(0x6Fu);
                 uint8_t audio_route = fpga_spi_reg_read(0x6Bu);
                 uint8_t wanted = settings()->audio_mode;
-                bool audio_ok = audio_req == (uint8_t)(0xA0u | wanted) &&
-                                audio_route == (uint8_t)(0xD0u | wanted);
+                bool audio_match = audio_req == (uint8_t)(0xA0u | wanted) &&
+                                   audio_route == (uint8_t)(0xD0u | wanted);
                 osd_log("AUDIOCFG S=%u FPGA=%02X RT=%02X %s",
                         (unsigned)wanted, (unsigned)audio_req,
-                        (unsigned)audio_route, audio_ok ? "OK" : "MISMATCH");
+                        (unsigned)audio_route, audio_match ? "OK" : "MISMATCH");
             }
         }
         /* (BT_RST_RELEASED is stamped at the top of disk_poll, independent of
