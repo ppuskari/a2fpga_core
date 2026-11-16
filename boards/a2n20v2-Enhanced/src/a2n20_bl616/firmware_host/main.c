@@ -1244,9 +1244,11 @@ int main(void)
         if (ready) {
             // Explicit boot epoch: FPGA's 0x6B lock survives RESTART MCU.
             // New A3 gateware now asserts Apple reset and clears that lock.
-            fpga_spi_reg_write(0x6Fu, 0xF0u);
-            bflb_mtimer_delay_us(100);
+            // Early SPI writes can be lost; repeat the full rearm+select
+            // transaction on each attempt until BOTH registers agree.
             for (int attempt = 0; attempt < 5 && !verified; attempt++) {
+                fpga_spi_reg_write(0x6Fu, 0xF0u);
+                bflb_mtimer_delay_us(100);
                 fpga_spi_reg_write(0x6Fu, mode);
                 request_read = fpga_spi_reg_read(0x6Fu);
                 route_read = fpga_spi_reg_read(0x6Bu);
