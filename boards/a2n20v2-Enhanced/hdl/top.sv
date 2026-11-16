@@ -473,6 +473,7 @@ module top #(
     // Place mode bus outside the BL616 conditional so its width remains
     // defined even in a no-MCU diagnostic build.
     wire [1:0] mcu_audio_mode_w;
+    wire [1:0] audio_active_route_w;
 
     slotmaker slotmaker (
         .a2bus_if(a2bus_if),
@@ -765,7 +766,7 @@ module top #(
     // Feed the actual mixer-select predicates back to the MCU. The older
     // A1/A2 core accepts 0x6F but cannot report an active audio route.
     // This is a runtime A3 identity check, independent of the stored menu.
-    wire [1:0] audio_active_route_w =
+    assign audio_active_route_w =
         audio_enhanced_w ? 2'd0 :
         audio_original_w ? 2'd1 :
         audio_native_w   ? 2'd2 :
