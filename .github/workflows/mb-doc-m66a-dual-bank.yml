@@ -1,0 +1,74 @@
+name: M6.6a 128KiB DOC dual-bank FX — independent merge candidate
+on:
+  push:
+    branches:
+      - petar/mb-doc-m66a-dual-bank-fx-20261116
+    paths:
+      - 'boards/a2n20v2-Enhanced/**'
+      - 'hdl/sound/sound_glu.sv'
+      - 'tests/mb_doc/**'
+      - '.github/workflows/mb-doc-m66a-dual-bank.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  dual-bank:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Icarus Verilog
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iverilog
+      - name: Verify strict GS compatibility and clean MB audio ownership
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          top=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text()
+          glu=Path('hdl/sound/sound_glu.sv').read_text()
+          bridge=Path('boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv').read_text()
+          for marker in (
+              "parameter bit MB_DOC_FX_AY_BYPASS_ENABLE = 1'b0",
+              "parameter bit MB_DOC_DECLICK_ENABLE = 1'b1",
+              "parameter bit MB_DOC_COHERENT_PUBLISH_ENABLE = 1'b1",
+              "parameter bit MB_DOC_DUAL_BANK_FX_ENABLE = 1'b1",
+              ".MB_DOC_128K_AUTO_ENABLE(MB_DOC_DUAL_BANK_FX_ENABLE)",
+              ".DUAL_BANK_FX_ENABLE(MB_DOC_DUAL_BANK_FX_ENABLE)",
+              ".mb_bank1_ready_i(mb_bank1_ready_w)",
+              ".mb_bank1_ready_o(mb_bank1_ready_w)",
+              ".ENABLE(1'b0),  // M6.3",
+              "mb_speech_sum_l_w", "mb_speech_sum_r_w"
+          ):
+              assert marker in top,marker
+          for marker in (
+              "parameter bit MB_DOC_128K_AUTO_ENABLE = 1'b0",
+              "MB_DOC_MODE && ENABLE_128K_EXTENSION",
+              "MB_DOC_128K_AUTO_ENABLE && !USE_BSRAM",
+              "mb_auto_bank1_w ? mb_bank1_ready_i",
+              "sound_128k_unlocked_r && sound_128k_enable_r",
+              "wave_bank_active_w",
+              "wave_addr_w[15:2]"
+          ):
+              assert marker in glu,marker
+          for marker in (
+              "parameter bit DUAL_BANK_FX_ENABLE = 1'b0",
+              "fx_bank1_load_r", "mb_bank1_ready_o <= DUAL_BANK_FX_ENABLE",
+              "fx_patch_bank1(fx_patch_r)"
+          ):
+              assert marker in bridge,marker
+          assert "mb_hdmi_audio_pilot" not in top
+          print("PASS: exclusive MB bank1 access; GS software unlock preserved")
+          print("PASS: golden piano, speech, HDMI pipeline and disabled overlay")
+          PY
+      - name: Restore golden piano sample bank
+        run: python3 tools/extract_synthlab_piano.py --download
+      - name: M6 original piano/AY compatibility tests
+        run: sh tests/mb_doc/run_capture_test.sh
+      - name: M6.4 piano de-click
+        run: sh tests/mb_doc/run_declick_test.sh
+      - name: M6.4.1 coherent register publication
+        run: sh tests/mb_doc/run_publish_test.sh
+      - name: M6.5a dual PSG FX events
+        run: sh tests/mb_doc/run_fx_events_test.sh
+      - name: M6.5b legacy single-bank OSC6/7 path
+        run: sh tests/mb_doc/run_fx_playback_test.sh
+      - name: M6.6a 128KiB dual-bank preload and per-oscillator bank selection
+        run: sh tests/mb_doc/run_128k_test.sh
