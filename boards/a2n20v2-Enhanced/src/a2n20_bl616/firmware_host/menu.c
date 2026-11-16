@@ -173,7 +173,8 @@ static void paint(void)
         put_row(21, s_status, false);
     }
 
-    put_row(23, " A:OK B:BACK Y:CONSOLE SELECT:APPLE II ", true);
+    /* Keyboard keys AND gamepad labels; A/B are not keyboard letters. */
+    put_row(23, " ENTER/A:OK ESC/B:BACK TAB:APPLE Y:VIEW ", true);
 
     fpga_spi_reg_write(REG_TEXT_MODE, 1);
     fpga_spi_reg_write(REG_VIDEO_ENABLE, 1);
@@ -986,7 +987,7 @@ static void audio_change(int id, int dir)
     idx = (idx + (dir < 0 ? (int)AUDIO_MODE_COUNT - 1 : 1))
         % (int)AUDIO_MODE_COUNT;
     s_audio_draft = k_audio_order[idx];
-    set_status(" AUDIO SELECTED - SAVE FOR NEXT BOOT");
+    set_status(" NOT SAVED - DOWN THEN ENTER TO SAVE");
     screen_refresh();
 }
 static void audio_save(int id)
@@ -1007,15 +1008,19 @@ static void audio_build(void)
     menu_item_t *m = mi_add(MI_CHOICE, "BOOT AUDIO MODE",
                            audio_name(s_audio_draft));
     m->on_change = audio_change;
-    m = mi_add(MI_ACTION, "SAVE FOR NEXT BOOT", "");
+    m = mi_add(MI_ACTION, "SAVE FOR NEXT BOOT (ENTER)", "");
     m->action = audio_save;
+    mi_add(MI_INFO, "", "");
+    mi_add(MI_INFO, "1. LEFT/RIGHT TO SELECT AUDIO MODE", "");
+    mi_add(MI_INFO, "2. DOWN TO SAVE, THEN PRESS ENTER", "");
+    mi_add(MI_INFO, "* = AN ACTION, NOT A SAVED MARK", "");
     mi_add(MI_INFO, "", "");
     mi_add(MI_INFO, "ORIGINAL: AY PSG AND SSI263 SPEECH", "");
     mi_add(MI_INFO, "ENHANCED: DOC MB AND SSI263 SPEECH", "");
     mi_add(MI_INFO, "NATIVE: SLOT 4 DOC (FUTURE)", "");
     mi_add(MI_INFO, "SHARED: MB + DOC (FUTURE)", "");
     mi_add(MI_INFO, "", "");
-    mi_add(MI_INFO, "SAVED", audio_name(settings()->audio_mode));
+    mi_add(MI_INFO, "FLASH SAVED", audio_name(settings()->audio_mode));
     uint8_t core = fpga_spi_reg_read(REG_AUDIO_MODE);
     if ((core & 0xFCu) == 0xA0u)
         mi_add(MI_INFO, "FPGA BOOT REQUEST", audio_name(core & 3u));

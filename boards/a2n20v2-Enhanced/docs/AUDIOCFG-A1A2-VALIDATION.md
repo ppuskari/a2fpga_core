@@ -32,12 +32,16 @@ branch, not a replacement for the M641 golden baseline or ongoing MB6.6 work.
    `AUDIOCFG A1/A2: REQ=0 ACK (NO ROUTING)` before Apple II startup.
    Check that the Apple II still boots and Slot 4 Mockingboard music/FX/speech
    match the baseline (no new dropout, timing, or keyboard issues).
-3. Use USB keyboard TAB to open MCU menu, enter AUDIO CONFIG; verify default
-   `ENHANCED MB`, `SAVED` and `FPGA BOOT REQUEST` both Enhanced.
-4. Cycle through all four choices. Before saving, `SAVED` and FPGA boot
-   request must not change. Select `SAVE FOR NEXT BOOT`. Re-open the screen
-   and confirm `SAVED` updates, while `FPGA BOOT REQUEST` remains the prior
-   boot value.
+3. Use USB keyboard TAB to open MCU menu, then ENTER to enter AUDIO CONFIG;
+   verify default `ENHANCED MB`, `FLASH SAVED` and `FPGA BOOT REQUEST`
+   both Enhanced.
+4. Cycle through all four choices with LEFT/RIGHT. The asterisk (*) beside
+   SAVE denotes an action, not an already saved choice. For a USB keyboard,
+   A/B labels refer to gamepad buttons: ENTER = OK, ESC = BACK. Press DOWN
+   to highlight `SAVE FOR NEXT BOOT (ENTER)`, then ENTER to commit. Before
+   saving, `FLASH SAVED` and FPGA boot request must not change. Re-open the
+   screen and confirm `FLASH SAVED` updates, while `FPGA BOOT REQUEST`
+   remains the prior boot value.
 5. Cold power-cycle. For each mode, confirm console `REQ=N ACK`, FPGA readback
    matches the saved mode, and all M641 audio behavior remains unchanged.
 6. After each reboot check USB keyboard TAB responsiveness, MCU console
