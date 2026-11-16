@@ -15,6 +15,7 @@ H = (BOARD / "src/a2n20_bl616/firmware_host/settings.h").read_text()
 TOP = (BOARD / "hdl/top.sv").read_text()
 GLU = (ROOT / "hdl/sound/sound_glu.sv").read_text()
 SPI = (BOARD / "hdl/bl616/bl616_spi_connector.sv").read_text()
+SPI_HOST = (BOARD / "src/a2n20_bl616/firmware/fpga_spi.c").read_text()
 MENU = (BOARD / "src/a2n20_bl616/firmware_host/menu.c").read_text()
 
 MODE = {
@@ -69,8 +70,14 @@ for needle in ["7'h6F: reg_rdata = {6'b101000, audio_mode_r}",
                "reg_wdata == 8'hF0",
                "audio_boot_rearm_pulse_r <= 1'b1",
                "audio_mode_locked_r <= 1'b1",
-               "7'h6F: if (!audio_mode_locked_r"]:
+               "7'h6F: begin",
+               "audio_mode_r <= reg_wdata[1:0]"]:
     assert needle in SPI, needle
+# The SPI write must hold CS# through the FPGA SCLK->system CDC commit,
+# including the raw register write variant. Without this a rapid CS# rise
+# may discard the second byte before reg_wr_req is generated.
+assert "#define FPGA_SPI_REG_WRITE_CS_HOLD_US 3u" in SPI_HOST
+assert SPI_HOST.count("bflb_mtimer_delay_us(FPGA_SPI_REG_WRITE_CS_HOLD_US);") == 2
 assert "SAVE FOR NEXT BOOT (ENTER)" in MENU
 assert "FPGA ACTIVE AUDIO" in MENU
 assert "A3 VERIFIED" in MENU

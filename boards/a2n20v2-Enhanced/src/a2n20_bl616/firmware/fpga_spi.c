@@ -57,6 +57,20 @@ static inline void spi_lock_give(void) {}
 #define SPI_MISO_PIN GPIO_PIN_2
 #define SPI_MOSI_PIN GPIO_PIN_3
 
+/*
+ * FPGA's SPI receiver transfers each completed byte from SCLK into the
+ * 54 MHz logic domain via a 2FF toggle synchronizer. The MCU previously
+ * deasserted CS# immediately after bflb_spi_poll_exchange() returned for
+ * the second register byte. CS# has its OWN 2FF synchronizer and the FPGA
+ * FSM prioritizes !cs_active above byte_rx_stb: the final write byte may
+ * therefore be discarded before reg_wr_req is asserted. The symptom is
+ * READ 0x6F=A0, READ 0x6B=D0 despite repeated WRITE 0x6F=1, as well as
+ * early slot-map write/readback failures. Hold CS# active for much longer
+ * than the CDC pipeline before ending the transaction. Do not insert this
+ * hold into bulk XFER transfers; this affects only two-byte REG writes.
+ */
+#define FPGA_SPI_REG_WRITE_CS_HOLD_US 3u
+
 /* Max payload per XFER chunk. Sized for one FAT sector (512B) plus the 8-byte
  * header+dummy prefix used by reads. Each chunk is one poll_exchange call. */
 #define XFER_CHUNK_MAX 512
@@ -130,6 +144,7 @@ void fpga_spi_reg_write(uint8_t reg, uint8_t val)
     cs_assert();
     spi_xchg_byte(reg & 0x7F);
     spi_xchg_byte(val);
+    bflb_mtimer_delay_us(FPGA_SPI_REG_WRITE_CS_HOLD_US);
     cs_deassert();
     spi_lock_give();
 }
@@ -143,6 +158,7 @@ void fpga_spi_reg_write_raw(uint8_t reg, uint8_t val)
     cs_assert();
     spi_xchg_byte(reg & 0x7F);
     spi_xchg_byte(val);
+    bflb_mtimer_delay_us(FPGA_SPI_REG_WRITE_CS_HOLD_US);
     cs_deassert();
 }
 

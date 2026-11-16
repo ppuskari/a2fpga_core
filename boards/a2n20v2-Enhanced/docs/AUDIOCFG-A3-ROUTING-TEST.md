@@ -195,3 +195,40 @@ A keyboard Apple RESET alone cannot change the boot mode. Existing
 SynthLAB and speech ROMs remain unchanged.
 
 No claim is made of synthesis success or hardware validation of this fix.
+
+
+## A3-R2: SPI write CS# hold fix (Nov 16, 2026)
+
+Hardware evidence: after A3-R1 boot rearm, console still reports
+`AUDIOCFG S=1 FPGA=A0 RT=D0 MISMATCH`. In the same boot session the MCU
+printed `SLOTS: EARLY APPLY UNCONFIRMED (DEFERRED...)`. Thus the problem
+is *write registration* across the SPI link, affecting mode AND slot-map
+commands, not the AY/Ensoniq music mixer.
+
+Source investigation: `fpga_spi_reg_write()` in
+`src/a2n20_bl616/firmware/fpga_spi.c` deasserted the manually controlled
+SPI CS# immediately after sending the second byte. The FPGA
+`bl616_spi_proto_proc.sv` independently synchronizes CS# and the completed
+byte toggle into its 54 MHz domain, and its command FSM checks CS# inactive
+before processing a pending byte. If CS# rises before the last byte has
+crossed its CDC pipeline, the write command is silently discarded. Reads
+can still work, explaining the persistent readbacks of A0/D0.
+
+**Fix is MCU-only**: add a 3 us CS# hold after the last byte of each SPI
+register write, before deasserting CS#. Apply this to both the normal
+thread-safe write and the lock-free fatal-path write. Bulk/XFER behavior
+and FPGA RTL are unchanged. Existing A3 FPGA R1 bitstream remains usable.
+
+This is a source-based timing hypothesis supported by multiple boot errors,
+not a proven oscilloscope measurement. The hold is approximately 160 FPGA
+clock cycles at 54 MHz, comfortably beyond two-flop synchronizers and the
+register-write FSM state update. Hardware testing is needed to confirm.
+
+Verify boot with Original already saved and **both** latest MCU binary and
+existing A3-R1 FPGA bitstream installed. Expected end-of-boot status:
+
+    AUDIOCFG S=1 FPGA=A1 RT=D1 OK
+
+The `SLOTS: EARLY APPLY UNCONFIRMED` message should also disappear; if
+it remains, capture the earliest `AUDIOCFG: ...` log and the final slot
+map, and investigate the FPGA SPI proto framing with a cycle-accurate test.
