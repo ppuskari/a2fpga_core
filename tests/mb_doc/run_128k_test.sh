@@ -8,6 +8,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 iverilog -g2012 -Wall -s tb_mb_doc_128k -o "$tmp/dual.vvp" \
     boards/a2n20v2-Enhanced/hdl/mb_doc_fx_wavegen.sv \
+    boards/a2n20v2-Enhanced/hdl/mb_doc_ay_fx_router.sv \
     boards/a2n20v2-Enhanced/hdl/mb_doc_fx_events.sv \
     boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv \
     tests/mb_doc/tb_mb_doc_128k.sv
