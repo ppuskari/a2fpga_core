@@ -15,7 +15,9 @@ branch, not a replacement for the M641 golden baseline or ongoing MB6.6 work.
 - FPGA SPI register 0x6F: write 0..3; read returns 0xA0 | latched mode;
   other write values are rejected. Reset default = 0 (Enhanced).
 - MCU writes and verifies 0x6F (up to five attempts) before the slot-map 0x6B
-  strobe. Older FPGA cores lack the signature and boot continues unchanged.
+  strobe and the normal mount-driven 0x2E reset release. The M641 FPGA
+  retains its existing standalone/timeout reset-release fallbacks. Older
+  cores lack the signature and boot continues unchanged.
 - Current FPGA top exports the selection wire without connecting it to the
   Mockingboard/Ensoniq/SSI paths. **No mode changes sound behavior in A1/A2.**
   Backend gating, native IIe Slot 4 DOC port, and shared oscillator allocation
@@ -51,7 +53,9 @@ branch, not a replacement for the M641 golden baseline or ongoing MB6.6 work.
 - Flash settings remain valid across reboot; existing boot/storage/network
   settings are preserved.
 - FPGA 0x6F acknowledges and reports requested selection.
-- Audio mode handshake occurs before 0x6B reset-release trigger.
+- Audio mode handshake occurs before slot reconfiguration (0x6B), and before
+  the normal mount-driven reset release (0x2E). The M641 reset-hold circuit
+  also has an independent timeout backstop, so this is not a hard boot gate.
 - Existing M641 audio remains bit-equivalent in routing; original/Native/Shared
   **do not yet change synthesis**, and no native IIe DOC register map exists.
 - Report separately: source inspection, FPGA/MCU build results, and physical

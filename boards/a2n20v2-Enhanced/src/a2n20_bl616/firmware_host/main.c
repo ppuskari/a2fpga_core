@@ -1233,7 +1233,8 @@ int main(void)
     }
 
     /* AUDIOCFG A1/A2: latch and verify the requested mode BEFORE the
-     * slot-map strobe (0x6B), which can release Apple II reset. The FPGA
+     * slot-map strobe (0x6B), ahead of the mount-time 0x2E reset release.
+     * The FPGA
      * keeps M641 audio routing unchanged until A3. An older core returns
      * no 0xA0 signature, so report unsupported without delaying the boot. */
     {
