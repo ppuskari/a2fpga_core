@@ -1,0 +1,51 @@
+name: M6.5a PSG FX event capture — preserve M6.4.1 golden piano
+on:
+  push:
+    branches:
+      - petar/mb-doc-m65a-psg-fx-events-20261116
+    paths:
+      - 'boards/a2n20v2-Enhanced/**'
+      - 'tests/mb_doc/**'
+      - '.github/workflows/mb-doc-m65a-fx-events.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  event-capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Icarus Verilog
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iverilog
+      - name: Verify stage-only FX and unchanged piano/audio routing
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          top=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text()
+          bridge=Path('boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv').read_text()
+          for marker in (
+              "parameter bit MB_DOC_FX_AY_BYPASS_ENABLE = 1'b0",
+              "parameter bit MB_DOC_DECLICK_ENABLE = 1'b1",
+              "parameter bit MB_DOC_COHERENT_PUBLISH_ENABLE = 1'b1",
+              "parameter bit MB_DOC_FX_EVENT_CAPTURE_ENABLE = 1'b1",
+              ".ENABLE(1'b0),  // M6.3",
+              "mb_speech_sum_l_w", "mb_speech_sum_r_w"
+          ):
+              assert marker in top,marker
+          for marker in ("m65a_fx_decoder","doc_publish_pulse_r","fx_r13_write_w"):
+              assert marker in bridge,marker
+          assert "mb_hdmi_audio_pilot" not in top
+          print("PASS: no carrier, no overlay, no whole-chip AY bypass; golden piano preserved")
+          PY
+      - name: Restore checksum-verified seven-zone SynthLAB piano
+        run: python3 tools/extract_synthlab_piano.py --download
+      - name: Golden M6 / six-note capture, RES0/1/2
+        run: sh tests/mb_doc/run_capture_test.sh
+      - name: Golden M6.4 de-click, RES0/1/2
+        run: sh tests/mb_doc/run_declick_test.sh
+      - name: Golden M6.4.1 coherent publication, RES0/1/2
+        run: sh tests/mb_doc/run_publish_test.sh
+      - name: M6.5a FX event semantics
+        run: sh tests/mb_doc/run_fx_events_test.sh
+      - name: Existing seven-patch FX bank packing and STOP markers
+        run: python3 tests/mb_doc/test_fx_bank.py
