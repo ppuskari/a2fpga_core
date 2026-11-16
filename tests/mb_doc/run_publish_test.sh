@@ -11,6 +11,7 @@ for res in 0 1 2; do
     -Ptb_mb_doc_publish.TEST_RES="$res" \
     -o "$tmpdir/mb_doc_publish_res${res}.vvp" \
     boards/a2n20v2-Enhanced/hdl/mb_doc_fx_events.sv \
+    boards/a2n20v2-Enhanced/hdl/mb_doc_fx_wavegen.sv \
     boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv \
     tests/mb_doc/tb_mb_doc_publish.sv
   (cd boards/a2n20v2-Enhanced && vvp "$tmpdir/mb_doc_publish_res${res}.vvp")
