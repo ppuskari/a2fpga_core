@@ -1,0 +1,83 @@
+name: M6.6b per-channel native YM FX parity
+on:
+  push:
+    branches:
+      - petar/mb-doc-m66b-channel-ay-parity-20261116
+    paths:
+      - 'boards/a2n20v2-Enhanced/**'
+      - 'hdl/mockingboard/mockingboard.sv'
+      - 'tests/mb_doc/**'
+      - '.github/workflows/mb-doc-m66b-channel-parity.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fx-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Icarus Verilog
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iverilog
+      - name: Validate unchanged golden music and exact YM FX channel routing
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          top=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text()
+          mb=Path('hdl/mockingboard/mockingboard.sv').read_text()
+          bridge=Path('boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv').read_text()
+          project=Path('boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj').read_text()
+          for marker in (
+              "parameter bit MB_DOC_FX_AY_BYPASS_ENABLE = 1'b0",
+              "parameter bit MB_DOC_DECLICK_ENABLE = 1'b1",
+              "parameter bit MB_DOC_COHERENT_PUBLISH_ENABLE = 1'b1",
+              "parameter bit MB_DOC_AY_FX_CHANNEL_COMPAT_ENABLE = 1'b1",
+              "parameter bit MB_DOC_AY_FX_FORCE_NATIVE_ALL = 1'b0",
+              "parameter bit MB_DOC_DUAL_BANK_FX_ENABLE = 1'b1",
+              ".AY_FX_CHANNEL_COMPAT_ENABLE(",
+              ".fx_native_l_mask_o(mb_native_fx_mask_l_w)",
+              ".native_fx_audio_l_o(mb_native_fx_audio_l_w)",
+              "mb_speech_sum_l_w", "mb_speech_sum_r_w",
+              ".ENABLE(1'b0),  // M6.3",
+          ):
+              assert marker in top,marker
+          for marker in (
+              "assign native_fx_audio_l_o",
+              "assign native_fx_audio_r_o",
+              "native_fx_mask_l_i[0]",
+              "native_fx_mask_l_i[1]",
+              "native_fx_mask_l_i[2]",
+              "native_fx_mask_r_i[0]",
+              "native_fx_mask_r_i[1]",
+              "native_fx_mask_r_i[2]",
+              "assign audio_l_o = psg_al_o + psg_bl_o + psg_cl_o",
+          ):
+              assert marker in mb,marker
+          for marker in (
+              "mb_doc_ay_fx_router #(",
+              "selected_native_fx_w",
+              "!selected_native_fx_w",
+              "!AY_FX_CHANNEL_COMPAT_ENABLE",
+              "fx_native_mask_w",
+          ):
+              assert marker in bridge,marker
+          assert "mb_doc_ay_fx_router.sv" in project
+          assert "mb_hdmi_audio_pilot" not in top
+          print("PASS: golden music parameters, individual AY channels, no pilot")
+          print("PASS: sampled FX playback suppressed in channel-parity mode")
+          PY
+      - name: Extract seven-zone golden SynthLAB samples
+        run: python3 tools/extract_synthlab_piano.py --download
+      - name: Golden M6 original music/AY capture
+        run: sh tests/mb_doc/run_capture_test.sh
+      - name: Golden M6.4 de-click smoothing
+        run: sh tests/mb_doc/run_declick_test.sh
+      - name: Golden M6.4.1 coherent publication
+        run: sh tests/mb_doc/run_publish_test.sh
+      - name: M6.5a FX event capture
+        run: sh tests/mb_doc/run_fx_events_test.sh
+      - name: M6.5b existing sampled FX compatibility
+        run: sh tests/mb_doc/run_fx_playback_test.sh
+      - name: M6.6a 128KiB preload and bank selection
+        run: sh tests/mb_doc/run_128k_test.sh
+      - name: M6.6b native AY channel-level compatibility
+        run: sh tests/mb_doc/run_ay_fx_parity_test.sh
