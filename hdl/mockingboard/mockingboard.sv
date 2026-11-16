@@ -34,6 +34,13 @@ module Mockingboard #(
 
     output [9:0] audio_l_o,
     output [9:0] audio_r_o,
+    // M6.6b channel-level DOC compatibility: a second unmixed native
+    // YM path with only FX-selected channels, never the full-chip sum.
+    // Always active at YM timing; zero masks make these outputs zero.
+    input wire [2:0] native_fx_mask_l_i,
+    input wire [2:0] native_fx_mask_r_i,
+    output wire [9:0] native_fx_audio_l_o,
+    output wire [9:0] native_fx_audio_r_o,
     output wire signed [15:0] speech_pcm_o,
     input wire signed [15:0] hybrid_pcm_i,
     output wire hybrid_event_valid_o,
@@ -212,6 +219,10 @@ module Mockingboard #(
 
     // maximum value is 10 bits (255 + 255 + 255)
     assign audio_l_o = psg_al_o + psg_bl_o + psg_cl_o;
+    assign native_fx_audio_l_o =
+        ({2'b0, (native_fx_mask_l_i[0] ? psg_al_o : 8'd0)}) +
+        ({2'b0, (native_fx_mask_l_i[1] ? psg_bl_o : 8'd0)}) +
+        ({2'b0, (native_fx_mask_l_i[2] ? psg_cl_o : 8'd0)});
 
     mb_ay_capture ay_capture_left (
         .clk_i(a2bus_if.clk_logic),
@@ -292,6 +303,10 @@ module Mockingboard #(
     );
 
     assign audio_r_o = psg_ar_o + psg_br_o + psg_cr_o;
+    assign native_fx_audio_r_o =
+        ({2'b0, (native_fx_mask_r_i[0] ? psg_ar_o : 8'd0)}) +
+        ({2'b0, (native_fx_mask_r_i[1] ? psg_br_o : 8'd0)}) +
+        ({2'b0, (native_fx_mask_r_i[2] ? psg_cr_o : 8'd0)});
 
     mb_ay_capture ay_capture_right (
         .clk_i(a2bus_if.clk_logic),
