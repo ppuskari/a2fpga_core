@@ -65,20 +65,25 @@ module mb_doc_fx_events #(
         assign noise_active_w[chip] = |noise_mask_w[chip];
         assign tone_active_w[chip] = |tone_mask_w[chip];
 
-        reg [7:0] max_level;
-        reg [7:0] level;
-        always_comb begin
-            max_level = 8'd0;
-            level = 8'd0;
-            for (integer c=0;c<3;c=c+1) begin
-                level = amp_i[chip][c][4] ?
-                    {3'b0, env_level_i[chip]} << 3 :
-                    {4'b0, amp_i[chip][c][3:0]} << 4;
-                if (noise_mask_w[chip][c] && level > max_level)
-                    max_level = level;
-            end
+        // Generate-time indexing avoids Icarus' variable packed-array
+        // part-select restriction and avoids a runtime priority loop.
+        wire [7:0] channel_level_w [0:2];
+        for (genvar c=0;c<3;c=c+1) begin : gen_amplitude
+            assign channel_level_w[c] = amp_i[chip][c][4] ?
+                ({3'b0, env_level_i[chip]} << 3) :
+                ({4'b0, amp_i[chip][c][3:0]} << 4);
         end
-        assign energy_w[chip] = max_level;
+        wire [7:0] noise_level_a_w =
+            noise_mask_w[chip][0] ? channel_level_w[0] : 8'd0;
+        wire [7:0] noise_level_b_w =
+            noise_mask_w[chip][1] ? channel_level_w[1] : 8'd0;
+        wire [7:0] noise_level_c_w =
+            noise_mask_w[chip][2] ? channel_level_w[2] : 8'd0;
+        wire [7:0] max_ab_w =
+            noise_level_a_w > noise_level_b_w ?
+            noise_level_a_w : noise_level_b_w;
+        assign energy_w[chip] =
+            max_ab_w > noise_level_c_w ? max_ab_w : noise_level_c_w;
     end endgenerate
 
     function automatic [2:0] choose_patch(
