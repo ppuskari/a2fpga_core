@@ -12,6 +12,7 @@ iverilog -g2012 -Wall -s tb_mb_doc_fx_wavegen -o "$tmp/bank.vvp" \
 vvp "$tmp/bank.vvp"
 iverilog -g2012 -Wall -s tb_mb_doc_fx_playback -o "$tmp/play.vvp" \
     boards/a2n20v2-Enhanced/hdl/mb_doc_fx_wavegen.sv \
+    boards/a2n20v2-Enhanced/hdl/mb_doc_ay_fx_router.sv \
     boards/a2n20v2-Enhanced/hdl/mb_doc_fx_events.sv \
     boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv \
     tests/mb_doc/tb_mb_doc_fx_playback.sv
