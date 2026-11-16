@@ -41,6 +41,11 @@ module mb_doc_bridge #(
     // DOC sound SDRAM and play only on OSC6 (left) / OSC7 (right).
     // Independent of the six melodic piano voices, and OFF by default.
     parameter bit SAMPLED_FX_ENABLE = 1'b0,
+    // M6.6b: original YM channel-level sound effects in parallel with
+    // unaffected DOC piano voices. Disable sampled FX *playback* (but
+    // preserve 128KiB preload) during compatibility validation.
+    parameter bit AY_FX_CHANNEL_COMPAT_ENABLE = 1'b0,
+    parameter bit AY_FX_FORCE_NATIVE_ALL = 1'b0,
     // M6.6a: duplicate FX layout into second 64KiB with variant samples.
     // Route selected patches to bank 1 via DOC RTS[6]. Defaults OFF.
     parameter bit DUAL_BANK_FX_ENABLE = 1'b0,
@@ -83,7 +88,9 @@ module mb_doc_bridge #(
     // Select native AY rendering for noise/multitone sound effects.
     // The FPGA still keeps the YM cores running in parallel.
     output logic        fx_ay_l_o,
-    output logic        fx_ay_r_o
+    output logic        fx_ay_r_o,
+    output wire [2:0]  fx_native_l_mask_o,
+    output wire [2:0]  fx_native_r_mask_o
 );
     typedef enum logic [4:0] {
         WAIT_SDRAM, RAM_FETCH, RAM_ISSUE, RAM_WAIT, RAM_RELEASE,
@@ -103,6 +110,9 @@ module mb_doc_bridge #(
     // R14 write is included in the same commit (nonblocking-write bypass).
     logic [7:0] doc_regs [0:1][0:15];
     logic [1:0] doc_publish_pulse_r;
+    wire [1:0][2:0] fx_native_mask_w;
+    assign fx_native_l_mask_o = fx_native_mask_w[0];
+    assign fx_native_r_mask_o = fx_native_mask_w[1];
     localparam int COHERENT_IDLE_W =
         (COHERENT_IDLE_CYCLES <= 1) ? 1 : $clog2(COHERENT_IDLE_CYCLES+1);
     logic [COHERENT_IDLE_W-1:0] pub_idle_r [0:1];
@@ -189,6 +199,8 @@ module mb_doc_bridge #(
         selected_chip_w ? ay_r_env_level_i : ay_l_env_level_i;
     wire selected_reset_n_w =
         selected_chip_w ? ay_r_reset_n_i : ay_l_reset_n_i;
+    wire selected_native_fx_w =
+        fx_native_mask_w[selected_chip_w][selected_channel_w];
 
     // Conservative zoning: preserve the calibrated C4..C5 keyboard using
     // the known-good ~Piano C3 sustain. Use other genuine source samples
@@ -224,6 +236,7 @@ module mb_doc_bridge #(
 
     wire [2:0] selected_zone_w = sample_zone(selected_period_w);
     wire selected_note_active_w = selected_reset_n_w && tone_allowed_w &&
+        !selected_native_fx_w &&
         (!REST_MUTE_ENABLE || selected_period_w > 12'd1) &&
         (selected_amp_w[4] || |selected_amp_w[3:0]);
 
@@ -587,6 +600,23 @@ module mb_doc_bridge #(
     wire [1:0][4:0] fx_event_noise_period_w;
     wire [1:0][3:0] fx_event_envelope_shape_w;
 
+    // The title-specific consecutive AY register delta detector from
+    // M6 is already clocked by the raw AY write stream. Reuse its
+    // confirmed 70ms hold window, but only mask the two glide channels.
+    mb_doc_ay_fx_router #(
+        .ENABLE(AY_FX_CHANNEL_COMPAT_ENABLE),
+        .FORCE_NATIVE_ALL(AY_FX_FORCE_NATIVE_ALL)
+    ) m66b_channel_router (
+        .chip_reset_n_i({ay_r_reset_n_i, ay_l_reset_n_i}),
+        .mixer_i(fx_mixer_w),
+        .amplitude_i(fx_amp_w),
+        .title_glide_confirmed_i({
+            (fx_glide_hold_r[1] != '0),
+            (fx_glide_hold_r[0] != '0)
+        }),
+        .native_mask_o(fx_native_mask_w)
+    );
+
     mb_doc_fx_events #(
         .ENABLE(FX_EVENT_CAPTURE_ENABLE)
     ) m65a_fx_decoder (
@@ -883,8 +913,9 @@ module mb_doc_bridge #(
                             first_scan_r <= 1'b0;
                             ready_o <= 1'b1;
                             pause_r <= 16'(SCAN_PAUSE_CYCLES);
-                            if (SAMPLED_FX_ENABLE && fx_bank_ready_r &&
-                                (|fx_pending_r)) begin
+                            if (SAMPLED_FX_ENABLE &&
+                                !AY_FX_CHANNEL_COMPAT_ENABLE &&
+                                fx_bank_ready_r && (|fx_pending_r)) begin
                                 // Prefer left when both events are pending.
                                 // Right remains pending for the next scan.
                                 fx_chip_r <= !fx_pending_r[0];
@@ -978,7 +1009,8 @@ module mb_doc_bridge #(
             // Two pending slots, one per AY chip. Events arriving while
             // a voice is busy replace that chip's older pending one-shot;
             // this bounded last-event policy avoids stalling piano scans.
-            if (SAMPLED_FX_ENABLE && fx_bank_ready_r) begin
+            if (SAMPLED_FX_ENABLE &&
+                !AY_FX_CHANNEL_COMPAT_ENABLE && fx_bank_ready_r) begin
                 for(integer ch=0;ch<2;ch=ch+1) begin
                     if(fx_event_valid_w[ch]) begin
                         fx_pending_r[ch] <= 1'b1;
