@@ -41,6 +41,9 @@ module mb_doc_bridge #(
     // DOC sound SDRAM and play only on OSC6 (left) / OSC7 (right).
     // Independent of the six melodic piano voices, and OFF by default.
     parameter bit SAMPLED_FX_ENABLE = 1'b0,
+    // M6.6a: duplicate FX layout into second 64KiB with variant samples.
+    // Route selected patches to bank 1 via DOC RTS[6]. Defaults OFF.
+    parameter bit DUAL_BANK_FX_ENABLE = 1'b0,
     parameter int COHERENT_IDLE_CYCLES = 10800,
     parameter logic [7:0] DECLICK_ATTACK_STEP = 8'd16,
     parameter logic [7:0] DECLICK_RELEASE_STEP = 8'd12,
@@ -73,6 +76,7 @@ module mb_doc_bridge #(
     output logic [31:0] ram_data_o,
     output logic [3:0]  ram_byte_en_o,
     input  logic        ram_ready_i,
+    output logic        mb_bank1_ready_o,
 
     output logic        ready_o,
     output logic [2:0]  active_voice_o,
@@ -108,6 +112,7 @@ module mb_doc_bridge #(
     logic [10:0] wave_word_r;
     logic [12:0] fx_word_r;
     logic fx_bank_ready_r;
+    logic fx_bank1_load_r;
     logic [1:0] fx_pending_r;
     logic [2:0] fx_pending_patch_r [0:1];
     logic [7:0] fx_pending_velocity_r [0:1];
@@ -430,6 +435,7 @@ module mb_doc_bridge #(
     // external sound SDRAM on the existing SoundGLU host port.
     mb_doc_fx_wavegen fx_wavegen (
         .word_addr_i(fx_word_r),
+        .variant_i(fx_bank1_load_r),
         .sample_word_o(fx_sample_word_w)
     );
 
@@ -443,6 +449,14 @@ module mb_doc_bridge #(
             3'd5: fx_wtp=8'h50; // laser $5000, 2048B
             default: fx_wtp=8'h60; // cymbal $6000, 4096B
         endcase
+    endfunction
+    // Bank1 holds different textures for cinematic / sweeping FX,
+    // while short acoustic percussion stays in Bank0. This explicit
+    // selection is per FX oscillator and does not affect piano RTS.
+    function automatic logic fx_patch_bank1(input [2:0] patch);
+        fx_patch_bank1 = DUAL_BANK_FX_ENABLE &&
+            ((patch == 3'd0) || (patch == 3'd5) ||
+             (patch == 3'd6));
     endfunction
     function automatic [2:0] fx_wts(input [2:0] patch);
         case(patch)
@@ -460,7 +474,8 @@ module mb_doc_bridge #(
     assign ram_addr_o =
         (state_r == FX_RAM_FETCH || state_r == FX_RAM_ISSUE ||
          state_r == FX_RAM_WAIT || state_r == FX_RAM_RELEASE) ?
-         {8'b0, fx_word_r} : {10'b0, wave_word_r};
+         {6'b0, fx_bank1_load_r, 1'b0, fx_word_r} :
+         {10'b0, wave_word_r};
     assign ram_byte_en_o = 4'hF;
     assign ram_data_o =
         (state_r == FX_RAM_FETCH || state_r == FX_RAM_ISSUE ||
@@ -601,6 +616,8 @@ module mb_doc_bridge #(
             wave_word_r      <= 11'd0;
             fx_word_r        <= 13'h0800;
             fx_bank_ready_r  <= 1'b0;
+            fx_bank1_load_r <= 1'b0;
+            mb_bank1_ready_o<= 1'b0;
             fx_pending_r     <= 2'b00;
             fx_chip_r        <= 1'b0;
             fx_patch_r       <= 3'd0;
@@ -672,6 +689,7 @@ module mb_doc_bridge #(
                     // rising-edge request capture before next word.
                     if (wave_word_r == 11'd1407) begin
                         if (SAMPLED_FX_ENABLE) begin
+                            fx_bank1_load_r <= 1'b0;
                             fx_word_r <= 13'h0800;
                             state_r <= FX_RAM_FETCH;
                         end else state_r <= ENABLE_DOC;
@@ -692,8 +710,17 @@ module mb_doc_bridge #(
 
                 FX_RAM_RELEASE: begin
                     if (fx_word_r == 13'h1BFF) begin
-                        fx_bank_ready_r <= 1'b1;
-                        state_r <= ENABLE_DOC;
+                        if (DUAL_BANK_FX_ENABLE && !fx_bank1_load_r) begin
+                            // Bank0 committed; preload Bank1 before
+                            // any oscillator can select its RTS[6].
+                            fx_bank1_load_r <= 1'b1;
+                            fx_word_r <= 13'h0800;
+                            state_r <= FX_RAM_FETCH;
+                        end else begin
+                            fx_bank_ready_r <= 1'b1;
+                            mb_bank1_ready_o <= DUAL_BANK_FX_ENABLE;
+                            state_r <= ENABLE_DOC;
+                        end
                     end else begin
                         fx_word_r <= fx_word_r + 1'b1;
                         state_r <= FX_RAM_FETCH;
@@ -905,7 +932,8 @@ module mb_doc_bridge #(
                             cmd_addr_r <= 8'hC6 + {7'b0,fx_chip_r};
                             // One-shot WTS/RES; RES0 is to be calibrated
                             // against captured hardware FX sample rates.
-                            cmd_data_r <= {2'b00, fx_wts(fx_patch_r), 3'd0};
+                            cmd_data_r <= {1'b0, fx_patch_bank1(fx_patch_r),
+                                           fx_wts(fx_patch_r), 3'd0};
                         end
                         3'd3: begin
                             cmd_addr_r <= 8'h06 + {7'b0,fx_chip_r};
