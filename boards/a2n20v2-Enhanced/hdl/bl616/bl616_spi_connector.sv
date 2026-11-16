@@ -121,6 +121,7 @@ module bl616_spi_connector #(
     // Mode 0 preserves M641's existing Enhanced Mockingboard behavior.
     // This register provides boot configuration/readback only (A1/A2).
     reg [1:0] audio_mode_r;
+    reg audio_mode_locked_r;
     assign audio_mode_o = audio_mode_r;
 
     wire        mem_wr_en;
@@ -952,6 +953,7 @@ module bl616_spi_connector #(
             slot_wr_card_r   <= 8'd0;
             slot_reconfig_r  <= 1'b0;
             audio_mode_r     <= 2'd0; // Enhanced legacy baseline at reset
+            audio_mode_locked_r <= 1'b0;
             led_o            <= 5'd0;
             ws2812_o         <= 1'b0;
             capture_mode_o   <= 3'd0;
@@ -1076,7 +1078,10 @@ module bl616_spi_connector #(
                     end
                     7'h68: led_o    <= reg_wdata[4:0];
                     7'h69: ws2812_o <= reg_wdata[0];
-                    7'h6B: slot_reconfig_r <= 1'b1;
+                    7'h6B: begin
+                        slot_reconfig_r <= 1'b1;
+                        audio_mode_locked_r <= 1'b1; // boot-only personality
+                    end
 
                     // SD card registers
                     7'h6C: begin
@@ -1087,7 +1092,8 @@ module bl616_spi_connector #(
                         sd_tx_data_r  <= reg_wdata;
                         sd_tx_start_r <= 1'b1;
                     end
-                    7'h6F: if (reg_wdata[7:2] == 6'd0)
+                    7'h6F: if (!audio_mode_locked_r &&
+                                 reg_wdata[7:2] == 6'd0)
                         audio_mode_r <= reg_wdata[1:0];
 
                     // Page 7: Bus event FIFO control
