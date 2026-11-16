@@ -20,6 +20,9 @@
 module Mockingboard #(
     parameter bit [7:0] ID = 2,
     parameter bit ENABLE = 1'b1,
+    // Only the Enhanced boot selector supplies active_i; legacy boards
+    // leave HAS_RUNTIME_ENABLE=0 and retain original bus behavior.
+    parameter bit HAS_RUNTIME_ENABLE = 1'b0,
     parameter bit ENABLE_SSI263 = 1'b0,
     parameter integer SSI263_VOICE_PROFILE = 1,
     parameter bit SSI263_FULL_CHIP_ENABLE = 1'b0,
@@ -27,6 +30,7 @@ module Mockingboard #(
 ) (
     a2bus_if.slave a2bus_if,
     slot_if.card slot_if,
+    input wire active_i,
 
     output [7:0] data_o,
     output rd_en_o,
@@ -73,7 +77,8 @@ module Mockingboard #(
         end
     end
 
-    wire card_sel = card_enable && (slot_if.card_id == ID) && a2bus_if.phi0;
+    wire card_sel = card_enable && (slot_if.card_id == ID) && a2bus_if.phi0 &&
+        (!HAS_RUNTIME_ENABLE || active_i);
     wire card_dev_sel = card_sel && !slot_if.dev_select_n;
     wire card_io_sel = card_sel && !slot_if.io_select_n;
 
@@ -86,7 +91,8 @@ module Mockingboard #(
                   .HYBRID_ENABLE(SSI263_HYBRID_ENABLE)) speech_socket (
         .clk_i(a2bus_if.clk_logic),
         .reset_n_i(a2bus_if.system_reset_n),
-        .enabled_i(card_enable && ENABLE_SSI263),
+        .enabled_i(card_enable && ENABLE_SSI263 &&
+                   (!HAS_RUNTIME_ENABLE || active_i)),
         .card_io_sel_i(card_io_sel),
         .xck_tick_i(a2bus_if.phi1_negedge),
         .data_in_strobe_i(a2bus_if.data_in_strobe),
@@ -142,7 +148,8 @@ module Mockingboard #(
     // Contrary to some schematics, Mockingboards and Phasors only use IRQ, not NMI
     // Possibly some some versions of the Mockingboard used NMI, but inspected boards
     // do not have the NMI line connected.
-    assign irq_n_o = (~(irq_l_o | irq_r_o)) | (~card_enable);
+    assign irq_n_o = (~(irq_l_o | irq_r_o)) | (~card_enable) |
+        (HAS_RUNTIME_ENABLE && !active_i);
 
     // Left Channel
 

@@ -1027,8 +1027,10 @@ static void audio_build(void)
     else
         mi_add(MI_INFO, "FPGA AUDIOCFG A2", "UNAVAILABLE");
     mi_add(MI_INFO, "", "");
-    mi_add(MI_INFO, "A1/A2 ONLY: ROUTING NOT ACTIVE YET", "");
-    mi_add(MI_INFO, "M641 MUSIC, FX AND SPEECH UNCHANGED", "");
+    mi_add(MI_INFO, "A3: ROUTING IS ACTIVE AFTER BOOT", "");
+    mi_add(MI_INFO, "ENHANCED: M641 GOLDEN ROUTE", "");
+    mi_add(MI_INFO, "ORIGINAL: YM2149 PSG + SPEECH", "");
+    mi_add(MI_INFO, "NATIVE/SHARED: DOC SLOT DEVICE PORT", "");
     mi_add(MI_INFO, "POWER CYCLE AFTER SAVING TO APPLY", "");
 }
 static const menu_screen_t SCR_AUDIO = { "AUDIO CONFIG", audio_build };

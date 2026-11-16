@@ -1235,8 +1235,8 @@ int main(void)
     /* AUDIOCFG A1/A2: latch and verify the requested mode BEFORE the
      * slot-map strobe (0x6B), ahead of the mount-time 0x2E reset release.
      * The FPGA
-     * keeps M641 audio routing unchanged until A3. An older core returns
-     * no 0xA0 signature, so report unsupported without delaying the boot. */
+     * routes Enhanced/Original/Native/Shared according to the latched mode.
+     * An older core returns no 0xA0 signature and keeps its legacy path. */
     {
         uint8_t mode = settings()->audio_mode;
         int verified = 0;
@@ -1246,8 +1246,8 @@ int main(void)
                 verified = (fpga_spi_reg_read(0x6Fu) == (uint8_t)(0xA0u | mode));
             }
         }
-        osd_log("AUDIOCFG A1/A2: REQ=%u %s (NO ROUTING)",
-                (unsigned)mode, verified ? "ACK" : "NO A2 CORE");
+        osd_log("AUDIOCFG A3: REQ=%u %s (BOOT ROUTING)",
+                (unsigned)mode, verified ? "ACK" : "NO AUDIOCFG CORE");
     }
 
     /* Apply the persisted slot map EARLY -- the gateware gates the Apple II

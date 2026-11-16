@@ -1356,6 +1356,7 @@ wire [7:0] doc_128k_status_w;
 
     Mockingboard #(
         .ENABLE(MOCKINGBOARD_ENABLE | AUDIO_MODE_MB_DOC),
+        .HAS_RUNTIME_ENABLE(AUDIO_MODE_MB_DOC),
         .ENABLE_SSI263(MOCKINGBOARD_SSI263_ENABLE),
         .SSI263_VOICE_PROFILE(MOCKINGBOARD_SSI263_VOICE_PROFILE),
         .SSI263_FULL_CHIP_ENABLE(MOCKINGBOARD_SSI263_FULL_CHIP_ENABLE),
@@ -1364,6 +1365,7 @@ wire [7:0] doc_128k_status_w;
     ) mockingboard (
         .a2bus_if(a2bus_if),  // use system_reset_n
         .slot_if(slot_if),
+        .active_i(audio_mb_enabled_w),
 
         .data_o(mb_d_w),
         .rd_en_o(mb_rd),
