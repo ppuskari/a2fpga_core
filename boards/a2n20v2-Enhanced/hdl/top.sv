@@ -65,6 +65,13 @@ module top #(
     // M6.6a: independent 128KiB DOC sound library in MB mode only.
     // No MCU mode-selector or SenseiPlay interface changes here.
     parameter bit MB_DOC_DUAL_BANK_FX_ENABLE = 1'b1,
+    // M6.6b first parity build. Replace only noise/special-FX channels
+    // with *live* YM A/B/C audio; other DOC piano channels unaffected.
+    // Disable heuristic sampled-FX playback but retain its 128K preload.
+    parameter bit MB_DOC_AY_FX_CHANNEL_COMPAT_ENABLE = 1'b1,
+    // Alternate hardware A/B: 1=all original AY sound (no DOC piano)
+    // for exact A-O effect reference, 0=per-channel hybrid routing.
+    parameter bit MB_DOC_AY_FX_FORCE_NATIVE_ALL = 1'b0,
     parameter bit MOCKINGBOARD_ENABLE = 0,
     // SSI speech can coexist with exclusive AY-to-DOC music ownership.
     parameter bit MOCKINGBOARD_SSI263_ENABLE = 1'b1,
@@ -1326,6 +1333,10 @@ wire [7:0] doc_128k_status_w;
     wire mb_irq_n;
     wire [9:0] mb_audio_l;
     wire [9:0] mb_audio_r;
+    wire [9:0] mb_native_fx_audio_l_w;
+    wire [9:0] mb_native_fx_audio_r_w;
+    wire [2:0] mb_native_fx_mask_l_w;
+    wire [2:0] mb_native_fx_mask_r_w;
     wire signed [15:0] mb_speech_pcm_w;
     wire signed [15:0] hybrid_speech_pcm_w;
     wire hybrid_ssi_event_valid_w,hybrid_ssi_xck_w,hybrid_ssi_powered_w;
@@ -1358,6 +1369,10 @@ wire [7:0] doc_128k_status_w;
 
         .audio_l_o(mb_audio_l),
         .audio_r_o(mb_audio_r),
+        .native_fx_mask_l_i(mb_native_fx_mask_l_w),
+        .native_fx_mask_r_i(mb_native_fx_mask_r_w),
+        .native_fx_audio_l_o(mb_native_fx_audio_l_w),
+        .native_fx_audio_r_o(mb_native_fx_audio_r_w),
         .speech_pcm_o(mb_speech_pcm_w),
         .hybrid_pcm_i(hybrid_speech_pcm_w),
         .hybrid_event_valid_o(hybrid_ssi_event_valid_w),
@@ -1418,7 +1433,11 @@ wire [7:0] doc_128k_status_w;
                 .COHERENT_PUBLISH_ENABLE(MB_DOC_COHERENT_PUBLISH_ENABLE),
                 .FX_EVENT_CAPTURE_ENABLE(MB_DOC_FX_EVENT_CAPTURE_ENABLE),
                 .SAMPLED_FX_ENABLE(MB_DOC_SAMPLED_FX_ENABLE),
-                .DUAL_BANK_FX_ENABLE(MB_DOC_DUAL_BANK_FX_ENABLE)
+                .DUAL_BANK_FX_ENABLE(MB_DOC_DUAL_BANK_FX_ENABLE),
+                .AY_FX_CHANNEL_COMPAT_ENABLE(
+                    MB_DOC_AY_FX_CHANNEL_COMPAT_ENABLE),
+                .AY_FX_FORCE_NATIVE_ALL(
+                    MB_DOC_AY_FX_FORCE_NATIVE_ALL)
             ) bridge (
                 .clk_i(clk_logic_w),
                 .reset_n_i(system_reset_n_w),
@@ -1448,7 +1467,9 @@ wire [7:0] doc_128k_status_w;
                 .ready_o(mb_bridge_ready_w),
                 .active_voice_o(mb_active_voice_w),
                 .fx_ay_l_o(mb_fx_ay_l_w),
-                .fx_ay_r_o(mb_fx_ay_r_w)
+                .fx_ay_r_o(mb_fx_ay_r_w),
+                .fx_native_l_mask_o(mb_native_fx_mask_l_w),
+                .fx_native_r_mask_o(mb_native_fx_mask_r_w)
             );
         end else begin : gen_gs_audio_only
             assign mb_doc_wr_w = 1'b0;
@@ -1463,6 +1484,8 @@ wire [7:0] doc_128k_status_w;
             assign mb_active_voice_w = 3'd0;
             assign mb_fx_ay_l_w = 1'b0;
             assign mb_fx_ay_r_w = 1'b0;
+            assign mb_native_fx_mask_l_w = 3'b000;
+            assign mb_native_fx_mask_r_w = 3'b000;
         end
     endgenerate
 
@@ -1568,15 +1591,23 @@ wire [7:0] doc_128k_status_w;
    // assign core_audio_l_w = sg_audio_l + ssp_audio_ext_w + mb_audio_l_ext_w + speaker_audio_ext_w;
    // assign core_audio_r_w = sg_audio_r + ssp_audio_ext_w + mb_audio_r_ext_w + speaker_audio_ext_w;
 
-    // AY sound-effect compatibility: use the already-active native YM2149
-    // cores for timer-driven noise and multi-tone sweeps rather than forcing
-    // sound effects through a pitched piano wavetable. Their DAC is unipolar;
-    // remove DC with a 27-bit fixed-point one-pole high-pass (~33Hz at 54MHz).
+    // M6.6b: always use the native YM's exact per-channel tone/noise/
+    // envelope waveform for selected FX, not a guessed one-shot sample.
+    // Preserve the legacy whole-AY bypass if that old experiment is
+    // explicitly enabled; it is OFF for this hardware build.
+    wire [9:0] ay_fx_source_l_w =
+        (AUDIO_MODE_MB_DOC && MB_DOC_AY_FX_CHANNEL_COMPAT_ENABLE) ?
+        mb_native_fx_audio_l_w : mb_audio_l;
+    wire [9:0] ay_fx_source_r_w =
+        (AUDIO_MODE_MB_DOC && MB_DOC_AY_FX_CHANNEL_COMPAT_ENABLE) ?
+        mb_native_fx_audio_r_w : mb_audio_r;
+    // YM output is unipolar. The existing ~33Hz high-pass removes
+    // baseline DC before it is mixed with the DOC PCM.
     logic signed [26:0] ay_dc_l_q16, ay_dc_r_q16;
     wire signed [26:0] ay_hp_l_q16 =
-        $signed({1'b0,mb_audio_l,16'h0000}) - ay_dc_l_q16;
+        $signed({1'b0,ay_fx_source_l_w,16'h0000}) - ay_dc_l_q16;
     wire signed [26:0] ay_hp_r_q16 =
-        $signed({1'b0,mb_audio_r,16'h0000}) - ay_dc_r_q16;
+        $signed({1'b0,ay_fx_source_r_w,16'h0000}) - ay_dc_r_q16;
     always_ff @(posedge clk_logic_w or negedge system_reset_n_w) begin
         if (!system_reset_n_w) begin
             ay_dc_l_q16 <= 27'sd0;
@@ -1588,14 +1619,34 @@ wire [7:0] doc_128k_status_w;
     end
     wire signed [15:0] mb_fx_pcm_l = 16'(ay_hp_l_q16 >>> 12);
     wire signed [15:0] mb_fx_pcm_r = 16'(ay_hp_r_q16 >>> 12);
-    // Preserve the P4 DOC/native-AY FX selector and its calibrated
-    // downstream 8x HDMI gain (-2 dBFS ceiling). Mix speech upstream of
-    // audio_out at 1/8 amplitude in MB_DOC mode to compensate for that gain.
-    // This avoids applying an unintended second 8x boost to P5 speech.
+    // Compensate mixing two simultaneous DACs with half the legacy AY
+    // gain. Saturate BEFORE existing speech mixing to prevent wrap.
+    wire signed [15:0] mb_native_fx_pcm_l = 16'(ay_hp_l_q16 >>> 13);
+    wire signed [15:0] mb_native_fx_pcm_r = 16'(ay_hp_r_q16 >>> 13);
+    wire signed [16:0] mb_native_music_sum_l_w =
+        $signed({sg_audio_l[15],sg_audio_l}) +
+        ((AUDIO_MODE_MB_DOC && MB_DOC_AY_FX_CHANNEL_COMPAT_ENABLE) ?
+         $signed({mb_native_fx_pcm_l[15],mb_native_fx_pcm_l}) : 17'sd0);
+    wire signed [16:0] mb_native_music_sum_r_w =
+        $signed({sg_audio_r[15],sg_audio_r}) +
+        ((AUDIO_MODE_MB_DOC && MB_DOC_AY_FX_CHANNEL_COMPAT_ENABLE) ?
+         $signed({mb_native_fx_pcm_r[15],mb_native_fx_pcm_r}) : 17'sd0);
+    wire signed [15:0] mb_music_doc_mix_l_w =
+        (mb_native_music_sum_l_w > 17'sd32767) ? 16'sh7FFF :
+        (mb_native_music_sum_l_w < -17'sd32768) ? 16'sh8000 :
+        mb_native_music_sum_l_w[15:0];
+    wire signed [15:0] mb_music_doc_mix_r_w =
+        (mb_native_music_sum_r_w > 17'sd32767) ? 16'sh7FFF :
+        (mb_native_music_sum_r_w < -17'sd32768) ? 16'sh8000 :
+        mb_native_music_sum_r_w[15:0];
+    // Preserve the P4 legacy all-AY selector, OFF in M6.6b.
+    // Both DOC and selected AY FX feed the same final HDMI limiter.
     wire signed [15:0] mb_music_base_l_w =
-        (AUDIO_MODE_MB_DOC && mb_fx_ay_l_w) ? mb_fx_pcm_l : sg_audio_l;
+        (AUDIO_MODE_MB_DOC && mb_fx_ay_l_w) ?
+        mb_fx_pcm_l : mb_music_doc_mix_l_w;
     wire signed [15:0] mb_music_base_r_w =
-        (AUDIO_MODE_MB_DOC && mb_fx_ay_r_w) ? mb_fx_pcm_r : sg_audio_r;
+        (AUDIO_MODE_MB_DOC && mb_fx_ay_r_w) ?
+        mb_fx_pcm_r : mb_music_doc_mix_r_w;
     // Widen before gain to avoid 16-bit wraparound; compensate for the
     // downstream music HDMI 8x gain only in MB-DOC mode. A value of 3
     // targets the measured ~9.3dB shortfall in voice2.wav relative to
