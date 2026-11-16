@@ -26,6 +26,7 @@ for res in 0 1 2; do
   iverilog -g2012 -Wall -s tb_mb_doc_bridge \
     -Ptb_mb_doc_bridge.TEST_RES="$res" \
     -o "$tmpdir/mb_doc_bridge_res${res}.vvp" \
+    boards/a2n20v2-Enhanced/hdl/mb_doc_fx_events.sv \
     boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv \
     tests/mb_doc/tb_mb_doc_bridge.sv
   # DOC PCM ROM path is relative to the Enhanced Gowin project directory.
