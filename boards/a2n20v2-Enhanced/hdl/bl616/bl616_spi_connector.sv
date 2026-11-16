@@ -48,7 +48,8 @@ module bl616_spi_connector #(
     output wire        mcu_ready_o,
     output wire        standalone_o,   // high once standalone fallback engages (no BL616)
     output wire [39:0] scratch_o,      // 5 MCU scratch regs packed {s4,s3,s2,s1,s0} (0x07,0x0C-0x0F)
-    output wire [1:0]  audio_mode_o,   // A1/A2 requested profile; A3 will route audio
+    output wire [1:0]  audio_mode_o,   // FPGA-accepted boot selection
+    input  wire [1:0]  audio_active_route_i, // A3 live mixer-select identity
 
     // CardROM
     input  wire        cardrom_active_i,
@@ -873,6 +874,10 @@ module bl616_spi_connector #(
             7'h68: reg_rdata = {3'b0, led_o};
             7'h69: reg_rdata = {7'b0, ws2812_o};
             7'h6A: reg_rdata = {7'b0, button_i};
+            // A3-only live-route proof. A1/A2 returns 0x00 at 0x6B.
+            // Value D0..D3 is produced from top.sv's actual audio
+            // mixer-select path, not merely the MCU's saved preference.
+            7'h6B: reg_rdata = {6'b110100, audio_active_route_i};
 
             // SD card registers
             7'h6C: reg_rdata = {6'b0, sd_slow_clk_r, sd_cs_n_r};

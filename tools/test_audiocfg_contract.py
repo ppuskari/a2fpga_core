@@ -52,6 +52,7 @@ for needle in [
     "audio_shared_w ? shared_mix_l_w",
     "audio_enhanced_w ? (mb_fx_ay_l_w ? mb_fx_pcm_l : sg_audio_l)",
     "wire native_doc_slot_w = AUDIO_MODE_MB_DOC && audio_native_doc_w",
+    ".audio_active_route_i(audio_active_route_w)",
 ]:
     assert needle in TOP, needle
 for needle in [
@@ -64,9 +65,12 @@ for needle in [
 ]:
     assert needle in GLU, needle
 for needle in ["7'h6F: reg_rdata = {6'b101000, audio_mode_r}",
+               "7'h6B: reg_rdata = {6'b110100, audio_active_route_i}",
                "audio_mode_locked_r <= 1'b1",
                "7'h6F: if (!audio_mode_locked_r"]:
     assert needle in SPI, needle
 assert "SAVE FOR NEXT BOOT (ENTER)" in MENU
-assert "A3: ROUTING IS ACTIVE AFTER BOOT" in MENU
+assert "FPGA ACTIVE AUDIO" in MENU
+assert "A3 VERIFIED" in MENU
+assert "0x6Bu" in (BOARD / "src/a2n20_bl616/firmware_host/main.c").read_text()
 print("AUDIOCFG A1/A2/A3 source contracts: PASS (not a synthesis test)")

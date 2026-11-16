@@ -964,6 +964,7 @@ static const menu_screen_t SCR_FPGAUPDATE = { "FPGA UPDATE", fpga_build };
 /* Mode selection is a saved boot REQUEST only. A3 will implement routing.
  * Keep a draft to avoid erasing BL616 flash on every arrow key press. */
 #define REG_AUDIO_MODE 0x6Fu
+#define REG_AUDIO_ROUTE_A3 0x6Bu /* D0-D3 from the active FPGA audio mux */
 static uint8_t s_audio_draft;
 static const uint8_t k_audio_order[AUDIO_MODE_COUNT] = {
     AUDIO_MB_ORIGINAL, AUDIO_MB_ENHANCED, AUDIO_DOC_NATIVE, AUDIO_SHARED
@@ -1025,12 +1026,17 @@ static void audio_build(void)
     if ((core & 0xFCu) == 0xA0u)
         mi_add(MI_INFO, "FPGA BOOT REQUEST", audio_name(core & 3u));
     else
-        mi_add(MI_INFO, "FPGA AUDIOCFG A2", "UNAVAILABLE");
-    mi_add(MI_INFO, "", "");
-    mi_add(MI_INFO, "A3: ROUTING IS ACTIVE AFTER BOOT", "");
-    mi_add(MI_INFO, "ENHANCED: M641 GOLDEN ROUTE", "");
-    mi_add(MI_INFO, "ORIGINAL: YM2149 PSG + SPEECH", "");
-    mi_add(MI_INFO, "NATIVE/SHARED: DOC SLOT DEVICE PORT", "");
+        mi_add(MI_INFO, "FPGA AUDIOCFG", "UNAVAILABLE");
+    uint8_t route = fpga_spi_reg_read(REG_AUDIO_ROUTE_A3);
+    if ((route & 0xFCu) == 0xD0u) {
+        mi_add(MI_INFO, "FPGA ACTIVE AUDIO", audio_name(route & 3u));
+        mi_add(MI_INFO, "FPGA ROUTING",
+               (core == (uint8_t)(0xA0u | (route & 3u))) ?
+               "A3 VERIFIED" : "MISMATCH");
+    } else {
+        mi_add(MI_INFO, "FPGA ACTIVE AUDIO", "NO A3 CORE");
+        mi_add(MI_INFO, "REFLASH FPGA .BIN FOR AUDIO ROUTE", "");
+    }
     mi_add(MI_INFO, "POWER CYCLE AFTER SAVING TO APPLY", "");
 }
 static const menu_screen_t SCR_AUDIO = { "AUDIO CONFIG", audio_build };

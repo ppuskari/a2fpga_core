@@ -113,3 +113,48 @@ Source implementation committed and visually reviewed. No Gowin,
 T-Head/BL616 build, timing closure or physical hardware tests have
 been executed by ChatGPT in this branch. Do not promote or merge into
 MB6.6 until these are complete. 
+
+
+## A3 live-route verification — revision after hardware report
+
+Earlier A1/A2 FPGA revisions acknowledge SPI mode 1 as `0xA1` on
+register `0x6F` but have **no actual audio switching**. The A3 MCU
+formerly printed `AUDIOCFG A3: REQ=1 ACK` for those old cores, creating
+false confidence that Original mode was working. This is now corrected.
+
+A3 FPGA implements a **new read-only register at SPI `0x6B`**:
+
+| Register | A1/A2-only core | A3 core |
+| --- | --- | --- |
+| `0x6F` | `0xA0 | saved_mode` | `0xA0 | saved_mode` |
+| `0x6B` READ | `0x00` | `0xD0 | effective_audio_route` |
+
+`0x6B` WRITE continues to strobe slot reconfiguration and lock the
+boot mode, unchanged. The A3 response is driven by the FPGA top-level
+mixer-select predicates, rather than merely echoing flash settings.
+
+On boot with Original (1), the expected A3 MCU line is now:
+
+    AUDIOCFG A3: REQ=1 ROUTE=1 OK
+
+The AUDIO CONFIG screen separately reports:
+
+    FLASH SAVED       ORIGINAL MB
+    FPGA BOOT REQUEST ORIGINAL MB
+    FPGA ACTIVE AUDIO ORIGINAL MB
+    FPGA ROUTING      A3 VERIFIED
+
+If it instead shows `NO A3 CORE`, the installed FPGA is still A1/A2
+(or an older build) even if the MCU was updated and `0x6F` returns
+`0xA1`. In that case install the newly generated **A3 FPGA image**:
+
+    boards/a2n20v2-Enhanced/impl/pnr/a2n20v2_enhanced.bin
+
+Use the MCU's FPGA UPDATE menu (raw .bin) and verify the FPGA build stamp
+changes. MCU firmware and FPGA are separate updates, so **flashing just the
+MCU does not install A3 audio routing**. The A3 FPGA may retain the old
+menu text if the MCU was not rebuilt; the new diagnostic requires both.
+
+If the menu reports `A3 VERIFIED` with Original but music still sounds
+like Enhanced, capture the FPGA/MCU stamps and audio behavior: that is a
+real audio-routing defect requiring investigation, not an outdated core.

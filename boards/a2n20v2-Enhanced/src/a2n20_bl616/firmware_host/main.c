@@ -1232,22 +1232,37 @@ int main(void)
                 settings_loaded_from_flash() ? "FLASH" : "DEFAULTS", dbg);
     }
 
-    /* AUDIOCFG A1/A2: latch and verify the requested mode BEFORE the
-     * slot-map strobe (0x6B), ahead of the mount-time 0x2E reset release.
-     * The FPGA
-     * routes Enhanced/Original/Native/Shared according to the latched mode.
-     * An older core returns no 0xA0 signature and keeps its legacy path. */
+    /* AUDIOCFG A3: 0x6F acknowledges mode acceptance on both A1/A2 and A3
+     * FPGA bitstreams. Only A3 reports the EFFECTIVE AUDIO ROUTE via read
+     * of 0x6B (D0..D3). This check executes BEFORE the 0x6B slot-map strobe.
+     * Never report "boot routing" solely from the legacy A1/A2 ACK. */
     {
         uint8_t mode = settings()->audio_mode;
+        uint8_t request_read = 0;
+        uint8_t route_read = 0;
         int verified = 0;
         if (ready) {
             for (int attempt = 0; attempt < 5 && !verified; attempt++) {
                 fpga_spi_reg_write(0x6Fu, mode);
-                verified = (fpga_spi_reg_read(0x6Fu) == (uint8_t)(0xA0u | mode));
+                request_read = fpga_spi_reg_read(0x6Fu);
+                route_read = fpga_spi_reg_read(0x6Bu);
+                verified = request_read == (uint8_t)(0xA0u | mode) &&
+                           route_read == (uint8_t)(0xD0u | mode);
             }
         }
-        osd_log("AUDIOCFG A3: REQ=%u %s (BOOT ROUTING)",
-                (unsigned)mode, verified ? "ACK" : "NO AUDIOCFG CORE");
+        if (verified) {
+            osd_log("AUDIOCFG A3: REQ=%u ROUTE=%u OK",
+                    (unsigned)mode, (unsigned)(route_read & 3u));
+        } else if (request_read == (uint8_t)(0xA0u | mode) &&
+                   (route_read & 0xFCu) != 0xD0u) {
+            osd_log("AUDIOCFG: OLD FPGA CORE (NO A3)");
+            osd_log("AUDIOCFG: REFLASH A3 FPGA .BIN");
+        } else {
+            osd_log("AUDIOCFG: MODE=%u REQ=%02X RT=%02X",
+                    (unsigned)mode, (unsigned)request_read,
+                    (unsigned)route_read);
+            osd_log("AUDIOCFG: MODE ROUTING UNVERIFIED");
+        }
     }
 
     /* Apply the persisted slot map EARLY -- the gateware gates the Apple II
