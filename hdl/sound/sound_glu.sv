@@ -30,7 +30,11 @@ module sound_glu #(
 
     // Enables the explicit A2FPGA 128K extension protocol. Even when this
     // parameter is true, reset enters native IIgs-compatible locked mode.
-    parameter bit ENABLE_128K_EXTENSION = 1'b0
+    parameter bit ENABLE_128K_EXTENSION = 1'b0,
+    // M6.6a: exclusively MB-DOC mode can use the second 64KiB sound
+    // bank without CPU/IIgs extension-key programming. GS mode's
+    // locked-until-unlock semantics remain unchanged.
+    parameter bit MB_DOC_128K_AUTO_ENABLE = 1'b0
 ) (
     a2bus_if.slave a2bus_if,
 
@@ -49,6 +53,9 @@ module sound_glu #(
     input  logic [31:0] mb_ram_data_i,
     input  logic [3:0]  mb_ram_byte_en_i,
     output logic        mb_ram_ready_o,
+    // Set only after the MB bridge finishes bank-1 SDRAM preload.
+    // No bank-1 oscillator fetch may occur before this handshake.
+    input  logic        mb_bank1_ready_i,
 
     output [7:0] data_o,
     output rd_en_o,
@@ -222,10 +229,11 @@ wire extension_addr_w =
     (sound_ptr_lo_r <= EXT_COMMAND_ADDR);
 
 assign debug_128k_status_o =
-    ENABLE_128K_EXTENSION ?
+    !ENABLE_128K_EXTENSION ? 8'h00 :
+    ((MB_DOC_MODE && MB_DOC_128K_AUTO_ENABLE && !USE_BSRAM) ?
+        {4'h1, 2'b00, mb_bank1_ready_i, 1'b1} :
         {4'h1, 2'b00, sound_128k_enable_r,
-         sound_128k_unlocked_r} :
-        8'h00;
+         sound_128k_unlocked_r});
 
     assign mb_ram_ready_o =
         MB_DOC_MODE && !USE_BSRAM && glu_mem_if.ready;
@@ -423,10 +431,12 @@ wire wave_bank_w;
 
 // Legacy 64K software always reads bank 0. RTS bit 6 gains meaning only
 // after the extension is unlocked and bank 1 has received waveform data.
-wire wave_bank_active_w =
-    sound_128k_unlocked_r &&
-    sound_128k_enable_r &&
-    wave_bank_w;
+wire mb_auto_bank1_w =
+    MB_DOC_MODE && ENABLE_128K_EXTENSION &&
+    MB_DOC_128K_AUTO_ENABLE && !USE_BSRAM;
+wire wave_bank_active_w = wave_bank_w &&
+    (mb_auto_bank1_w ? mb_bank1_ready_i :
+       (sound_128k_unlocked_r && sound_128k_enable_r));
 
 wire doc_mem_rd_w;
 
