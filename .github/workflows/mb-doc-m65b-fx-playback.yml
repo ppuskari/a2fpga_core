@@ -1,0 +1,51 @@
+name: M6.5b DOC OSC6-7 sampled FX — golden piano unchanged
+on:
+  push:
+    branches:
+      - petar/mb-doc-m65b-procedural-fx-osc67-20261116
+    paths:
+      - 'boards/a2n20v2-Enhanced/**'
+      - 'tests/mb_doc/**'
+      - '.github/workflows/mb-doc-m65b-fx-playback.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sampled-fx:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Icarus Verilog
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iverilog
+      - name: Confirm no pilot, no whole-chip FX mux, no video overlay, no MCU changes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          top=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text()
+          proj=Path('boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj').read_text()
+          for expected in (
+              "parameter bit MB_DOC_FX_AY_BYPASS_ENABLE = 1'b0",
+              "parameter bit MB_DOC_DECLICK_ENABLE = 1'b1",
+              "parameter bit MB_DOC_COHERENT_PUBLISH_ENABLE = 1'b1",
+              "parameter bit MB_DOC_FX_EVENT_CAPTURE_ENABLE = 1'b1",
+              "parameter bit MB_DOC_SAMPLED_FX_ENABLE = 1'b1",
+              ".ENABLE(1'b0),  // M6.3",
+              "mb_speech_sum_l_w", "mb_speech_sum_r_w"
+          ):
+              assert expected in top,expected
+          assert "mb_hdmi_audio_pilot" not in top
+          assert "mb_doc_fx_wavegen.sv" in proj
+          print("PASS: experimental OSC6/7 only; golden M6.4.1 six piano voices preserved")
+          PY
+      - name: Restore checksum-verified real SynthLAB piano table
+        run: python3 tools/extract_synthlab_piano.py --download
+      - name: Original M6 piano / AY capture test
+        run: sh tests/mb_doc/run_capture_test.sh
+      - name: M6.4 de-click regression
+        run: sh tests/mb_doc/run_declick_test.sh
+      - name: M6.4.1 coherent publication regression
+        run: sh tests/mb_doc/run_publish_test.sh
+      - name: M6.5a programmable FX events
+        run: sh tests/mb_doc/run_fx_events_test.sh
+      - name: M6.5b bank and DOC OSC6/7 host-command regression
+        run: sh tests/mb_doc/run_fx_playback_test.sh
