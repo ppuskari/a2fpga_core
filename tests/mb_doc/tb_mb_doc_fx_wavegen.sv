@@ -2,7 +2,7 @@
 module tb_mb_doc_fx_wavegen;
     logic [12:0] word_addr;
     wire [31:0] word_data;
-    mb_doc_fx_wavegen dut (.word_addr_i(word_addr),.sample_word_o(word_data));
+    mb_doc_fx_wavegen dut (.word_addr_i(word_addr),.variant_i(1'b0),.sample_word_o(word_data));
     integer start[0:6],length[0:6];
     logic [7:0] sample_byte;
     integer addr,patch,j,word_count,halters;
