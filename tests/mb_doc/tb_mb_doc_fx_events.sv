@@ -85,6 +85,15 @@ module tb_mb_doc_fx_events;
            event_shape[0]!==4'hA || velocity[0]!==8'd96)
             $fatal(1,"Same-value R13 envelope restart lost");
 
+        // The actual YM envelope can be at zero at the R13 write
+        // boundary. The initial sampled FX attack must not be silent.
+        env_level[0]=5'd0;
+        @(negedge clk);r13_write[0]=1'b1;
+        @(negedge clk);r13_write[0]=1'b0;
+        commit(2'b01);
+        if(valid[0]!==1'b1 || velocity[0]!==8'd128)
+            $fatal(1,"Native R13 zero-phase FX attack was inaudible");
+
         // Right PSG has a separate noise source and event.
         mixer[1]=8'h3D; // tone B on, noise A? remains disabled
         amp[1][1]=5'h0F;
