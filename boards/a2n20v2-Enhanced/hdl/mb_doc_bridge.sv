@@ -37,6 +37,10 @@ module mb_doc_bridge #(
     // M6.5a captures non-piano PSG FX events only. It does not alter
     // audio or consume OSC6/7 until the FX sample engine is added.
     parameter bit FX_EVENT_CAPTURE_ENABLE = 1'b0,
+    // M6.5b experimental: load original procedural one-shots into external
+    // DOC sound SDRAM and play only on OSC6 (left) / OSC7 (right).
+    // Independent of the six melodic piano voices, and OFF by default.
+    parameter bit SAMPLED_FX_ENABLE = 1'b0,
     parameter int COHERENT_IDLE_CYCLES = 10800,
     parameter logic [7:0] DECLICK_ATTACK_STEP = 8'd16,
     parameter logic [7:0] DECLICK_RELEASE_STEP = 8'd12,
@@ -77,10 +81,12 @@ module mb_doc_bridge #(
     output logic        fx_ay_l_o,
     output logic        fx_ay_r_o
 );
-    typedef enum logic [3:0] {
+    typedef enum logic [4:0] {
         WAIT_SDRAM, RAM_FETCH, RAM_ISSUE, RAM_WAIT, RAM_RELEASE,
+        FX_RAM_FETCH, FX_RAM_ISSUE, FX_RAM_WAIT, FX_RAM_RELEASE,
         ENABLE_DOC, VOICE_BEGIN, DIVIDE, VOICE_COMMAND,
-        DOC_SEND, DOC_GAP, VOICE_NEXT, SCAN_PAUSE
+        DOC_SEND, DOC_GAP, VOICE_NEXT, SCAN_PAUSE,
+        FX_COMMAND, FX_NEXT
     } state_t;
 
     state_t state_r, return_state_r;
@@ -100,6 +106,17 @@ module mb_doc_bridge #(
     logic [3:0] pub_next_reg_r [0:1];
 
     logic [10:0] wave_word_r;
+    logic [12:0] fx_word_r;
+    logic fx_bank_ready_r;
+    logic [1:0] fx_pending_r;
+    logic [2:0] fx_pending_patch_r [0:1];
+    logic [7:0] fx_pending_velocity_r [0:1];
+    logic [4:0] fx_pending_noise_r [0:1];
+    logic fx_chip_r;
+    logic [2:0] fx_patch_r, fx_step_r;
+    logic [7:0] fx_volume_r;
+    logic [4:0] fx_noise_period_r;
+    wire [31:0] fx_sample_word_w;
     logic [2:0] voice_r;
     logic [2:0] command_step_r;
     logic first_scan_r;
@@ -408,13 +425,51 @@ module mb_doc_bridge #(
         endcase
     endfunction
 
+    // Original low-gate diagnostic bank: no dedicated FPGA BSRAM.
+    // Generate 4 offset-binary FX samples per word and upload to shared
+    // external sound SDRAM on the existing SoundGLU host port.
+    mb_doc_fx_wavegen fx_wavegen (
+        .word_addr_i(fx_word_r),
+        .sample_word_o(fx_sample_word_w)
+    );
+
+    function automatic [7:0] fx_wtp(input [2:0] patch);
+        case(patch)
+            3'd0: fx_wtp=8'h20; // explosion $2000, 8192B
+            3'd1: fx_wtp=8'h40; // kick $4000, 1024B
+            3'd2: fx_wtp=8'h44; // snare $4400, 1024B
+            3'd3: fx_wtp=8'h48; // tom $4800, 1024B
+            3'd4: fx_wtp=8'h4C; // hi-hat $4C00, 1024B
+            3'd5: fx_wtp=8'h50; // laser $5000, 2048B
+            default: fx_wtp=8'h60; // cymbal $6000, 4096B
+        endcase
+    endfunction
+    function automatic [2:0] fx_wts(input [2:0] patch);
+        case(patch)
+            3'd0: fx_wts=3'd5;
+            3'd5: fx_wts=3'd3;
+            3'd6: fx_wts=3'd4;
+            default: fx_wts=3'd2;
+        endcase
+    endfunction
+    wire [15:0] fx_freq_w =
+        16'h5000 - {3'b000,fx_noise_period_r,8'b0};
+
     // Byte zero of the patch corresponds to DOC address $0000.
     // The SDRAM GLU port takes a 32-bit word address and byte lanes.
-    assign ram_addr_o = {10'b0, wave_word_r};
+    assign ram_addr_o =
+        (state_r == FX_RAM_FETCH || state_r == FX_RAM_ISSUE ||
+         state_r == FX_RAM_WAIT || state_r == FX_RAM_RELEASE) ?
+         {8'b0, fx_word_r} : {10'b0, wave_word_r};
     assign ram_byte_en_o = 4'hF;
-    assign ram_data_o = synthlab_pcm_word_r;
+    assign ram_data_o =
+        (state_r == FX_RAM_FETCH || state_r == FX_RAM_ISSUE ||
+         state_r == FX_RAM_WAIT || state_r == FX_RAM_RELEASE) ?
+         fx_sample_word_w : synthlab_pcm_word_r;
     assign ram_wr_o = (state_r == RAM_ISSUE) ||
-                       (state_r == RAM_WAIT);
+                      (state_r == RAM_WAIT) ||
+                      (state_r == FX_RAM_ISSUE) ||
+                      (state_r == FX_RAM_WAIT);
 
     assign doc_wr_o = (state_r == DOC_SEND);
     assign doc_addr_o = cmd_addr_r;
@@ -544,6 +599,19 @@ module mb_doc_bridge #(
             state_r          <= WAIT_SDRAM;
             return_state_r   <= WAIT_SDRAM;
             wave_word_r      <= 11'd0;
+            fx_word_r        <= 13'h0800;
+            fx_bank_ready_r  <= 1'b0;
+            fx_pending_r     <= 2'b00;
+            fx_chip_r        <= 1'b0;
+            fx_patch_r       <= 3'd0;
+            fx_step_r        <= 3'd0;
+            fx_volume_r      <= 8'd0;
+            fx_noise_period_r<= 5'd0;
+            for(integer fp=0;fp<2;fp=fp+1) begin
+                fx_pending_patch_r[fp] <= 3'd0;
+                fx_pending_velocity_r[fp] <= 8'd0;
+                fx_pending_noise_r[fp] <= 5'd0;
+            end
             voice_r          <= 3'd0;
             command_step_r   <= 3'd0;
             first_scan_r     <= 1'b1;
@@ -603,10 +671,32 @@ module mb_doc_bridge #(
                     // Drop WR for one full clock to re-arm SDRAM's
                     // rising-edge request capture before next word.
                     if (wave_word_r == 11'd1407) begin
-                        state_r <= ENABLE_DOC;
+                        if (SAMPLED_FX_ENABLE) begin
+                            fx_word_r <= 13'h0800;
+                            state_r <= FX_RAM_FETCH;
+                        end else state_r <= ENABLE_DOC;
                     end else begin
                         wave_word_r <= wave_word_r + 1'b1;
                         state_r <= RAM_FETCH;
+                    end
+                end
+
+                FX_RAM_FETCH: state_r <= FX_RAM_ISSUE;
+
+                FX_RAM_ISSUE: state_r <= FX_RAM_WAIT;
+
+                FX_RAM_WAIT: begin
+                    if (ram_ready_i)
+                        state_r <= FX_RAM_RELEASE;
+                end
+
+                FX_RAM_RELEASE: begin
+                    if (fx_word_r == 13'h1BFF) begin
+                        fx_bank_ready_r <= 1'b1;
+                        state_r <= ENABLE_DOC;
+                    end else begin
+                        fx_word_r <= fx_word_r + 1'b1;
+                        state_r <= FX_RAM_FETCH;
                     end
                 end
 
@@ -766,7 +856,29 @@ module mb_doc_bridge #(
                             first_scan_r <= 1'b0;
                             ready_o <= 1'b1;
                             pause_r <= 16'(SCAN_PAUSE_CYCLES);
-                            state_r <= SCAN_PAUSE;
+                            if (SAMPLED_FX_ENABLE && fx_bank_ready_r &&
+                                (|fx_pending_r)) begin
+                                // Prefer left when both events are pending.
+                                // Right remains pending for the next scan.
+                                fx_chip_r <= !fx_pending_r[0];
+                                if (fx_pending_r[0]) begin
+                                    fx_patch_r <= fx_pending_patch_r[0];
+                                    fx_volume_r <=
+                                        fx_pending_velocity_r[0] > 8'd208 ?
+                                        8'd208 : fx_pending_velocity_r[0];
+                                    fx_noise_period_r <= fx_pending_noise_r[0];
+                                    fx_pending_r[0] <= 1'b0;
+                                end else begin
+                                    fx_patch_r <= fx_pending_patch_r[1];
+                                    fx_volume_r <=
+                                        fx_pending_velocity_r[1] > 8'd208 ?
+                                        8'd208 : fx_pending_velocity_r[1];
+                                    fx_noise_period_r <= fx_pending_noise_r[1];
+                                    fx_pending_r[1] <= 1'b0;
+                                end
+                                fx_step_r <= 3'd0;
+                                state_r <= FX_COMMAND;
+                            end else state_r <= SCAN_PAUSE;
                         end else begin
                             voice_r <= voice_r + 1'b1;
                             state_r <= VOICE_BEGIN;
@@ -774,6 +886,54 @@ module mb_doc_bridge #(
                     end else begin
                         command_step_r <= command_step_r + 1'b1;
                         state_r <= VOICE_COMMAND;
+                    end
+                end
+
+                FX_COMMAND: begin
+                    // Seven writes per one-shot: HALT, WTP, RTS, FL, FH,
+                    // VOL and RUN. Never command OSC0-5 here.
+                    case (fx_step_r)
+                        3'd0: begin
+                            cmd_addr_r <= 8'hA6 + {7'b0,fx_chip_r};
+                            cmd_data_r <= fx_chip_r ? 8'h01 : 8'h11;
+                        end
+                        3'd1: begin
+                            cmd_addr_r <= 8'h86 + {7'b0,fx_chip_r};
+                            cmd_data_r <= fx_wtp(fx_patch_r);
+                        end
+                        3'd2: begin
+                            cmd_addr_r <= 8'hC6 + {7'b0,fx_chip_r};
+                            // One-shot WTS/RES; RES0 is to be calibrated
+                            // against captured hardware FX sample rates.
+                            cmd_data_r <= {2'b00, fx_wts(fx_patch_r), 3'd0};
+                        end
+                        3'd3: begin
+                            cmd_addr_r <= 8'h06 + {7'b0,fx_chip_r};
+                            cmd_data_r <= fx_freq_w[7:0];
+                        end
+                        3'd4: begin
+                            cmd_addr_r <= 8'h26 + {7'b0,fx_chip_r};
+                            cmd_data_r <= fx_freq_w[15:8];
+                        end
+                        3'd5: begin
+                            cmd_addr_r <= 8'h46 + {7'b0,fx_chip_r};
+                            cmd_data_r <= fx_volume_r;
+                        end
+                        default: begin
+                            cmd_addr_r <= 8'hA6 + {7'b0,fx_chip_r};
+                            cmd_data_r <= fx_chip_r ? 8'h00 : 8'h10;
+                        end
+                    endcase
+                    return_state_r <= FX_NEXT;
+                    state_r <= DOC_SEND;
+                end
+
+                FX_NEXT: begin
+                    if (fx_step_r == 3'd6)
+                        state_r <= SCAN_PAUSE;
+                    else begin
+                        fx_step_r <= fx_step_r + 1'b1;
+                        state_r <= FX_COMMAND;
                     end
                 end
 
@@ -787,6 +947,19 @@ module mb_doc_bridge #(
                 default:
                     state_r <= WAIT_SDRAM;
             endcase
+            // Two pending slots, one per AY chip. Events arriving while
+            // a voice is busy replace that chip's older pending one-shot;
+            // this bounded last-event policy avoids stalling piano scans.
+            if (SAMPLED_FX_ENABLE && fx_bank_ready_r) begin
+                for(integer ch=0;ch<2;ch=ch+1) begin
+                    if(fx_event_valid_w[ch]) begin
+                        fx_pending_r[ch] <= 1'b1;
+                        fx_pending_patch_r[ch] <= fx_event_patch_w[ch];
+                        fx_pending_velocity_r[ch] <= fx_event_velocity_w[ch];
+                        fx_pending_noise_r[ch] <= fx_event_noise_period_w[ch];
+                    end
+                end
+            end
         end
     end
 endmodule
