@@ -62,6 +62,9 @@ module top #(
     // M6.5b EXPERIMENTAL: actual DOC OSC6/7 one-shot FX playback.
     // Keep M6.4.1 golden branch untouched for instant rollback.
     parameter bit MB_DOC_SAMPLED_FX_ENABLE = 1'b1,
+    // M6.6a: independent 128KiB DOC sound library in MB mode only.
+    // No MCU mode-selector or SenseiPlay interface changes here.
+    parameter bit MB_DOC_DUAL_BANK_FX_ENABLE = 1'b1,
     parameter bit MOCKINGBOARD_ENABLE = 0,
     // SSI speech can coexist with exclusive AY-to-DOC music ownership.
     parameter bit MOCKINGBOARD_SSI263_ENABLE = 1'b1,
@@ -1102,6 +1105,7 @@ wire [7:0] doc_128k_status_w;
     wire [31:0] mb_ram_data_w;
     wire [3:0]  mb_ram_byte_en_w;
     wire        mb_ram_ready_w;
+    wire        mb_bank1_ready_w;
     wire        mb_bridge_ready_w;
     wire [2:0]  mb_active_voice_w;
 
@@ -1112,7 +1116,8 @@ wire [7:0] doc_128k_status_w;
 
         // Locked after reset. Only the explicit A2FP protocol enables
         // $C03C bit 4 and oscillator RTS bit 6 as bank selectors.
-        .ENABLE_128K_EXTENSION(1'b1)
+        .ENABLE_128K_EXTENSION(1'b1),
+        .MB_DOC_128K_AUTO_ENABLE(MB_DOC_DUAL_BANK_FX_ENABLE)
        // .MONO_MIX(1'b1) // If true, mono mix is used instead of stereo
     ) sg (
         .a2bus_if(a2bus_if),
@@ -1126,6 +1131,7 @@ wire [7:0] doc_128k_status_w;
         .mb_ram_data_i(mb_ram_data_w),
         .mb_ram_byte_en_i(mb_ram_byte_en_w),
         .mb_ram_ready_o(mb_ram_ready_w),
+        .mb_bank1_ready_i(mb_bank1_ready_w),
 
         .data_o(sg_d_w),                 
         .rd_en_o(sg_rd_w),
@@ -1411,7 +1417,8 @@ wire [7:0] doc_128k_status_w;
                 .DECLICK_ENABLE(MB_DOC_DECLICK_ENABLE),
                 .COHERENT_PUBLISH_ENABLE(MB_DOC_COHERENT_PUBLISH_ENABLE),
                 .FX_EVENT_CAPTURE_ENABLE(MB_DOC_FX_EVENT_CAPTURE_ENABLE),
-                .SAMPLED_FX_ENABLE(MB_DOC_SAMPLED_FX_ENABLE)
+                .SAMPLED_FX_ENABLE(MB_DOC_SAMPLED_FX_ENABLE),
+                .DUAL_BANK_FX_ENABLE(MB_DOC_DUAL_BANK_FX_ENABLE)
             ) bridge (
                 .clk_i(clk_logic_w),
                 .reset_n_i(system_reset_n_w),
@@ -1437,6 +1444,7 @@ wire [7:0] doc_128k_status_w;
                 .ram_data_o(mb_ram_data_w),
                 .ram_byte_en_o(mb_ram_byte_en_w),
                 .ram_ready_i(mb_ram_ready_w),
+                .mb_bank1_ready_o(mb_bank1_ready_w),
                 .ready_o(mb_bridge_ready_w),
                 .active_voice_o(mb_active_voice_w),
                 .fx_ay_l_o(mb_fx_ay_l_w),
@@ -1451,6 +1459,7 @@ wire [7:0] doc_128k_status_w;
             assign mb_ram_data_w = 32'h00000000;
             assign mb_ram_byte_en_w = 4'h0;
             assign mb_bridge_ready_w = 1'b0;
+            assign mb_bank1_ready_w = 1'b0;
             assign mb_active_voice_w = 3'd0;
             assign mb_fx_ay_l_w = 1'b0;
             assign mb_fx_ay_r_w = 1'b0;
