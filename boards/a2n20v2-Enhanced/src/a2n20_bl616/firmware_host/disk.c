@@ -31,6 +31,8 @@
 #include "boot_timeline.h" /* boot-milestone timeline (mount / reset-release) */
 
 extern bool g_slots_applied_early;  /* main.c: early slot map confirmed+strobed */
+extern bool g_audio_applied_early;  /* main.c: early audio readback confirmed */
+extern bool audiocfg_ensure_boot_mode(bool *did_rearm); /* main.c */
 
 /* ---- Volume register map (must match bl616_spi_connector.sv 0x40-0x5F) ---- */
 #define VOL_BASE(v)       (0x40u + (v) * 0x10u)
@@ -913,15 +915,39 @@ void disk_poll(void)
                  * remains race-free. Never re-strobe once applied: the Apple
                  * is running by then and a slotmaker reconfig mid-run would
                  * glitch card decode. 0xFF = hardware default. */
-                if (!g_slots_applied_early) {
+                /* A cold power-on may have missed the early boot-mode
+                 * write even when FPGA STATUS was readable. Recheck here
+                 * after SPI, USB and media initialization but before /RES
+                 * release. 0x6B must NOT commit mode 0 while saved mode=1.
+                 * If the helper rearms the FPGA, /RES is held and the slot
+                 * map must be committed again even if it succeeded early. */
+                bool audio_rearmed = false;
+                bool audio_ok = audiocfg_ensure_boot_mode(&audio_rearmed);
+                if (!audio_ok)
+                    osd_log("AUDIOCFG: LATE APPLY FAILED S=%u",
+                            (unsigned)settings()->audio_mode);
+                if ((!g_slots_applied_early || audio_rearmed) && audio_ok) {
+                    int slots_verified = 1;
                     for (int i = 0; i < 8; i++) {
                         uint8_t c = settings()->slot_cards[i];
                         if (c == 0xFF)
                             c = settings_slot_hw_defaults[i];
-                        fpga_spi_reg_write((uint8_t)(0x60 + i), c);
+                        int good = 0;
+                        for (int attempt = 0; attempt < 5 && !good; attempt++) {
+                            fpga_spi_reg_write((uint8_t)(0x60 + i), c);
+                            good = (fpga_spi_reg_read((uint8_t)(0x60 + i)) == c);
+                            if (!good) bflb_mtimer_delay_us(100);
+                        }
+                        slots_verified &= good;
                     }
-                    fpga_spi_reg_write(0x6B, 1);   /* slotmaker reconfig strobe */
-                    bt_mark(BT_SLOTS_APPLIED);
+                    if (slots_verified) {
+                        fpga_spi_reg_write(0x6B, 1); /* lock verified mode */
+                        bt_mark(BT_SLOTS_APPLIED);
+                    } else {
+                        osd_log("SLOTS: LATE APPLY UNCONFIRMED");
+                    }
+                } else if (audio_ok && !g_audio_applied_early) {
+                    osd_log("AUDIOCFG: LATE MODE RECOVERED");
                 }
                 osd_log("SLOTS: %d %d %d %d %d %d %d %d",
                         fpga_spi_reg_read(0x60), fpga_spi_reg_read(0x61),

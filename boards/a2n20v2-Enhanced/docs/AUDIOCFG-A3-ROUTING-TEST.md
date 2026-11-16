@@ -232,3 +232,53 @@ existing A3-R1 FPGA bitstream installed. Expected end-of-boot status:
 The `SLOTS: EARLY APPLY UNCONFIRMED` message should also disappear; if
 it remains, capture the earliest `AUDIOCFG: ...` log and the final slot
 map, and investigate the FPGA SPI proto framing with a cycle-accurate test.
+
+
+## A3-R3 cold boot vs. warm MCU restart fix
+
+Hardware validation from the user: after using the MCU Main Menu's **RESTART MCU**
+action, the machine reports `AUDIOCFG A3: REQ=1 ROUTE=1 OK` and
+`AUDIOCFG S=1 FPGA=A1 RT=D1 OK`, and audible dual YM2149 PSG music returns
+at a somewhat low volume. An ordinary cold reboot sometimes reports
+`AUDIOCFG S=1 FPGA=A0 RT=D0 MISMATCH` and returns to DOC-enhanced music.
+This proves the YM2149 source and audio mux work; the remaining defect is
+cold-start mode application, not PSG implementation.
+
+Review revealed a two-stage firmware bug:
+
+1. The MCU calls `fpga_spi_wait_ready(2000)`. If this fails during a cold
+   power-on, the old audio block unconditionally skips applying settings and
+   never retries. Even when the early FPGA status read works, a subsequent
+   SPI write may be missed while the peripheral starts.
+2. Regardless of whether audio mode was verified, the MCU then writes the
+   slot-map commit strobe at SPI register `0x6B`. This also permanently
+   locks the FPGA audio mode until a new FPGA boot rearm, locking the
+   default Enhanced mode when Original is the persisted selection.
+3. Previously `disk_poll()` recovered slot map writes but never reapplied
+   the audio mode before it released the Apple II reset.
+
+**A3-R3 fix:** `main.c` uses `audiocfg_ensure_boot_mode()`, which validates
+FPGA readiness and the A3 live-route readback, retrying `0x6F = F0` rearm
+and the requested mode with bounded settling time. The early `0x6B`
+commit is now conditional on **both** verified slots and verified audio.
+The final `disk_poll()` boot barrier rechecks audio after USB/storage
+initialization, repairs a missed cold-start request, reapplies/verifies
+slot assignments if audio rearm occurred, and only then commits `0x6B`
+and releases the Apple II reset. If the late operation fails, the console
+reports this explicitly rather than silently claiming a selected route.
+
+**Hardware test:** With Original MB saved, perform three complete cold
+power cycles (all power sources, including Debug USB disconnected). Verify
+`AUDIOCFG EARLY S=1 OK` or `DEFER TO DISK` followed by
+`AUDIOCFG S=1 FPGA=A1 RT=D1 OK` on each boot, and listen for real PSG
+music + SSI263 speech. Then select Enhanced, save, use RESTART MCU, and
+finally return to Original and cold boot again. The dual YM2149 RTL and
+HDMI gain calibration are deliberately unchanged in this boot reliability
+fix; low-volume AY audio can be calibrated separately after persistence
+passes.
+
+The change requires a **BL616 MCU Stage 2 rebuild only**, provided an
+A3-R1 or newer FPGA bitstream supporting the 0x6F F0 rearm and 0x6B D0
+readback is installed. No overwrite of BL616 Stage 1 at flash 0x0.
+Source-level contract checks do not substitute for Gowin synthesis or
+hardware verification.

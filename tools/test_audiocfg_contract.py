@@ -85,4 +85,13 @@ assert "SAVED != ACTIVE" in MENU
 assert "0x6Bu" in (BOARD / "src/a2n20_bl616/firmware_host/main.c").read_text()
 assert "fpga_spi_reg_write(0x6Fu, 0xF0u)" in (BOARD / "src/a2n20_bl616/firmware_host/main.c").read_text()
 assert 'AUDIOCFG S=%u FPGA=%02X RT=%02X %s' in (BOARD / "src/a2n20_bl616/firmware_host/disk.c").read_text()
+MAIN = (BOARD / "src/a2n20_bl616/firmware_host/main.c").read_text()
+DISK = (BOARD / "src/a2n20_bl616/firmware_host/disk.c").read_text()
+assert "bool audiocfg_ensure_boot_mode(bool *did_rearm)" in MAIN
+assert "g_audio_applied_early = ready && audiocfg_ensure_boot_mode(NULL)" in MAIN
+assert "if (ok && g_audio_applied_early)" in MAIN
+assert "audio_ok = audiocfg_ensure_boot_mode(&audio_rearmed)" in DISK
+assert "if ((!g_slots_applied_early || audio_rearmed) && audio_ok)" in DISK
+assert "slots_verified" in DISK
+
 print("AUDIOCFG A1/A2/A3 source contracts: PASS (not a synthesis test)")
