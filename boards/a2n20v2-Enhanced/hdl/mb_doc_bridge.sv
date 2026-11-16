@@ -34,6 +34,9 @@ module mb_doc_bridge #(
     // at ~79 Apple CPU cycles per register (~77us). A 200us idle
     // fallback also accommodates individual-register software.
     parameter bit COHERENT_PUBLISH_ENABLE = 1'b0,
+    // M6.5a captures non-piano PSG FX events only. It does not alter
+    // audio or consume OSC6/7 until the FX sample engine is added.
+    parameter bit FX_EVENT_CAPTURE_ENABLE = 1'b0,
     parameter int COHERENT_IDLE_CYCLES = 10800,
     parameter logic [7:0] DECLICK_ATTACK_STEP = 8'd16,
     parameter logic [7:0] DECLICK_RELEASE_STEP = 8'd12,
@@ -89,6 +92,7 @@ module mb_doc_bridge #(
     // DOC observes this separately published snapshot only. The last
     // R14 write is included in the same commit (nonblocking-write bypass).
     logic [7:0] doc_regs [0:1][0:15];
+    logic [1:0] doc_publish_pulse_r;
     localparam int COHERENT_IDLE_W =
         (COHERENT_IDLE_CYCLES <= 1) ? 1 : $clog2(COHERENT_IDLE_CYCLES+1);
     logic [COHERENT_IDLE_W-1:0] pub_idle_r [0:1];
@@ -435,12 +439,15 @@ module mb_doc_bridge #(
                 pub_dirty_r[pub_chip] <= 1'b0;
                 pub_next_reg_r[pub_chip] <= 4'd0;
                 pub_idle_r[pub_chip] <= '0;
+                doc_publish_pulse_r[pub_chip] <= 1'b0;
             end else if (chip_wr_w) begin
+                doc_publish_pulse_r[pub_chip] <= 1'b0;
                 // Immediately reflect every physical AY write. The native
                 // YM2149 still receives it on the original write strobe.
                 ay_regs[pub_chip][chip_reg_w] <= chip_data_w;
                 if (!COHERENT_PUBLISH_ENABLE) begin
                     doc_regs[pub_chip][chip_reg_w] <= chip_data_w;
+                    doc_publish_pulse_r[pub_chip] <= 1'b1;
                 end else begin
                     pub_dirty_r[pub_chip] <= 1'b1;
                     pub_idle_r[pub_chip] <= '0;
@@ -453,6 +460,7 @@ module mb_doc_bridge #(
                                     (pub_r == 14) ? chip_data_w :
                                     ay_regs[pub_chip][pub_r];
                             pub_dirty_r[pub_chip] <= 1'b0;
+                            doc_publish_pulse_r[pub_chip] <= 1'b1;
                             pub_next_reg_r[pub_chip] <= 4'd0;
                         end else
                             pub_next_reg_r[pub_chip] <= chip_reg_w + 4'd1;
@@ -462,6 +470,7 @@ module mb_doc_bridge #(
                 end
             end else if (COHERENT_PUBLISH_ENABLE &&
                          pub_dirty_r[pub_chip]) begin
+                doc_publish_pulse_r[pub_chip] <= 1'b0;
                 // Bounded publication for keyboard, games and other
                 // non-MCS software which write only selected AY registers.
                 // 10,800 cycles / 54MHz ~= 200us after the final write.
@@ -471,13 +480,64 @@ module mb_doc_bridge #(
                         doc_regs[pub_chip][pub_r] <=
                             ay_regs[pub_chip][pub_r];
                     pub_dirty_r[pub_chip] <= 1'b0;
+                    doc_publish_pulse_r[pub_chip] <= 1'b1;
                     pub_next_reg_r[pub_chip] <= 4'd0;
                     pub_idle_r[pub_chip] <= '0;
                 end else
                     pub_idle_r[pub_chip] <= pub_idle_r[pub_chip]+1'b1;
-            end
+            end else
+                doc_publish_pulse_r[pub_chip] <= 1'b0;
         end
     end endgenerate
+
+    // M6.5a: consume only committed AY frames, not the transient
+    // low/high bytes of MCS register sequences. Native YM and DOC
+    // piano remain untouched. R13 write strobes preserve same-shape
+    // envelope restarts as distinct programmable events.
+    wire [1:0][7:0] fx_mixer_w =
+        {doc_regs[1][7], doc_regs[0][7]};
+    wire [1:0][4:0] fx_noise_period_w =
+        {doc_regs[1][6][4:0], doc_regs[0][6][4:0]};
+    wire [1:0][2:0][4:0] fx_amp_w = {
+        doc_regs[1][10][4:0],doc_regs[1][9][4:0],doc_regs[1][8][4:0],
+        doc_regs[0][10][4:0],doc_regs[0][9][4:0],doc_regs[0][8][4:0]};
+    wire [1:0][4:0] fx_envelope_level_w =
+        {ay_r_env_level_i, ay_l_env_level_i};
+    wire [1:0][3:0] fx_envelope_shape_w =
+        {doc_regs[1][13][3:0],doc_regs[0][13][3:0]};
+    wire [1:0] fx_r13_write_w = {
+        ay_r_wr_i && (ay_r_reg_i == 4'd13),
+        ay_l_wr_i && (ay_l_reg_i == 4'd13)};
+    wire [1:0] fx_event_valid_w;
+    wire [1:0][2:0] fx_event_patch_w;
+    wire [1:0][7:0] fx_event_velocity_w;
+    wire [1:0][2:0] fx_event_noise_mask_w;
+    wire [1:0][2:0] fx_event_tone_mask_w;
+    wire [1:0][2:0] fx_event_envelope_mask_w;
+    wire [1:0][4:0] fx_event_noise_period_w;
+    wire [1:0][3:0] fx_event_envelope_shape_w;
+
+    mb_doc_fx_events #(
+        .ENABLE(FX_EVENT_CAPTURE_ENABLE)
+    ) m65a_fx_decoder (
+        .clk_i(clk_i), .reset_n_i(reset_n_i),
+        .chip_reset_n_i({ay_r_reset_n_i,ay_l_reset_n_i}),
+        .publish_i(doc_publish_pulse_r),
+        .r13_write_i(fx_r13_write_w),
+        .mixer_i(fx_mixer_w),
+        .noise_period_i(fx_noise_period_w),
+        .amp_i(fx_amp_w),
+        .env_level_i(fx_envelope_level_w),
+        .env_shape_i(fx_envelope_shape_w),
+        .event_valid_o(fx_event_valid_w),
+        .event_patch_o(fx_event_patch_w),
+        .event_velocity_o(fx_event_velocity_w),
+        .event_noise_mask_o(fx_event_noise_mask_w),
+        .event_tone_mask_o(fx_event_tone_mask_w),
+        .event_envelope_mask_o(fx_event_envelope_mask_w),
+        .event_noise_period_o(fx_event_noise_period_w),
+        .event_envelope_shape_o(fx_event_envelope_shape_w)
+    );
 
     always_ff @(posedge clk_i) begin
         if (!reset_n_i) begin
