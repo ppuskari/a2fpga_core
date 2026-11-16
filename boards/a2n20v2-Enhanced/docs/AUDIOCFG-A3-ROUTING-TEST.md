@@ -57,8 +57,9 @@ from the regular Mockingboard VIA range `$Cn00`–`$CnFF`.
 
 **Compatibility limitations requiring A4 hardening:**
 
-- DOC oscillator register reads are a writeback mirror; asynchronous
-  internal DOC changes to oscillator registers are not yet reflected.
+- DOC oscillator register reads are a writeback mirror (initialized at
+  power-up and scrubbed after Apple reset); asynchronous internal DOC
+  changes to oscillator registers are not yet reflected.
   E1 oscillator enable reads return the DOC's live enable state.
 - Sound RAM reads currently return the last staged data byte, *not*
   the addressed SDRAM contents. Real RAM readback plus a bounded

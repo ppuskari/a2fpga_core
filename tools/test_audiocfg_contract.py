@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""AUDIOCFG A1/A2/A3 source contract checks (no FPGA simulator required).
+
+This verifies cross-language numeric encodings and the source-level
+ownership gates. It does NOT establish Gowin synthesis or hardware
+timing/audio correctness. Invoke from the repository root:
+    python tools/test_audiocfg_contract.py
+"""
+from pathlib import Path
+import re
+
+ROOT = Path(__file__).resolve().parents[1]
+BOARD = ROOT / "boards" / "a2n20v2-Enhanced"
+H = (BOARD / "src/a2n20_bl616/firmware_host/settings.h").read_text()
+TOP = (BOARD / "hdl/top.sv").read_text()
+GLU = (ROOT / "hdl/sound/sound_glu.sv").read_text()
+SPI = (BOARD / "hdl/bl616/bl616_spi_connector.sv").read_text()
+MENU = (BOARD / "src/a2n20_bl616/firmware_host/menu.c").read_text()
+
+MODE = {
+    "AUDIO_MB_ENHANCED": 0,
+    "AUDIO_MB_ORIGINAL": 1,
+    "AUDIO_DOC_NATIVE": 2,
+    "AUDIO_SHARED": 3,
+}
+for name, value in MODE.items():
+    assert re.search(rf"#define\s+{name}\s+{value}u\b", H), name
+
+# Model the gates in top.sv and assert the mutually exclusive ownership
+# truth table, then verify each referenced condition is present in the HDL.
+for mode in range(4):
+    enhanced = mode == 0
+    original = mode == 1
+    native = mode == 2
+    shared = mode == 3
+    doc_bridge = enhanced
+    doc_cpu = native or shared
+    mb_visible = not native
+    ay_audio = original or shared
+    assert not (doc_bridge and doc_cpu), mode
+    assert mb_visible == (enhanced or original or shared), mode
+    assert ay_audio == (original or shared), mode
+    assert doc_bridge or doc_cpu or original, mode
+
+for needle in [
+    "audio_enhanced_w = AUDIO_MODE_MB_DOC && (mcu_audio_mode_w == 2'd0)",
+    "audio_original_w = AUDIO_MODE_MB_DOC && (mcu_audio_mode_w == 2'd1)",
+    "audio_native_w   = AUDIO_MODE_MB_DOC && (mcu_audio_mode_w == 2'd2)",
+    "audio_shared_w   = AUDIO_MODE_MB_DOC && (mcu_audio_mode_w == 2'd3)",
+    ".reset_n_i(system_reset_n_w && audio_enhanced_w)",
+    ".active_i(audio_mb_enabled_w)",
+    "audio_shared_w ? shared_mix_l_w",
+    "audio_enhanced_w ? (mb_fx_ay_l_w ? mb_fx_pcm_l : sg_audio_l)",
+    "wire native_doc_slot_w = AUDIO_MODE_MB_DOC && audio_native_doc_w",
+]:
+    assert needle in TOP, needle
+for needle in [
+    "mb_owner_w = MB_DOC_MODE && (audio_mode_i == 2'd0)",
+    "native_owner_w = !MB_DOC_MODE || (audio_mode_i[1])",
+    "native_slot_sel_i && (a2bus_if.addr[3:2] == 2'b00)",
+    "mb_owner_w ? mb_doc_wr_i : doc_wr_r",
+    ".cs_n_i(~(doc_host_wr_w || doc_host_rd_w))",
+    "doc_shadow[scrub_ptr_r] <= 8'h00",
+]:
+    assert needle in GLU, needle
+for needle in ["7'h6F: reg_rdata = {6'b101000, audio_mode_r}",
+               "audio_mode_locked_r <= 1'b1",
+               "7'h6F: if (!audio_mode_locked_r"]:
+    assert needle in SPI, needle
+assert "SAVE FOR NEXT BOOT (ENTER)" in MENU
+assert "A3: ROUTING IS ACTIVE AFTER BOOT" in MENU
+print("AUDIOCFG A1/A2/A3 source contracts: PASS (not a synthesis test)")

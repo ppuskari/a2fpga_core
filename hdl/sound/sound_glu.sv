@@ -200,16 +200,31 @@ assign debug_sound_control_o =
     logic [7:0] doc_shadow [0:255];
     // One 2KB readback mirror, BSRAM-friendly synchronous read port.
     // It reflects CPU register writes; live DOC status is separately exposed.
+    // The real DOC resets on Apple /RES; scrub this mirror on each reset too.
     generate if (MB_DOC_MODE) begin : gen_doc_shadow
         integer init_idx;
+        logic [7:0] scrub_ptr_r;
+        logic scrub_active_r;
         initial begin
             for (init_idx = 0; init_idx < 256; init_idx = init_idx + 1)
                 doc_shadow[init_idx] = 8'h00;
         end
         always_ff @(posedge a2bus_if.clk_logic) begin
-            doc_shadow_q <= doc_shadow[sound_ptr_lo_r];
-            if (doc_host_wr_w && !mb_owner_w)
-                doc_shadow[doc_host_addr_w] <= doc_host_data_w;
+            if (!a2bus_if.system_reset_n) begin
+                doc_shadow_q <= 8'h00;
+                scrub_ptr_r <= 8'h00;
+                scrub_active_r <= 1'b1;
+            end else begin
+                doc_shadow_q <= doc_shadow[sound_ptr_lo_r];
+                if (scrub_active_r) begin
+                    doc_shadow[scrub_ptr_r] <= 8'h00;
+                    scrub_ptr_r <= scrub_ptr_r + 1'b1;
+                    if (scrub_ptr_r == 8'hFF)
+                        scrub_active_r <= 1'b0;
+                end else if (doc_host_wr_w && !mb_owner_w) begin
+                    doc_shadow[doc_host_addr_w] <= doc_host_data_w;
+                end
+            end
         end
     end else begin : gen_no_shadow
         always_comb doc_shadow_q = doc_data_o_w;

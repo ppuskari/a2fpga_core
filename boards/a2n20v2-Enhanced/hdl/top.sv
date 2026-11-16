@@ -470,6 +470,10 @@ module top #(
     slot_if slot_if();
     slotmaker_config_if slotmaker_config_if();
 
+    // Place mode bus outside the BL616 conditional so its width remains
+    // defined even in a no-MCU diagnostic build.
+    wire [1:0] mcu_audio_mode_w;
+
     slotmaker slotmaker (
         .a2bus_if(a2bus_if),
         .a2mem_if(a2mem_if),
@@ -597,7 +601,6 @@ module top #(
     wire       mcu_ws2812_w;
     wire       mcu_ready_w;
     wire [39:0] mcu_scratch_w;   // 5 MCU scratch regs {s4,s3,s2,s1,s0} for debug overlay
-    wire [1:0]  mcu_audio_mode_w; // accepted boot profile, locked by 0x6B
 
     // Uthernet2 (W5100) backing-store host link (SPI SPACE 3 <-> card port B)
     wire        u2_host_wr_w;
