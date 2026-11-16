@@ -147,7 +147,14 @@ module mb_doc_fx_events #(
                             event_valid_o[i] <= 1'b1;
                             event_patch_o[i] <= choose_patch(
                                 noise_period_i[i], tone_mask_w[i], env_mask_w[i]);
-                            event_velocity_o[i] <= energy_w[i];
+                            // A fresh R13 attack may be observed while the
+                            // native YM envelope counter is momentarily at
+                            // zero. Do not create an inaudible DOC one-shot.
+                            // Future parity mode will apply the full live
+                            // YM envelope curve, not this attack fallback.
+                            event_velocity_o[i] <=
+                                (energy_w[i]==8'd0 && (|env_mask_w[i])) ?
+                                    8'd128 : energy_w[i];
                             event_noise_mask_o[i] <= noise_mask_w[i];
                             event_tone_mask_o[i] <= tone_mask_w[i];
                             event_envelope_mask_o[i] <= env_mask_w[i];
