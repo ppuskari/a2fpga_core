@@ -952,6 +952,16 @@ void disk_poll(void)
                 s_released = true;
                 osd_log("A2: RESET RELEASED%s%s", any ? "" : " (NO MEDIA)",
                         rst_ok ? "" : " (0x2E UNCONFIRMED)");
+                // The initial A3 boot log scrolls away during USB startup.
+                // Keep the *actual* FPGA route in the final console rows.
+                uint8_t audio_req = fpga_spi_reg_read(0x6Fu);
+                uint8_t audio_route = fpga_spi_reg_read(0x6Bu);
+                uint8_t wanted = settings()->audio_mode;
+                bool audio_ok = audio_req == (uint8_t)(0xA0u | wanted) &&
+                                audio_route == (uint8_t)(0xD0u | wanted);
+                osd_log("AUDIOCFG S=%u FPGA=%02X RT=%02X %s",
+                        (unsigned)wanted, (unsigned)audio_req,
+                        (unsigned)audio_route, audio_ok ? "OK" : "MISMATCH");
             }
         }
         /* (BT_RST_RELEASED is stamped at the top of disk_poll, independent of

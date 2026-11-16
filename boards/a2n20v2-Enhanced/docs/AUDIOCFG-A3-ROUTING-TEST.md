@@ -158,3 +158,40 @@ menu text if the MCU was not rebuilt; the new diagnostic requires both.
 If the menu reports `A3 VERIFIED` with Original but music still sounds
 like Enhanced, capture the FPGA/MCU stamps and audio behavior: that is a
 real audio-routing defect requiring investigation, not an outdated core.
+
+
+## A3-R1 boot latch fix (Nov 16, 2026)
+
+Hardware observation: \`FLASH SAVED=ORIGINAL MB\` while both
+\`FPGA BOOT REQUEST\` and \`FPGA ACTIVE AUDIO\` remain \`ENHANCED MB\`.
+The previous \`A3 VERIFIED\` message meant only that the *two FPGA registers
+agreed with each other*, not with saved settings.
+
+Cause in RTL: an unconditional write to SPI register 0x6B during slot map
+configuration locks audio_mode_r until **FPGA device reset**. The menu's
+\`RESTART MCU\` only restarts the BL616 firmware; it does **not** reset the
+FPGA, so the saved mode cannot be applied after a warm MCU restart.
+
+**Boot rearm protocol:** at the start of every BL616 boot, before selecting
+audio or issuing the slot-map strobe, the MCU writes 0xF0 to register 0x6F.
+The updated FPGA then clears the old mode lock, asserts the Apple II reset
+hold through the existing bus interface, clears the reset-release latch, and
+restarts the 15-second failsafe. The MCU follows with saved mode 0-3,
+verifies both register readbacks (0x6F = A0|mode; 0x6B = D0|mode), and
+eventually writes 0x6B to reconfigure slots/lock the new personality.
+The normal USB/media boot process then releases Apple reset via 0x2E.
+
+The menu now reports \`SAVED != ACTIVE\` instead of a false \`A3 VERIFIED\`
+when mode 1 has been saved but the FPGA is still in mode 0. It also
+recommends \`RESTART MCU\`. The end-of-boot log repeats a concise status:
+
+    AUDIOCFG S=1 FPGA=A1 RT=D1 OK
+
+**Test:** update the FPGA .bin *and* BL616 Stage2 .bin, save Original,
+return to Main Menu, choose RESTART MCU (not an Apple keyboard reset);
+after boot, verify both the readbacks and dual AY PSG plus SSI263 sound.
+Repeat Enhanced -> Original several times and include a cold power-on.
+A keyboard Apple RESET alone cannot change the boot mode. Existing
+SynthLAB and speech ROMs remain unchanged.
+
+No claim is made of synthesis success or hardware validation of this fix.

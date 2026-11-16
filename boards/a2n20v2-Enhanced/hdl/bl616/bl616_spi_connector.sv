@@ -123,6 +123,8 @@ module bl616_spi_connector #(
     // This register provides boot configuration/readback only (A1/A2).
     reg [1:0] audio_mode_r;
     reg audio_mode_locked_r;
+    // START_NEW_BOOT (0x6F <- F0) resets the retained FPGA boot lock.
+    reg audio_boot_rearm_pulse_r;
     assign audio_mode_o = audio_mode_r;
 
     wire        mem_wr_en;
@@ -219,7 +221,7 @@ module bl616_spi_connector #(
     reg               a2_rst_release_r;   // set by reg 0x2E write
     reg [RST_CW-1:0]  rst_hold_cnt_r;
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
+        if (!rst_n || audio_boot_rearm_pulse_r)
             rst_hold_cnt_r <= '0;
         else if (rst_hold_cnt_r < RST_HOLD_BACKSTOP[RST_CW-1:0])
             rst_hold_cnt_r <= rst_hold_cnt_r + 1'b1;
@@ -959,6 +961,7 @@ module bl616_spi_connector #(
             slot_reconfig_r  <= 1'b0;
             audio_mode_r     <= 2'd0; // Enhanced legacy baseline at reset
             audio_mode_locked_r <= 1'b0;
+            audio_boot_rearm_pulse_r <= 1'b0;
             led_o            <= 5'd0;
             ws2812_o         <= 1'b0;
             capture_mode_o   <= 3'd0;
@@ -971,6 +974,7 @@ module bl616_spi_connector #(
             w5100_cmd_clr_r  <= 4'd0;
         end else begin
             // One-shot clears
+            audio_boot_rearm_pulse_r <= 1'b0;
             cardrom_release_r <= 1'b0;
             volume_ack_r[0]   <= 1'b0;
             volume_ack_r[1]   <= 1'b0;
@@ -1097,9 +1101,19 @@ module bl616_spi_connector #(
                         sd_tx_data_r  <= reg_wdata;
                         sd_tx_start_r <= 1'b1;
                     end
-                    7'h6F: if (!audio_mode_locked_r &&
-                                 reg_wdata[7:2] == 6'd0)
-                        audio_mode_r <= reg_wdata[1:0];
+                    7'h6F: begin
+                        // MCU soft reboot does not reset FPGA fabric. Re-arm
+                        // a new Apple startup while keeping DOC mode stable
+                        // until the Apple II has been put back in RESET.
+                        if (reg_wdata == 8'hF0) begin
+                            a2_rst_release_r <= 1'b0;
+                            audio_boot_rearm_pulse_r <= 1'b1;
+                            audio_mode_locked_r <= 1'b0;
+                        end else if (!audio_mode_locked_r &&
+                                     reg_wdata[7:2] == 6'd0) begin
+                            audio_mode_r <= reg_wdata[1:0];
+                        end
+                    end
 
                     // Page 7: Bus event FIFO control
                     7'h77: fifo_reg_pop_r  <= 1'b1;  // FIFO_POP

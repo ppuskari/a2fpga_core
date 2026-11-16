@@ -1030,14 +1030,17 @@ static void audio_build(void)
     uint8_t route = fpga_spi_reg_read(REG_AUDIO_ROUTE_A3);
     if ((route & 0xFCu) == 0xD0u) {
         mi_add(MI_INFO, "FPGA ACTIVE AUDIO", audio_name(route & 3u));
-        mi_add(MI_INFO, "FPGA ROUTING",
-               (core == (uint8_t)(0xA0u | (route & 3u))) ?
-               "A3 VERIFIED" : "MISMATCH");
+        if (core != (uint8_t)(0xA0u | (route & 3u)))
+            mi_add(MI_INFO, "FPGA ROUTING", "FPGA MISMATCH");
+        else if ((route & 3u) != settings()->audio_mode)
+            mi_add(MI_INFO, "FPGA ROUTING", "SAVED != ACTIVE");
+        else
+            mi_add(MI_INFO, "FPGA ROUTING", "A3 VERIFIED");
     } else {
         mi_add(MI_INFO, "FPGA ACTIVE AUDIO", "NO A3 CORE");
         mi_add(MI_INFO, "REFLASH FPGA .BIN FOR AUDIO ROUTE", "");
     }
-    mi_add(MI_INFO, "POWER CYCLE AFTER SAVING TO APPLY", "");
+    mi_add(MI_INFO, "AFTER SAVE: RESTART MCU TO APPLY", "");
 }
 static const menu_screen_t SCR_AUDIO = { "AUDIO CONFIG", audio_build };
 static void audio_enter(int id)

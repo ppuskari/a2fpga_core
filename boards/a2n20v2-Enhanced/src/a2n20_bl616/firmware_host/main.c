@@ -1242,12 +1242,17 @@ int main(void)
         uint8_t route_read = 0;
         int verified = 0;
         if (ready) {
+            // Explicit boot epoch: FPGA's 0x6B lock survives RESTART MCU.
+            // New A3 gateware now asserts Apple reset and clears that lock.
+            fpga_spi_reg_write(0x6Fu, 0xF0u);
+            bflb_mtimer_delay_us(100);
             for (int attempt = 0; attempt < 5 && !verified; attempt++) {
                 fpga_spi_reg_write(0x6Fu, mode);
                 request_read = fpga_spi_reg_read(0x6Fu);
                 route_read = fpga_spi_reg_read(0x6Bu);
                 verified = request_read == (uint8_t)(0xA0u | mode) &&
                            route_read == (uint8_t)(0xD0u | mode);
+                if (!verified) bflb_mtimer_delay_us(100);
             }
         }
         if (verified) {

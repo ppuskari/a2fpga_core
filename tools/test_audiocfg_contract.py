@@ -66,11 +66,16 @@ for needle in [
     assert needle in GLU, needle
 for needle in ["7'h6F: reg_rdata = {6'b101000, audio_mode_r}",
                "7'h6B: reg_rdata = {6'b110100, audio_active_route_i}",
+               "reg_wdata == 8'hF0",
+               "audio_boot_rearm_pulse_r <= 1'b1",
                "audio_mode_locked_r <= 1'b1",
                "7'h6F: if (!audio_mode_locked_r"]:
     assert needle in SPI, needle
 assert "SAVE FOR NEXT BOOT (ENTER)" in MENU
 assert "FPGA ACTIVE AUDIO" in MENU
 assert "A3 VERIFIED" in MENU
+assert "SAVED != ACTIVE" in MENU
 assert "0x6Bu" in (BOARD / "src/a2n20_bl616/firmware_host/main.c").read_text()
+assert "fpga_spi_reg_write(0x6Fu, 0xF0u)" in (BOARD / "src/a2n20_bl616/firmware_host/main.c").read_text()
+assert 'AUDIOCFG S=%u FPGA=%02X RT=%02X %s' in (BOARD / "src/a2n20_bl616/firmware_host/disk.c").read_text()
 print("AUDIOCFG A1/A2/A3 source contracts: PASS (not a synthesis test)")
