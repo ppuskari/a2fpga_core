@@ -65,7 +65,28 @@ module tb_mb_doc_fx_playback;
     integer l_fx_halts=0,l_fx_wtp=0,l_fx_run=0;
     integer r_fx_halts=0,r_fx_wtp=0,r_fx_run=0;
     integer piano_wtp=0;
+    integer fx6_count=0,fx7_count=0;
+    logic [7:0] fx6_addrs[0:7],fx6_data[0:7];
+    logic [7:0] fx7_addrs[0:7],fx7_data[0:7];
     always @(posedge clk) if(reset_n && doc_wr) begin
+        if(doc_addr==8'hA6 || doc_addr==8'h86 ||
+           doc_addr==8'hC6 || doc_addr==8'h06 ||
+           doc_addr==8'h26 || doc_addr==8'h46) begin
+            if(fx6_count<8) begin
+                fx6_addrs[fx6_count]=doc_addr;
+                fx6_data[fx6_count]=doc_data;
+            end
+            fx6_count++;
+        end
+        if(doc_addr==8'hA7 || doc_addr==8'h87 ||
+           doc_addr==8'hC7 || doc_addr==8'h07 ||
+           doc_addr==8'h27 || doc_addr==8'h47) begin
+            if(fx7_count<8) begin
+                fx7_addrs[fx7_count]=doc_addr;
+                fx7_data[fx7_count]=doc_data;
+            end
+            fx7_count++;
+        end
         if(doc_addr==8'h86 && doc_data==8'h50) l_fx_wtp++;
         if(doc_addr==8'h87 && doc_data==8'h40) r_fx_wtp++;
         if(doc_addr==8'hA6 && doc_data==8'h11) l_fx_halts++;
@@ -100,6 +121,15 @@ module tb_mb_doc_fx_playback;
         @(negedge clk);
         if(l_fx_wtp<1 || l_fx_halts<1)
             $fatal(1,"Left oscillator 6 did not play laser one-shot");
+        if(fx6_count!==7 ||
+           fx6_addrs[0]!==8'hA6 || fx6_data[0]!==8'h11 ||
+           fx6_addrs[1]!==8'h86 || fx6_data[1]!==8'h50 ||
+           fx6_addrs[2]!==8'hC6 || fx6_data[2]!==8'h18 ||
+           fx6_addrs[3]!==8'h06 || fx6_data[3]!==8'h00 ||
+           fx6_addrs[4]!==8'h26 || fx6_data[4]!==8'h3C ||
+           fx6_addrs[5]!==8'h46 || fx6_data[5]!==8'd208 ||
+           fx6_addrs[6]!==8'hA6 || fx6_data[6]!==8'h10)
+            $fatal(1,"OSC6 initial one-shot command order or calibration wrong");
         if(piano_wtp<1) $fatal(1,"Existing piano voice lost");
 
         // Independent right-chip percussion -> kick on DOC7.
@@ -110,6 +140,15 @@ module tb_mb_doc_fx_playback;
         @(negedge clk);
         if(r_fx_wtp<1 || r_fx_halts<1)
             $fatal(1,"Right oscillator 7 did not play percussion one-shot");
+        if(fx7_count!==7 ||
+           fx7_addrs[0]!==8'hA7 || fx7_data[0]!==8'h01 ||
+           fx7_addrs[1]!==8'h87 || fx7_data[1]!==8'h40 ||
+           fx7_addrs[2]!==8'hC7 || fx7_data[2]!==8'h10 ||
+           fx7_addrs[3]!==8'h07 || fx7_data[3]!==8'h00 ||
+           fx7_addrs[4]!==8'h27 || fx7_data[4]!==8'h4D ||
+           fx7_addrs[5]!==8'h47 || fx7_data[5]!==8'd208 ||
+           fx7_addrs[6]!==8'hA7 || fx7_data[6]!==8'h00)
+            $fatal(1,"OSC7 initial one-shot command order or calibration wrong");
 
         if(writes!==6528)
             $fatal(1,"FX command unexpectedly rewrote sample SDRAM");
