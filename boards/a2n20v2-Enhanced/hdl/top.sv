@@ -57,6 +57,8 @@ module top #(
     // M6.4.1: publish coherent musical snapshots to the DOC scanner.
     // Native AY/FM writes, SSI263 and the HDL video path stay unchanged.
     parameter bit MB_DOC_COHERENT_PUBLISH_ENABLE = 1'b1,
+    // M6.5a diagnostic capture only: does not generate FX audio yet.
+    parameter bit MB_DOC_FX_EVENT_CAPTURE_ENABLE = 1'b1,
     parameter bit MOCKINGBOARD_ENABLE = 0,
     // SSI speech can coexist with exclusive AY-to-DOC music ownership.
     parameter bit MOCKINGBOARD_SSI263_ENABLE = 1'b1,
@@ -1404,7 +1406,8 @@ wire [7:0] doc_128k_status_w;
                 .REST_MUTE_ENABLE(MB_DOC_REST_MUTE_ENABLE),
                 .FX_AY_BYPASS_ENABLE(MB_DOC_FX_AY_BYPASS_ENABLE),
                 .DECLICK_ENABLE(MB_DOC_DECLICK_ENABLE),
-                .COHERENT_PUBLISH_ENABLE(MB_DOC_COHERENT_PUBLISH_ENABLE)
+                .COHERENT_PUBLISH_ENABLE(MB_DOC_COHERENT_PUBLISH_ENABLE),
+                .FX_EVENT_CAPTURE_ENABLE(MB_DOC_FX_EVENT_CAPTURE_ENABLE)
             ) bridge (
                 .clk_i(clk_logic_w),
                 .reset_n_i(system_reset_n_w),
