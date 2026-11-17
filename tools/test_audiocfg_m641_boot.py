@@ -2,6 +2,7 @@
 """M641-safe AUDIOCFG boot/source checks. Not FPGA synthesis or MCU build."""
 from pathlib import Path
 import hashlib
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 B = ROOT / "boards" / "a2n20v2-Enhanced"
@@ -25,9 +26,19 @@ assert git_blob(d) == "0e8a7b7c687a434077e78001e205e309f61d12ee"
 # unchanged. This protects native Slot 6 disk autoboot, USB and reset order.
 start = m.index("    /* AUDIOCFG: M641 still owns")
 end = m.index("    /* Apply the persisted slot map EARLY", start)
-assert git_blob((m[:start] + m[end:]).encode("utf-8")) == (
-    "cc90ddc7b93e735c4255bafb489f4f8e1b5db0df"
-), "M641 main.c changed outside AUDIOCFG early selection"
+# Compare the actual file contents, not a source hash that may have been
+# produced before line-ending normalization by the repository API.
+# The M641 reference commit is an ancestor of this branch and is available
+# locally in the normal clone without any remote branch checkout.
+M641_COMMIT = "8af7df27156e1a95b5346b9851e20d69697786d8"
+MAIN_PATH = "boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/main.c"
+m641_main = subprocess.check_output(
+    ["git", "show", f"{M641_COMMIT}:{MAIN_PATH}"], cwd=ROOT
+).replace(bytes([13, 10]), bytes([10]))
+current_without_audio = (m[:start] + m[end:]).encode("utf-8")
+assert current_without_audio == m641_main, (
+    "M641 main.c changed outside AUDIOCFG early selection"
+)
 assert "#define SETTINGS_VERSION  3" in settings_h
 for x in ("AUDIO_MB_ENHANCED 0u", "AUDIO_MB_ORIGINAL 1u",
           "AUDIO_DOC_NATIVE  2u", "AUDIO_SHARED      3u"):
