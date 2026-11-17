@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Source-only checks; not a Gowin simulation, synthesis or MCU compiler."""
 from pathlib import Path
+import re
+
 r = Path(__file__).resolve().parents[1]
 b = r / "boards/a2n20v2-Enhanced"
 rtl = (b / "hdl/bl616/bl616_spi_connector.sv").read_text(encoding="utf-8")
@@ -14,8 +16,12 @@ assert "end else if (reg_wdata[7:2] == 6'd0) begin" in rtl
 assert "audio_mode_r <= reg_wdata[1:0];" in rtl
 assert "7'h6F: reg_rdata = {6'b101000, audio_mode_r};" in rtl
 assert "7'h6B: reg_rdata = {6'b110100, audio_active_route_i};" in rtl
-for i,name in enumerate(("audio_enhanced_w","audio_original_w","audio_native_w","audio_shared_w")):
-    assert f"{name} = AUDIO_MODE_MB_DOC && (mcu_audio_mode_w == 2'd{i})" in top
+for i, name in enumerate(("audio_enhanced_w", "audio_original_w",
+                          "audio_native_w", "audio_shared_w")):
+    # RTL aligns declarations with variable spaces before '='. Match
+    # Verilog tokens, not pretty-printing or indentation.
+    pattern = rf"\\bwire\\s+{re.escape(name)}\\s*=\\s*AUDIO_MODE_MB_DOC\\s*&&\\s*\\(\\s*mcu_audio_mode_w\\s*==\\s*2'd{i}\\s*\\)\\s*;"
+    assert re.search(pattern, top), f"{name} must select AUDIO_MODE_MB_DOC personality {i}"
 assert "settings()->audio_mode = s_audio_draft;" in menu
 assert "fpga_spi_reg_write(REG_AUDIO_MODE, s_audio_draft);" in menu
 assert "AUD LIVE S=%u F=%02X RT=%02X %s" in menu
