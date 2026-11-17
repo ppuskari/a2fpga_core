@@ -20,7 +20,7 @@ for i, name in enumerate(("audio_enhanced_w", "audio_original_w",
                           "audio_native_w", "audio_shared_w")):
     # RTL aligns declarations with variable spaces before '='. Match
     # Verilog tokens, not pretty-printing or indentation.
-    pattern = rf"\\bwire\\s+{re.escape(name)}\\s*=\\s*AUDIO_MODE_MB_DOC\\s*&&\\s*\\(\\s*mcu_audio_mode_w\\s*==\\s*2'd{i}\\s*\\)\\s*;"
+    pattern = rf"\bwire\s+{re.escape(name)}\s*=\s*AUDIO_MODE_MB_DOC\s*&&\s*\(\s*mcu_audio_mode_w\s*==\s*2'd{i}\s*\)\s*;"
     assert re.search(pattern, top), f"{name} must select AUDIO_MODE_MB_DOC personality {i}"
 assert "settings()->audio_mode = s_audio_draft;" in menu
 assert "fpga_spi_reg_write(REG_AUDIO_MODE, s_audio_draft);" in menu
