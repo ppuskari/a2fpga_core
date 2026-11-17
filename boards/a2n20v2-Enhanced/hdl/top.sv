@@ -1615,6 +1615,28 @@ wire [7:0] doc_128k_status_w;
     end
     wire signed [15:0] mb_fx_pcm_l = 16'(ay_hp_l_q16 >>> 12);
     wire signed [15:0] mb_fx_pcm_r = 16'(ay_hp_r_q16 >>> 12);
+    // Original native AY volume: measured ~-24dBFS, desired -2dBFS.
+    // 201/16 = 12.5625x (+21.98dB), shifts/adds, SATURATED.
+    // Limit pre-HDMI music to 18508 so the existing 45/32 gain
+    // reaches ~26028 (-2dBFS). Only ORIGINAL music/FX are boosted;
+    // SSI263 speech is added later, unchanged.
+    function automatic signed [15:0] mb_original_ay_music_gain;
+        input signed [15:0] sample;
+        logic signed [31:0] extended;
+        logic signed [31:0] scaled;
+    begin
+        extended = {{16{sample[15]}}, sample};
+        scaled = ((extended <<< 7) + (extended <<< 6) +
+                  (extended <<< 3) + extended) >>> 4;
+        if (scaled > 32'sd18508)
+            mb_original_ay_music_gain = 16'sd18508;
+        else if (scaled < -32'sd18508)
+            mb_original_ay_music_gain = -16'sd18508;
+        else
+            mb_original_ay_music_gain = scaled[15:0];
+    end
+    endfunction
+
     // In Shared, combine the native DOC and real AY PSG at unity before
     // HDMI's native +3dB calibration. Enhanced remains exactly M641.
     wire signed [16:0] shared_pcm_l_w =
@@ -1636,11 +1658,11 @@ wire [7:0] doc_128k_status_w;
     // This avoids applying an unintended second 8x boost to P5 speech.
     wire signed [15:0] mb_music_base_l_w =
         audio_enhanced_w ? (mb_fx_ay_l_w ? mb_fx_pcm_l : sg_audio_l) :
-        audio_original_w ? mb_fx_pcm_l :
+        audio_original_w ? mb_original_ay_music_gain(mb_fx_pcm_l) :
         audio_shared_w ? shared_mix_l_w : sg_audio_l;
     wire signed [15:0] mb_music_base_r_w =
         audio_enhanced_w ? (mb_fx_ay_r_w ? mb_fx_pcm_r : sg_audio_r) :
-        audio_original_w ? mb_fx_pcm_r :
+        audio_original_w ? mb_original_ay_music_gain(mb_fx_pcm_r) :
         audio_shared_w ? shared_mix_r_w : sg_audio_r;
     // Widen before gain to avoid 16-bit wraparound; compensate for the
     // downstream music HDMI 8x gain only in MB-DOC mode. A value of 3
@@ -1856,9 +1878,37 @@ wire [15:0] audio_sample_word[1:0];
     end
     endfunction
 
+    // Original mode retains the existing 45/32 (+3dB) output
+    // calibration, but clamps the final mix at -2dBFS. This does NOT
+    // multiply SSI263 speech again, unlike the Enhanced DOC 8x path.
+    function automatic signed [15:0] mb_original_final_minus_2db;
+        input signed [15:0] sample;
+        logic signed [15:0] gained;
+    begin
+        gained = hdmi_gain_plus_3db(sample);
+        if (gained > 16'sd26028)
+            mb_original_final_minus_2db = 16'sd26028;
+        else if (gained < -16'sd26028)
+            mb_original_final_minus_2db = -16'sd26028;
+        else
+            mb_original_final_minus_2db = gained;
+    end
+    endfunction
+
+    function automatic mb_original_gain_would_limit;
+        input signed [15:0] sample;
+    begin
+        mb_original_gain_would_limit =
+            (sample > 16'sd18508) || (sample < -16'sd18508);
+    end
+    endfunction
+
     wire hdmi_gain_clip_w = audio_enhanced_w ?
         (mb_doc_gain_would_limit($signed(audio_sample_word_raw[0])) ||
          mb_doc_gain_would_limit($signed(audio_sample_word_raw[1]))) :
+        audio_original_w ?
+        (mb_original_gain_would_limit($signed(audio_sample_word_raw[0])) ||
+         mb_original_gain_would_limit($signed(audio_sample_word_raw[1]))) :
         (hdmi_gain_would_saturate($signed(audio_sample_word_raw[0])) ||
          hdmi_gain_would_saturate($signed(audio_sample_word_raw[1])));
 
@@ -1903,10 +1953,14 @@ wire [15:0] audio_sample_word[1:0];
 
     assign audio_sample_word[0] = audio_enhanced_w ?
         mb_doc_gain_minus_2db($signed(audio_sample_word_raw[0])) :
+        audio_original_w ?
+        mb_original_final_minus_2db($signed(audio_sample_word_raw[0])) :
         hdmi_gain_plus_3db($signed(audio_sample_word_raw[0]));
 
     assign audio_sample_word[1] = audio_enhanced_w ?
         mb_doc_gain_minus_2db($signed(audio_sample_word_raw[1])) :
+        audio_original_w ?
+        mb_original_final_minus_2db($signed(audio_sample_word_raw[1])) :
         hdmi_gain_plus_3db($signed(audio_sample_word_raw[1]));
 
 
