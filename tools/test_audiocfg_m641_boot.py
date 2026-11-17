@@ -79,7 +79,7 @@ assert "uint8_t  audio_mode;" in settings_h
 assert "uint8_t  reserved[12];" in settings_h
 assert "s_cfg.audio_mode  = AUDIO_MB_ENHANCED;" in settings_c
 assert "SAVED != ACTIVE" in menu
-assert "FULL POWER CYCLE TO APPLY" in menu
+assert "RESTART MCU OR COLD BOOT" in menu
 
 steps = ("fpga_spi_init();", "fpga_spi_reg_write(REG_A2BUS_READY, 1);",
          "settings_init();", "const uint8_t wanted = settings()->audio_mode;",
@@ -104,7 +104,12 @@ assert "AUDIOCFG PRE RST=%02X REL=%02X ARM=%u" in m
 
 # No early Apple /RESET release or MCU-only warm restart re-arm.
 assert "fpga_spi_reg_write(0x2E" not in m
-assert "fpga_spi_reg_write(0x6Fu, 0xF0u)" not in menu
+# F0 is permissible in menu only for explicit user-requested restart.
+assert menu.count("fpga_spi_reg_write(0x6Fu, 0xF0u);") == 1
+assert "static void root_restart_mcu(int id)" in menu
+assert "fwupdate_request_restart();" in menu
+assert menu.index("fpga_spi_reg_write(0x6Fu, 0xF0u);") < menu.index("fwupdate_request_restart();")
+assert "AUDIOCFG MANUAL REBOOT: FPGA %s" in menu
 assert "FPGA_SPI_REG_WRITE_CS_HOLD_US 3u" in spi
 assert spi.count("bflb_mtimer_delay_us(FPGA_SPI_REG_WRITE_CS_HOLD_US);") == 2
 

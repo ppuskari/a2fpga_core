@@ -61,3 +61,24 @@ If Apple reset is already released, it skips rearm. It reports
 the guarded retry from a late-start fallback. A failure logs FALLBACK
 and must not block normal physical Disk II boot. This test has not yet
 been compiled or hardware validated; preserve known-good M641 image.
+
+
+## Explicit MCU + Apple reboot (manual menu action)
+
+A normal MCU firmware restart merely jumps into BL616 XIP and does not
+reload the Tang Nano FPGA. The A3 FPGA 0x6B slot strobe locks audio mode,
+so MCU restart alone left Enhanced active even with Original saved. The
+**Main Menu -> RESTART MCU** action now explicitly sends 0x6F=F0 on an
+A3 FPGA before requesting the existing BL616 application restart. It
+checks the FPGA reset-release latch 0x2E, up to three quick retries.
+This is an *intentional* Apple II reboot: the FPGA clears the mode lock,
+holds /RESET, and restarts its safety backstop. The MCU then performs
+the regular M641 bridge/audio/slot/USB startup, and the **unchanged**
+M641 disk thread performs the sole normal reset release.
+
+A raw BL616 RESET button still does not automatically rearm the FPGA;
+this is deliberate to prevent second-reset regressions at cold startup.
+Use the Menu restart or remove all Apple/Tang/USB power. Automatic
+power-on mode selection is unchanged and may still report FALLBACK;
+that must be diagnosed separately. No changes to FPGA, disk.c or FPGA
+reset timers.
