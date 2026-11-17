@@ -129,5 +129,5 @@ assert "fwupdate_request_restart();" in menu
 assert "FPGA_SPI_REG_WRITE_CS_HOLD_US 3u" in spi
 assert spi.count("bflb_mtimer_delay_us(FPGA_SPI_REG_WRITE_CS_HOLD_US);") == 2
 
-print("PASS: M641 disk/reset preserved except readback-only audio pre-release hook")
+print("PASS: M641 disk/reset preserved except verified audio pre-release hook")
 print("Source check only: cross-compile and physical cold boot unverified")
