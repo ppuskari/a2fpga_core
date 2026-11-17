@@ -1,0 +1,25 @@
+name: AUDIOCFG A3 R6 boot-source verification
+on:
+  push:
+    branches:
+      - petar/audiocfg-a3-r6-clean-boot-20261117
+    paths:
+      - 'boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/**'
+      - 'boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware/fpga_spi.c'
+      - 'tools/test_audiocfg_contract.py'
+      - 'tools/test_audiocfg_c_syntax.py'
+      - '.github/workflows/audiocfg-r6-boot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check boot ordering, FPGA audio routes and one reset owner
+        run: python3 tools/test_audiocfg_contract.py
+      - name: Install C syntax inspection parser
+        run: python3 -m pip install tree-sitter tree-sitter-c
+      - name: Parse modified MCU C and reject duplicate local declarations
+        run: python3 tools/test_audiocfg_c_syntax.py
