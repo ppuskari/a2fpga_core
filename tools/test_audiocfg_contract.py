@@ -91,7 +91,8 @@ DISK = (BOARD / "src/a2n20_bl616/firmware_host/disk.c").read_text()
 assert "bool audiocfg_ensure_boot_mode(bool *did_rearm)" in MAIN
 assert "g_audio_applied_early = ready && audiocfg_ensure_boot_mode(NULL)" in MAIN
 assert "if (ok && g_audio_applied_early)" in MAIN
-assert "audio_ok = audiocfg_ensure_boot_mode(&audio_rearmed)" in DISK
+assert "bool audio_ok = apple_running ? false :" in DISK
+assert "audiocfg_ensure_boot_mode(&audio_rearmed);" in DISK
 assert "if ((!g_slots_applied_early || audio_rearmed) && audio_ok)" in DISK
 assert "bool slots_commit_ok = g_slots_applied_early && !audio_rearmed;" in DISK
 assert "if (audio_ok && slots_commit_ok)" in DISK
