@@ -14,7 +14,7 @@ settings_c = (H / "settings.c").read_text()
 spi = (B / "src/a2n20_bl616/firmware/fpga_spi.c").read_text()
 
 def git_blob(data):
-    return hashlib.sha1(("blob %d\\0" % len(data)).encode() + data).hexdigest()
+    return hashlib.sha1(("blob %d" % len(data)).encode() + bytes([0]) + data).hexdigest()
 
 # The validated M641 physical boot and reset code must remain untouched.
 assert git_blob(d) == "0e8a7b7c687a434077e78001e205e309f61d12ee"
