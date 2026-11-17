@@ -30,6 +30,9 @@ assert "fpga_spi_reg_write(0x6Fu, 0xF0u);" not in main
 assert "fpga_spi_reg_write(0x6Fu, 0xF0u);" not in menu
 assert "fpga_spi_reg_write(0x2E" not in main
 assert "fpga_spi_reg_write(0x2E, 1);" in disk
-assert main.index("fpga_spi_reg_write(0x6Fu, wanted);") < main.index("fpga_spi_reg_write(0x6B, 1);")
+assert main.index("menu_audio_apply_saved_early();") < main.index("fpga_spi_reg_write(0x6B, 1);")
+assert "menu_audio_apply_saved_before_release();" in disk
+assert disk.index("menu_audio_apply_saved_before_release();") < disk.index("fpga_spi_reg_write(REG_CARDROM_REL, 1);")
+assert disk.index("menu_audio_apply_saved_before_release();") < disk.index("fpga_spi_reg_write(0x2E, 1);")
 print("PASS: unlocked FPGA mode, menu save applies live, M641 startup preserved")
 print("SOURCE-ONLY: MCU/FPGA builds and hardware validation pending")

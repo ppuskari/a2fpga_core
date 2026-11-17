@@ -44,9 +44,27 @@ settings_h = (H / "settings.h").read_text(encoding="utf-8")
 settings_c = (H / "settings.c").read_text(encoding="utf-8")
 spi = (B / "src/a2n20_bl616/firmware/fpga_spi.c").read_text(encoding="utf-8")
 
-# The validated M641 physical boot and reset code must remain untouched.
-assert git_blob(d) == "0e8a7b7c687a434077e78001e205e309f61d12ee", (
-    "M641 disk.c differs from the baseline; inspect local modifications")
+# The M641 physical disk service is byte-for-byte golden except for
+# a single guarded AUDIOCFG pre-release SPI reconciliation hook and its
+# header import. Removing those exact additions must reproduce M641.
+M641_COMMIT = "8af7df27156e1a95b5346b9851e20d69697786d8"
+DISK_PATH = "boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/disk.c"
+disk_add_include = (b'#include "menu.h"          /* reapply saved AUDIOCFG '
+                    b'before Apple /RES release */\n')
+disk_add_start = b'                /* AUDIOCFG COLD: M641 reports early-main SPI writes can'
+disk_add_end = b'                menu_audio_apply_saved_before_release();\n\n'
+assert d.count(disk_add_include) == 1
+assert d.count(disk_add_start) == 1
+assert d.count(disk_add_end) == 1
+start = d.index(disk_add_start)
+end = d.index(disk_add_end, start) + len(disk_add_end)
+original_disk = d.replace(disk_add_include, b'')
+original_disk = original_disk[:original_disk.index(disk_add_start)] + original_disk[original_disk.index(disk_add_end, original_disk.index(disk_add_start)) + len(disk_add_end):]
+m641_disk = canonical_git_bytes(subprocess.check_output(
+    ["git", "show", f"{M641_COMMIT}:{DISK_PATH}"], cwd=ROOT))
+assert original_disk == m641_disk, (
+    "Disk.c changed outside the single pre-release AUDIOCFG hook!")
+assert git_blob(m641_disk) == "0e8a7b7c687a434077e78001e205e309f61d12ee"
 
 # Compare only raw bytes OUTSIDE the guarded audio transaction against
 # the original M641 commit. This must work on Windows with core.autocrlf.
@@ -55,7 +73,6 @@ end_marker = b"    /* Apply the persisted slot map EARLY"
 start = main_data.index(start_marker)
 end = main_data.index(end_marker, start)
 current_without_audio = main_data[:start] + main_data[end:]
-M641_COMMIT = "8af7df27156e1a95b5346b9851e20d69697786d8"
 MAIN_PATH = "boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/main.c"
 m641_main = canonical_git_bytes(subprocess.check_output(
     ["git", "show", f"{M641_COMMIT}:{MAIN_PATH}"], cwd=ROOT))
@@ -84,16 +101,16 @@ assert "AUD LIVE S=%u F=%02X RT=%02X %s" in menu
 assert "fpga_spi_reg_write(REG_AUDIO_MODE, s_audio_draft);" in menu
 
 steps = ("fpga_spi_init();", "fpga_spi_reg_write(REG_A2BUS_READY, 1);",
-         "settings_init();", "const uint8_t wanted = settings()->audio_mode;",
-         "fpga_spi_reg_write(0x6Fu, wanted);", "fpga_spi_reg_write(0x6B, 1);",
+         "settings_init();", "menu_audio_apply_saved_early();",
+         "fpga_spi_reg_write(0x6B, 1);",
          "usbh_initialize(0, CONFIG_USB_EHCI_HCCR_BASE);",
          'usb_osal_thread_create("disk"')
 indices = [m.index(x) for x in steps]
 assert indices == sorted(indices), "Unexpected M641 startup ordering"
-assert "ack == (uint8_t)(0xA0u | wanted)" in m
-assert "route == (uint8_t)(0xD0u | wanted)" in m
-assert 'matched ? "OK" : "FALLBACK"' in m
-assert 'AUD INIT RDY=%u A3=%u' in m
+assert "void menu_audio_apply_saved_early(void);" in (H / "menu.h").read_text(encoding="utf-8")
+assert "void menu_audio_apply_saved_before_release(void);" in (H / "menu.h").read_text(encoding="utf-8")
+assert "menu_audio_apply_saved_before_release();" in d.decode("utf-8")
+assert "BOOT EARLY SPI" in menu and "BOOT PRE-RESET" in menu
 
 # The saved-mode selection MUST NOT depend on the old SDRAM-ready
 # result: control registers are available independently of SDRAM status.
@@ -102,10 +119,9 @@ audio_start = m.index(start_marker.decode("ascii"))
 audio_end = m.index("    /* Apply the persisted slot map EARLY", audio_start)
 audio = m[audio_start:audio_end]
 assert "if (ready)" not in audio
-assert "for (int attempt = 0; attempt < 16 && !matched; ++attempt)" in audio
-assert "fpga_spi_reg_read(0x6Fu)" in audio
-assert "fpga_spi_reg_read(0x6Bu)" in audio
-assert "fpga_spi_reg_write(0x6Fu, wanted);" in audio
+assert "menu_audio_apply_saved_early();" in audio
+assert "M641 Disk II mount path" in audio
+assert "if (ready)" not in audio
 assert "fpga_spi_reg_write(0x6Fu, 0xF0u);" not in m
 assert "fpga_spi_reg_write(0x2E" not in m
 assert "fpga_spi_reg_write(0x6Fu, 0xF0u);" not in menu
@@ -113,5 +129,5 @@ assert "fwupdate_request_restart();" in menu
 assert "FPGA_SPI_REG_WRITE_CS_HOLD_US 3u" in spi
 assert spi.count("bflb_mtimer_delay_us(FPGA_SPI_REG_WRITE_CS_HOLD_US);") == 2
 
-print("PASS: M641 disk/reset preserved and A3 audio mode precedes slot commit")
+print("PASS: M641 disk/reset preserved except readback-only audio pre-release hook")
 print("Source check only: cross-compile and physical cold boot unverified")
