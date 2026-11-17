@@ -14,6 +14,9 @@ settings_c = (H / "settings.c").read_text()
 spi = (B / "src/a2n20_bl616/firmware/fpga_spi.c").read_text()
 
 def git_blob(data):
+    # Git stores canonical LF text; Windows checkouts may contain CRLF.
+    # Normalize only CRLF, preserving all other bytes for strict checking.
+    data = data.replace(bytes([13, 10]), bytes([10]))
     return hashlib.sha1(("blob %d" % len(data)).encode() + bytes([0]) + data).hexdigest()
 
 # The validated M641 physical boot and reset code must remain untouched.
