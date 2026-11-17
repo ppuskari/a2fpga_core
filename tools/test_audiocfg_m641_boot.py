@@ -38,7 +38,7 @@ H = B / "src/a2n20_bl616/firmware_host"
 # Read the main source as RAW BYTES, not through locale-sensitive read_text.
 main_data = canonical_git_bytes((H / "main.c").read_bytes())
 m = main_data.decode("utf-8")  # for ASCII source-pattern assertions only
-d = (H / "disk.c").read_bytes()
+d = canonical_git_bytes((H / "disk.c").read_bytes())
 menu = (H / "menu.c").read_text(encoding="utf-8")
 settings_h = (H / "settings.h").read_text(encoding="utf-8")
 settings_c = (H / "settings.c").read_text(encoding="utf-8")
