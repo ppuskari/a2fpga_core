@@ -50,7 +50,7 @@ assert git_blob(d) == "0e8a7b7c687a434077e78001e205e309f61d12ee", (
 
 # Compare only raw bytes OUTSIDE the guarded audio transaction against
 # the original M641 commit. This must work on Windows with core.autocrlf.
-start_marker = b"    /* AUDIOCFG: M641 still owns"
+start_marker = b"    /* AUDIOCFG: select persisted audio BEFORE"
 end_marker = b"    /* Apply the persisted slot map EARLY"
 start = main_data.index(start_marker)
 end = main_data.index(end_marker, start)
@@ -96,7 +96,7 @@ assert 'AUD INIT RDY=%u A3=%u' in m
 # The saved-mode selection MUST NOT depend on the old SDRAM-ready
 # result: control registers are available independently of SDRAM status.
 # An automatic F0 reset is forbidden, as it defeats physical Disk II boot.
-audio_start = m.index("    /* AUDIOCFG: select persisted audio BEFORE")
+audio_start = m.index(start_marker.decode("ascii"))
 audio_end = m.index("    /* Apply the persisted slot map EARLY", audio_start)
 audio = m[audio_start:audio_end]
 assert "if (ready)" not in audio
