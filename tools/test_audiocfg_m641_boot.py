@@ -1,44 +1,76 @@
 #!/usr/bin/env python3
-"""M641-safe AUDIOCFG boot/source checks. Not FPGA synthesis or MCU build."""
+"""M641-safe AUDIOCFG boot/source checks. Not FPGA synthesis or MCU build.
+
+Important: byte-for-byte M641 comparisons use raw Git bytes. Windows'
+default Python text encoding (often cp1252) must NOT transcode the
+non-ASCII Unicode characters in the original UTF-8 C source.
+"""
 from pathlib import Path
 import hashlib
 import subprocess
+import sys
+
+def canonical_git_bytes(data):
+    """Normalize Windows checkout CRLF without decoding/re-encoding text."""
+    return data.replace(bytes([13, 10]), bytes([10]))
+
+def git_blob(data):
+    data = canonical_git_bytes(data)
+    return hashlib.sha1(("blob %d" % len(data)).encode("ascii") +
+                        bytes([0]) + data).hexdigest()
+
+if "--self-test" in sys.argv:
+    original = "/* M641 — bridge → reset */\n".encode("utf-8")
+    windows = original.replace(bytes([10]), bytes([13, 10]))
+    assert original != windows
+    assert canonical_git_bytes(windows) == original
+    assert git_blob(windows) == git_blob(original)
+    # This proves why default cp1252 read_text() followed by UTF-8 encode
+    # was not byte-preserving on a Windows installation without UTF-8 mode.
+    assert original.decode("cp1252").encode("utf-8") != original
+    print("PASS: raw UTF-8 C bytes and Windows CRLF preservation")
+    sys.exit(0)
 
 ROOT = Path(__file__).resolve().parents[1]
 B = ROOT / "boards" / "a2n20v2-Enhanced"
 H = B / "src/a2n20_bl616/firmware_host"
-m = (H / "main.c").read_text()
-d = (H / "disk.c").read_bytes()
-menu = (H / "menu.c").read_text()
-settings_h = (H / "settings.h").read_text()
-settings_c = (H / "settings.c").read_text()
-spi = (B / "src/a2n20_bl616/firmware/fpga_spi.c").read_text()
 
-def git_blob(data):
-    # Git stores canonical LF text; Windows checkouts may contain CRLF.
-    # Normalize only CRLF, preserving all other bytes for strict checking.
-    data = data.replace(bytes([13, 10]), bytes([10]))
-    return hashlib.sha1(("blob %d" % len(data)).encode() + bytes([0]) + data).hexdigest()
+# Read the main source as RAW BYTES, not through locale-sensitive read_text.
+main_data = canonical_git_bytes((H / "main.c").read_bytes())
+m = main_data.decode("utf-8")  # for ASCII source-pattern assertions only
+d = (H / "disk.c").read_bytes()
+menu = (H / "menu.c").read_text(encoding="utf-8")
+settings_h = (H / "settings.h").read_text(encoding="utf-8")
+settings_c = (H / "settings.c").read_text(encoding="utf-8")
+spi = (B / "src/a2n20_bl616/firmware/fpga_spi.c").read_text(encoding="utf-8")
 
 # The validated M641 physical boot and reset code must remain untouched.
-assert git_blob(d) == "0e8a7b7c687a434077e78001e205e309f61d12ee"
-# Every byte of M641 main.c OUTSIDE the single audio-selection block is
-# unchanged. This protects native Slot 6 disk autoboot, USB and reset order.
-start = m.index("    /* AUDIOCFG: M641 still owns")
-end = m.index("    /* Apply the persisted slot map EARLY", start)
-# Compare the actual file contents, not a source hash that may have been
-# produced before line-ending normalization by the repository API.
-# The M641 reference commit is an ancestor of this branch and is available
-# locally in the normal clone without any remote branch checkout.
+assert git_blob(d) == "0e8a7b7c687a434077e78001e205e309f61d12ee", (
+    "M641 disk.c differs from the baseline; inspect local modifications")
+
+# Compare only raw bytes OUTSIDE the guarded audio transaction against
+# the original M641 commit. This must work on Windows with core.autocrlf.
+start_marker = b"    /* AUDIOCFG: M641 still owns"
+end_marker = b"    /* Apply the persisted slot map EARLY"
+start = main_data.index(start_marker)
+end = main_data.index(end_marker, start)
+current_without_audio = main_data[:start] + main_data[end:]
 M641_COMMIT = "8af7df27156e1a95b5346b9851e20d69697786d8"
 MAIN_PATH = "boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/main.c"
-m641_main = subprocess.check_output(
-    ["git", "show", f"{M641_COMMIT}:{MAIN_PATH}"], cwd=ROOT
-).replace(bytes([13, 10]), bytes([10]))
-current_without_audio = (m[:start] + m[end:]).encode("utf-8")
-assert current_without_audio == m641_main, (
-    "M641 main.c changed outside AUDIOCFG early selection"
-)
+m641_main = canonical_git_bytes(subprocess.check_output(
+    ["git", "show", f"{M641_COMMIT}:{MAIN_PATH}"], cwd=ROOT))
+
+if current_without_audio != m641_main:
+    import itertools
+    offset = next((i for i, (a, b) in enumerate(
+        itertools.zip_longest(current_without_audio, m641_main))
+        if a != b), min(len(current_without_audio), len(m641_main)))
+    line = current_without_audio[:offset].count(bytes([10])) + 1
+    raise AssertionError(
+        f"M641 main.c differs outside AUDIOCFG at byte {offset}, line {line}. "
+        "Inspect: git diff -- boards/a2n20v2-Enhanced/src/a2n20_bl616/"
+        "firmware_host/main.c")
+
 assert "#define SETTINGS_VERSION  3" in settings_h
 for x in ("AUDIO_MB_ENHANCED 0u", "AUDIO_MB_ORIGINAL 1u",
           "AUDIO_DOC_NATIVE  2u", "AUDIO_SHARED      3u"):
@@ -60,15 +92,18 @@ assert "ack == (uint8_t)(0xA0u | wanted)" in m
 assert "route == (uint8_t)(0xD0u | wanted)" in m
 assert 'matched ? "OK" : "FALLBACK"' in m
 
-# No early Apple /RESET manipulation or MCU-only warm FPGA mode rearm.
-assert "fpga_spi_reg_write(0x2E" not in m
-# Exactly one protected F0 in main(), never in disk.c or menu.
+# One optional A3 re-arm is allowed only inside the physical reset window.
 assert m.count("fpga_spi_reg_write(0x6Fu, 0xF0u);") == 1
 assert "if (!(reset_status & FPGA_STATUS_A2BUS_RESET_N) &&" in m
 assert "!(release_reg & 1u))" in m
-assert m.index("reset_status = fpga_spi_read_status();") < m.index("fpga_spi_reg_write(0x6Fu, 0xF0u);")
-assert m.index("fpga_spi_reg_write(0x6Fu, 0xF0u);") < m.index("fpga_spi_reg_write(0x6B, 1);")
+assert m.index("reset_status = fpga_spi_read_status();") < m.index(
+    "fpga_spi_reg_write(0x6Fu, 0xF0u);")
+assert m.index("fpga_spi_reg_write(0x6Fu, 0xF0u);") < m.index(
+    "fpga_spi_reg_write(0x6B, 1);")
 assert "AUDIOCFG PRE RST=%02X REL=%02X ARM=%u" in m
+
+# No early Apple /RESET release or MCU-only warm restart re-arm.
+assert "fpga_spi_reg_write(0x2E" not in m
 assert "fpga_spi_reg_write(0x6Fu, 0xF0u)" not in menu
 assert "FPGA_SPI_REG_WRITE_CS_HOLD_US 3u" in spi
 assert spi.count("bflb_mtimer_delay_us(FPGA_SPI_REG_WRITE_CS_HOLD_US);") == 2
