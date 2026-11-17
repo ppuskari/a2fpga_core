@@ -22,6 +22,7 @@
 #include "bflb_mtimer.h"   /* bflb_mtimer_get_time_us — load-latency timing */
 #include "gcr_dsk.h"       /* on-the-fly .dsk/.do <-> 6-and-2 GCR nibble codec */
 #include "settings.h"      /* persisted image overrides + boot preference */
+#include "menu.h"          /* reapply saved AUDIOCFG before Apple /RES release */
 #include "fwupdate.h"
 #include "fpgaupdate.h"      /* firmware self-update (staged from this thread) */
 #include "usbh_core.h"     /* USB supervisor: tree walk + stack recycle */
@@ -928,6 +929,14 @@ void disk_poll(void)
                         fpga_spi_reg_read(0x62), fpga_spi_reg_read(0x63),
                         fpga_spi_reg_read(0x64), fpga_spi_reg_read(0x65),
                         fpga_spi_reg_read(0x66), fpga_spi_reg_read(0x67));
+
+                /* AUDIOCFG COLD: M641 reports early-main SPI writes can
+                 * be dropped. Storage has now mounted over the same
+                 * link, so retry the saved 0x6F mode with A3 readback
+                 * BEFORE CardROM and Apple /RES release. 0x6F is live
+                 * and lock-free; this does not alter the slot map,
+                 * Apple reset, USB scheduling or physical Disk II. */
+                menu_audio_apply_saved_before_release();
 
                 /* Release the CardROM INH overlay BEFORE the Apple II
                  * starts: releasing after opens a race where the CPU's

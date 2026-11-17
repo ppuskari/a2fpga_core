@@ -1232,49 +1232,14 @@ int main(void)
                 settings_loaded_from_flash() ? "FLASH" : "DEFAULTS", dbg);
     }
 
-    /* AUDIOCFG: select persisted audio BEFORE M641's slot commit.
-     * Do not gate this on the initial 'ready' boolean: that boolean
-     * requires SDRAM readiness, but 0x6F is an FPGA control register
-     * independent of SDRAM. On a cold boot it is possible for SDRAM
-     * to miss the 2-second deadline while FPGA control SPI is already
-     * usable. Skipping this write lets 0x6B lock Enhanced (mode 0).
-     *
-     * No F0 re-arm, no Apple reset and no change to normal USB/disk
-     * init. Failed mode selection is nonfatal and logged. A3's 0x6B
-     * READ is the actual audio-mux route, not just an ACK.
-     */
-    {
-        const uint8_t wanted = settings()->audio_mode;
-        uint8_t ack = 0u;
-        uint8_t route = 0u;
-        bool matched = false;
-        bool seen_a3 = false;
-
-        for (int attempt = 0; attempt < 16 && !matched; ++attempt) {
-            ack = fpga_spi_reg_read(0x6Fu);
-            route = fpga_spi_reg_read(0x6Bu);
-            if ((ack & 0xFCu) == 0xA0u &&
-                (route & 0xFCu) == 0xD0u) {
-                seen_a3 = true;
-                matched = ack == (uint8_t)(0xA0u | wanted) &&
-                          route == (uint8_t)(0xD0u | wanted);
-                if (!matched) {
-                    fpga_spi_reg_write(0x6Fu, wanted);
-                    ack = fpga_spi_reg_read(0x6Fu);
-                    route = fpga_spi_reg_read(0x6Bu);
-                    matched = ack == (uint8_t)(0xA0u | wanted) &&
-                              route == (uint8_t)(0xD0u | wanted);
-                }
-            }
-            if (!matched)
-                bflb_mtimer_delay_us(50);
-        }
-        osd_log("AUD S=%u F=%02X RT=%02X %s",
-                (unsigned)wanted, (unsigned)ack, (unsigned)route,
-                matched ? "OK" : "FALLBACK");
-        osd_log("AUD INIT RDY=%u A3=%u", (unsigned)ready,
-                (unsigned)seen_a3);
-    }
+    /* AUDIOCFG: select persisted audio BEFORE the M641 slot commit.
+     * The early BL616 SPI path may drop writes even though it reads
+     * working A3 register signatures. The M641 Disk II mount path
+     * reapplies this selection with verified SPI immediately before
+     * releasing Apple /RES, without changing slot/reset sequencing.
+     * Unlike the old A3 FPGA, the current 0x6F has NO audio lock.
+     * NEVER issue F0, 0x2E, or 0x6B as part of audio selection. */
+    menu_audio_apply_saved_early();
 
     /* Apply the persisted slot map EARLY -- the gateware gates the Apple II
      * /RES release on the 0x6B reconfig strobe (reset contract: the Apple

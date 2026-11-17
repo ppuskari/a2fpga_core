@@ -41,6 +41,12 @@
 /* Call once at startup (after settings_init). */
 void menu_init(void);
 
+/* Lock-free A3 saved-audio handshakes. Early boot and the already-proven
+ * storage-mount path retry 0x6F without touching Apple reset or slot map.
+ * Snapshots are shown persistently on the AUDIO CONFIG screen. */
+void menu_audio_apply_saved_early(void);
+void menu_audio_apply_saved_before_release(void);
+
 /* Feed the current XInput button bitmap every poll tick (edge detection and
  * hold-repeat are handled inside). Safe to call with an unchanged state. */
 void menu_input(uint16_t buttons);

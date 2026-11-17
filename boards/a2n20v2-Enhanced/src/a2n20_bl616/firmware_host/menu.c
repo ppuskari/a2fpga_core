@@ -965,6 +965,79 @@ static const menu_screen_t SCR_FPGAUPDATE = { "FPGA UPDATE", fpga_build };
  * never reconfigure slots or reset the Apple II to change audio. */
 #define REG_AUDIO_MODE 0x6Fu
 #define REG_AUDIO_ROUTE_A3 0x6Bu /* D0-D3 from the active FPGA audio mux */
+/* Cold boot diagnostics are snapshots of actual FPGA readback.
+ * Saved mode is applied twice: in early main, and after a proven
+ * storage mount immediately before the M641 Apple /RES release.
+ * The menu's user-triggered live mode switch remains independent. */
+typedef struct {
+    uint8_t wanted;
+    uint8_t request;
+    uint8_t route;
+    uint8_t attempts;
+    bool attempted;
+    bool verified;
+} audio_boot_diag_t;
+
+static audio_boot_diag_t s_audio_boot_early;
+static audio_boot_diag_t s_audio_boot_before_release;
+
+static void audio_apply_saved_boot(audio_boot_diag_t *diag, const char *phase)
+{
+    const uint8_t wanted = settings()->audio_mode;
+    uint8_t request = 0u;
+    uint8_t route = 0u;
+    bool verified = false;
+    int attempts = 0;
+
+    /* A3 0x6F is always writable. Send it even if an early readback is
+     * unavailable; each transaction is checked against BOTH accepted
+     * mode and active mixer route. A late retry is essential because
+     * early-main SPI writes occasionally get lost on real hardware. */
+    for (int attempt = 0; attempt < 16 && !verified; ++attempt) {
+        attempts++;
+        fpga_spi_reg_write(REG_AUDIO_MODE, wanted);
+        request = fpga_spi_reg_read(REG_AUDIO_MODE);
+        route = fpga_spi_reg_read(REG_AUDIO_ROUTE_A3);
+        verified = request == (uint8_t)(0xA0u | wanted) &&
+                   route == (uint8_t)(0xD0u | wanted);
+        if (!verified)
+            bflb_mtimer_delay_us(50);
+    }
+
+    /* Mark attempted LAST: menu can never display an incomplete snapshot. */
+    diag->wanted = wanted;
+    diag->request = request;
+    diag->route = route;
+    diag->attempts = (uint8_t)attempts;
+    diag->verified = verified;
+    diag->attempted = true;
+
+    osd_log("AUD %s S=%u F=%02X RT=%02X %s N=%d", phase,
+            (unsigned)wanted, (unsigned)request, (unsigned)route,
+            verified ? "OK" : "FAILED", attempts);
+}
+
+void menu_audio_apply_saved_early(void)
+{
+    audio_apply_saved_boot(&s_audio_boot_early, "EARLY");
+}
+
+void menu_audio_apply_saved_before_release(void)
+{
+    audio_apply_saved_boot(&s_audio_boot_before_release, "PRE-RES");
+}
+
+static void audio_boot_status(char out[13], const audio_boot_diag_t *diag)
+{
+    if (!diag->attempted) {
+        snprintf(out, 13, "PENDING");
+        return;
+    }
+    snprintf(out, 13, "S%u %02X/%02X %s", (unsigned)diag->wanted,
+             (unsigned)diag->request, (unsigned)diag->route,
+             diag->verified ? "OK" : "BAD");
+}
+
 static uint8_t s_audio_draft;
 static const uint8_t k_audio_order[AUDIO_MODE_COUNT] = {
     AUDIO_MB_ORIGINAL, AUDIO_MB_ENHANCED, AUDIO_DOC_NATIVE, AUDIO_SHARED
@@ -1041,6 +1114,14 @@ static void audio_build(void)
     mi_add(MI_INFO, "SHARED: MB + DOC (FUTURE)", "");
     mi_add(MI_INFO, "", "");
     mi_add(MI_INFO, "FLASH SAVED", audio_name(settings()->audio_mode));
+    mi_add(MI_INFO, "BOOT CONFIG SOURCE",
+           settings_loaded_from_flash() ? "FLASH" : "DEFAULTS");
+    char audio_boot_early[13];
+    char audio_boot_pre[13];
+    audio_boot_status(audio_boot_early, &s_audio_boot_early);
+    audio_boot_status(audio_boot_pre, &s_audio_boot_before_release);
+    mi_add(MI_INFO, "BOOT EARLY SPI", audio_boot_early);
+    mi_add(MI_INFO, "BOOT PRE-RESET", audio_boot_pre);
     uint8_t core = fpga_spi_reg_read(REG_AUDIO_MODE);
     if ((core & 0xFCu) == 0xA0u)
         mi_add(MI_INFO, "FPGA BOOT REQUEST", audio_name(core & 3u));
