@@ -92,6 +92,13 @@ assert "g_audio_applied_early = ready && audiocfg_ensure_boot_mode(NULL)" in MAI
 assert "if (ok && g_audio_applied_early)" in MAIN
 assert "audio_ok = audiocfg_ensure_boot_mode(&audio_rearmed)" in DISK
 assert "if ((!g_slots_applied_early || audio_rearmed) && audio_ok)" in DISK
+assert "bool slots_commit_ok = g_slots_applied_early && !audio_rearmed;" in DISK
+assert "if (audio_ok && slots_commit_ok)" in DISK
+assert "BOOT: APPLE RUNNING; NO LATE RESET" in DISK
+assert "if (st & FPGA_STATUS_A2BUS_RESET_N)" in MAIN
+assert "RST_MCU_ALIVE_WAIT = CLOCK_SPEED_HZ * 12" in SPI
+assert "RST_HOLD_BACKSTOP  = CLOCK_SPEED_HZ * 25" in SPI
+assert "fpga_spi_reg_write(0x6Fu, 0xF0u);" in MENU
 assert "slots_verified" in DISK
 
 print("AUDIOCFG A1/A2/A3 source contracts: PASS (not a synthesis test)")

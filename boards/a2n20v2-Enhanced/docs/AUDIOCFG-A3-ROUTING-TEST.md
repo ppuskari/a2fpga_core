@@ -282,3 +282,45 @@ A3-R1 or newer FPGA bitstream supporting the 0x6F F0 rearm and 0x6B D0
 readback is installed. No overwrite of BL616 Stage 1 at flash 0x0.
 Source-level contract checks do not substitute for Gowin synthesis or
 hardware verification.
+
+
+## A3-R4: single-reset cold boot barrier and disk autoboot protection
+
+Reported physical behavior after A3-R3: Original AY mode applies, but on
+cold boot the Apple IIe produces two reset sounds and the second reset
+interrupts disk autoboot, dropping to the BASIC prompt. This is a startup
+protocol defect, not an AY sound-generation defect.
+
+The existing FPGA `RST_MCU_ALIVE_WAIT` (3s) could release /RES while the
+BL616 was still booting, and the absolute backstop was 15s. The R3 MCU
+then called `audiocfg_ensure_boot_mode()` from `disk_poll()`; on a missed
+early mode write this issued `0x6F=0xF0` and reset the already-running IIe.
+A warm/keyboard reset is not equivalent to the original power-on autoboot.
+
+R4 changes:
+
+- FPGA no-MCU detection timeout 3s → 12s; MCU-alive failsafe 15s → 25s.
+  A truly absent MCU will therefore take longer to release the IIe. This
+  is an intentional tradeoff to prevent early startup/autoboot races.
+- The MCU checks FPGA status bit5 (`A2BUS_RESET_N`) before *any* automatic
+  audio recovery rearm. If Apple /RES is already deasserted it refuses to
+  issue a second reset; it reports the unresolved mismatch instead.
+- The late `disk_poll()` barrier no longer releases /RES or marks boot
+  complete until **both** AUDIOCFG and the slot map are confirmed. On
+  transient failures it retries on later polls, until the FPGA's hardware
+  safety timeout; it never forces another reset after the Apple has run.
+- For a deliberate **Main Menu → RESTART MCU**, the menu first sends
+  `0x6F=0xF0` to intentionally put the Apple II into reset **before**
+  restarting the BL616 firmware. The subsequent firmware boot can then
+  select audio/slots and perform a *single* release for a normal ROM scan.
+
+Test with an actual bootable physical disk in drive 1 or a mounted disk image
+and the current A3 project (which implements AudioCFG 0xF0/0x6B). Build and
+install **both** FPGA and MCU for this R4 change. Cold power-cycle the IIe,
+verify a single reset-release event and no second reset sound, the original
+YM2149 audio `S=1 FPGA=A1 RT=D1 OK`, and successful disk autoboot. Then
+switch to Enhanced, save and select RESTART MCU; confirm the selected
+personality changes without an unexpected reset later during disk work.
+
+R4 is source-implemented only; FPGA timing closure, BL616 compilation and
+hardware boot testing are not yet confirmed.

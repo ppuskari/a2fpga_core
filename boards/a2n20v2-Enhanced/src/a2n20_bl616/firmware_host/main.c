@@ -1232,6 +1232,13 @@ bool audiocfg_ensure_boot_mode(bool *did_rearm)
             continue;
         }
 
+        /* Never inject an unrequested SECOND IIe reset. When the physical
+         * /RES line has already been released, a late boot recovery would
+         * interrupt ROM disk autoboot and fall through to BASIC. A manual
+         * menu RESTART MCU explicitly rearms and holds /RES before reboot. */
+        if (st & FPGA_STATUS_A2BUS_RESET_N)
+            return false;
+
         fpga_spi_reg_write(0x6Fu, 0xF0u);
         if (did_rearm) *did_rearm = true;
         bflb_mtimer_delay_us(150);

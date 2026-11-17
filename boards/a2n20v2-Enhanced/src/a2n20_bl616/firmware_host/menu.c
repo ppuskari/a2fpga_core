@@ -1073,6 +1073,10 @@ static void root_restart_mcu(int id)
     put_row(8,  "            RESTARTING...               ", false);
     fpga_spi_reg_write(REG_TEXT_MODE, 1);
     fpga_spi_reg_write(REG_VIDEO_ENABLE, 1);
+    /* An intentional MCU restart is also a fresh Apple boot epoch.
+     * Hold the IIe in /RES BEFORE restarting the MCU. The automatic
+     * cold-boot recovery path must never reset an already-running IIe. */
+    fpga_spi_reg_write(0x6Fu, 0xF0u);
     fwupdate_request_restart();   /* disk thread quiesces USB and jumps */
 }
 

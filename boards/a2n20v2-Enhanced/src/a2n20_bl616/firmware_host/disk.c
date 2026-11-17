@@ -923,6 +923,11 @@ void disk_poll(void)
                  * map must be committed again even if it succeeded early. */
                 bool audio_rearmed = false;
                 bool audio_ok = audiocfg_ensure_boot_mode(&audio_rearmed);
+                /* Releasing /RES is forbidden until the selected audio and
+                 * slot map have both been committed. If recovery fails, leave
+                 * the Apple II held and retry on a later disk_poll tick;
+                 * the FPGA's 25s watchdog remains the emergency fallback. */
+                bool slots_commit_ok = g_slots_applied_early && !audio_rearmed;
                 if (!audio_ok)
                     osd_log("AUDIOCFG: LATE APPLY FAILED S=%u",
                             (unsigned)settings()->audio_mode);
@@ -942,6 +947,8 @@ void disk_poll(void)
                     }
                     if (slots_verified) {
                         fpga_spi_reg_write(0x6B, 1); /* lock verified mode */
+                        slots_commit_ok = true;
+                        g_slots_applied_early = true;
                         bt_mark(BT_SLOTS_APPLIED);
                     } else {
                         osd_log("SLOTS: LATE APPLY UNCONFIRMED");
@@ -961,6 +968,7 @@ void disk_poll(void)
                  * machine strands in the keyboard stub until a manual
                  * reset. (The CardROM is also parameter-disabled in HDL
                  * until the keyboard-snoop bootstrap is finished.) */
+                if (audio_ok && slots_commit_ok) {
                 fpga_spi_reg_write(REG_CARDROM_REL, 1);
 
                 /* Robust A2_RST_RELEASE: the single 0x2E write has been observed
@@ -988,6 +996,23 @@ void disk_poll(void)
                 osd_log("AUDIOCFG S=%u FPGA=%02X RT=%02X %s",
                         (unsigned)wanted, (unsigned)audio_req,
                         (unsigned)audio_route, audio_match ? "OK" : "MISMATCH");
+                } else if ((fpga_spi_reg_read(0x06) &
+                            FPGA_STATUS_A2BUS_RESET_N) != 0u) {
+                    /* The hardware failsafe may have already released reset
+                     * despite incomplete setup. Do not restart the IIe. */
+                    osd_log("BOOT: APPLE RUNNING; NO LATE RESET");
+                    s_released = true;
+                } else {
+                    /* Keep reset held and retry next poll, without changing
+                     * the live Apple bus or prematurely committing 0x6B. */
+                    static uint32_t last_hold_log_us = 0;
+                    uint32_t now_us = (uint32_t)bflb_mtimer_get_time_us();
+                    if (now_us - last_hold_log_us > 1000000u) {
+                        osd_log("BOOT: HOLD /RES AUDIO=%u SLOTS=%u",
+                                (unsigned)audio_ok, (unsigned)slots_commit_ok);
+                        last_hold_log_us = now_us;
+                    }
+                }
             }
         }
         /* (BT_RST_RELEASED is stamped at the top of disk_poll, independent of
