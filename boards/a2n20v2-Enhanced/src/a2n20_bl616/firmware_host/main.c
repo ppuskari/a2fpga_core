@@ -1232,15 +1232,22 @@ int main(void)
                 settings_loaded_from_flash() ? "FLASH" : "DEFAULTS", dbg);
     }
 
-    /* AUDIOCFG: Only addition to working M641 boot order. On FPGA config
-     * reset the A3 core allows 0x6F writes until the existing 0x6B slot
-     * commit. No automatic FPGA F0 re-arm, Apple reset, release, or delays.
-     * If the FPGA declines the selection, log it but boot normally. */
+    /* AUDIOCFG: M641 still owns the entire Apple II boot/reset path.
+     * The FPGA's slot strobe 0x6B locks 0x6F. On MCU-only restarts
+     * this lock survives and normal mode writes cannot change it.
+     * Try the saved mode first. Only if it fails and the PHYSICAL
+     * Apple /RESET signal is already asserted, and MCU 0x2E release
+     * has not occurred, send ONE early FPGA F0 rearm before slots.
+     * Never reset a running IIe or rearm from the disk thread. */
     {
         const uint8_t wanted = settings()->audio_mode;
         uint8_t ack = 0u;
         uint8_t route = 0u;
+        uint8_t reset_status = 0u;
+        uint8_t release_reg = 0u;
         bool matched = false;
+        bool rearmed = false;
+
         if (ready) {
             for (int attempt = 0; attempt < 8 && !matched; ++attempt) {
                 fpga_spi_reg_write(0x6Fu, wanted);
@@ -1249,10 +1256,35 @@ int main(void)
                 matched = ack == (uint8_t)(0xA0u | wanted) &&
                           route == (uint8_t)(0xD0u | wanted);
             }
+
+            if (!matched && (route & 0xFCu) == 0xD0u) {
+                reset_status = fpga_spi_read_status();
+                release_reg = fpga_spi_reg_read(0x2Eu);
+                /* Check both physical /RESET and MCU release latch.
+                 * A re-arm after CPU boot was the R3 double-reset defect. */
+                if (!(reset_status & FPGA_STATUS_A2BUS_RESET_N) &&
+                    !(release_reg & 1u)) {
+                    fpga_spi_reg_write(0x6Fu, 0xF0u);
+                    bflb_mtimer_delay_us(100);
+                    rearmed = true;
+                    for (int attempt = 0; attempt < 8 && !matched; ++attempt) {
+                        fpga_spi_reg_write(0x6Fu, wanted);
+                        ack = fpga_spi_reg_read(0x6Fu);
+                        route = fpga_spi_reg_read(0x6Bu);
+                        matched = ack == (uint8_t)(0xA0u | wanted) &&
+                                  route == (uint8_t)(0xD0u | wanted);
+                    }
+                }
+            }
         }
+
         osd_log("AUDIOCFG M641 S=%u FPGA=%02X RT=%02X %s",
                 (unsigned)wanted, (unsigned)ack, (unsigned)route,
                 matched ? "OK" : "FALLBACK");
+        if (!matched || rearmed)
+            osd_log("AUDIOCFG PRE RST=%02X REL=%02X ARM=%u",
+                    (unsigned)reset_status, (unsigned)release_reg,
+                    (unsigned)rearmed);
     }
 
     /* Apply the persisted slot map EARLY -- the gateware gates the Apple II

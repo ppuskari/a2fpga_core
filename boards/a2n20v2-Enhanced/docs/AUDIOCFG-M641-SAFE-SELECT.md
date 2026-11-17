@@ -43,3 +43,21 @@ replace normal Apple boot release with a late FPGA rearm.
 Source test: `py -3 tools/test_audiocfg_m641_boot.py`.
 The script verifies the exact M641 disk.c git blob and order. It is
 not evidence of successful BL616 compilation or a physical hardware pass.
+
+
+## Guarded early audio rearm experiment
+
+The user confirmed Flash Saved ORIGINAL while actual FPGA request and mixer
+readback remain A0/D0 (Enhanced), even though a prior explicit FPGA F0
+rearm allowed AY mode. The A3 0x6B lock survives MCU-only restarts if
+the FPGA remains powered, so this firmware tries normal 0x6F selection
+first, then (only if it fails and both the physical Apple II /RESET and
+the 0x2E software release remain asserted/not released) performs one
+boot epoch F0 rearm before the original M641 0x6B slot strobe.
+The unchanged M641 disk thread remains the sole reset release owner.
+
+If Apple reset is already released, it skips rearm. It reports
+`AUDIOCFG PRE RST=<status> REL=<release> ARM=<0 or 1>` to distinguish
+the guarded retry from a late-start fallback. A failure logs FALLBACK
+and must not block normal physical Disk II boot. This test has not yet
+been compiled or hardware validated; preserve known-good M641 image.

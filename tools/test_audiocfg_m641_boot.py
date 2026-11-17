@@ -44,7 +44,13 @@ assert 'matched ? "OK" : "FALLBACK"' in m
 
 # No early Apple /RESET manipulation or MCU-only warm FPGA mode rearm.
 assert "fpga_spi_reg_write(0x2E" not in m
-assert "fpga_spi_reg_write(0x6Fu, 0xF0u)" not in m
+# Exactly one protected F0 in main(), never in disk.c or menu.
+assert m.count("fpga_spi_reg_write(0x6Fu, 0xF0u);") == 1
+assert "if (!(reset_status & FPGA_STATUS_A2BUS_RESET_N) &&" in m
+assert "!(release_reg & 1u))" in m
+assert m.index("reset_status = fpga_spi_read_status();") < m.index("fpga_spi_reg_write(0x6Fu, 0xF0u);")
+assert m.index("fpga_spi_reg_write(0x6Fu, 0xF0u);") < m.index("fpga_spi_reg_write(0x6B, 1);")
+assert "AUDIOCFG PRE RST=%02X REL=%02X ARM=%u" in m
 assert "fpga_spi_reg_write(0x6Fu, 0xF0u)" not in menu
 assert "FPGA_SPI_REG_WRITE_CS_HOLD_US 3u" in spi
 assert spi.count("bflb_mtimer_delay_us(FPGA_SPI_REG_WRITE_CS_HOLD_US);") == 2
