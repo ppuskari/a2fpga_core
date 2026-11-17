@@ -32,6 +32,8 @@
 
 extern bool g_slots_applied_early;  /* main.c: early slot map confirmed+strobed */
 extern bool g_audio_applied_early;  /* main.c: early audio readback confirmed */
+extern bool g_physical_boot_released_early; /* main.c: real disk autoboot */
+extern bool audiocfg_virtual_storage_assigned(void); /* main.c */
 extern bool audiocfg_ensure_boot_mode(bool *did_rearm); /* main.c */
 
 /* ---- Volume register map (must match bl616_spi_connector.sv 0x40-0x5F) ---- */
@@ -898,12 +900,18 @@ void disk_poll(void)
      * still boots. The FPGA has its own 15 s backstop should we never write. */
     {
         static bool s_released = false;
+        if (g_physical_boot_released_early)
+            s_released = true; /* already released cleanly by main */
         if (!s_released) {
             bool any = false;
             for (int v = 0; v < NDRV; v++) any = any || g_mounted[v];
             for (int u = 0; u < NHDD; u++) any = any || g_hdd_mounted[u];
             if (any) bt_mark(BT_MOUNT_FOUND);   /* first volume seen (pre-release) */
-            if ((any && !g_remount_req) ||
+            /* If there are no virtual storage slots, no media mount is
+             * needed for physical drive autoboot. Let disk_poll recover an
+             * unconfirmed early release without waiting seven seconds. */
+            if (!audiocfg_virtual_storage_assigned() ||
+                (any && !g_remount_req) ||
                 bflb_mtimer_get_time_us() > 7000000u) {
                 /* Fallback slot-map apply: normally main() already programmed
                  * and strobed the map (readback-verified, g_slots_applied_early)
@@ -922,7 +930,14 @@ void disk_poll(void)
                  * If the helper rearms the FPGA, /RES is held and the slot
                  * map must be committed again even if it succeeded early. */
                 bool audio_rearmed = false;
-                bool audio_ok = audiocfg_ensure_boot_mode(&audio_rearmed);
+                /* Only commit a mode before the Apple has begun running.
+                 * A3-R5 never sends F0 automatically, but direct 0x6F mode
+                 * writes must also never change a live Apple audio session. */
+                bool apple_running =
+                    (fpga_spi_reg_read(0x06) &
+                     FPGA_STATUS_A2BUS_RESET_N) != 0u;
+                bool audio_ok = apple_running ? false :
+                    audiocfg_ensure_boot_mode(&audio_rearmed);
                 /* Releasing /RES is forbidden until the selected audio and
                  * slot map have both been committed. If recovery fails, leave
                  * the Apple II held and retry on a later disk_poll tick;

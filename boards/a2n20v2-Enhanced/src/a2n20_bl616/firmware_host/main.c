@@ -50,6 +50,7 @@ bool g_slots_applied_early = false;
 /* Cold-boot SPI can become ready late. Do not commit the 0x6B boot lock
  * until AUDIOCFG has been explicitly readback-verified. */
 bool g_audio_applied_early = false;
+bool g_physical_boot_released_early = false;
 #include "diskio_host.h"    /* SD/USB FatFS backend (g_msc_class) */
 #include "usbh_msc.h"       /* USB Mass Storage host class */
 #include "osd_console.h"    /* shared boot/status console */
@@ -1192,65 +1193,62 @@ int menu_hook_net_lines(char lines[][41], int max)
 }
 
 /*
- * AUDIOCFG A3: verified boot personality transaction.
+ * AUDIOCFG A3: select the persistent boot personality without injecting RESET.
  *
- * This may run once before FreeRTOS starts and again in disk_poll() before
- * release of the Apple II /RESET. The FPGA can respond to STATUS before
- * early register writes become reliable on a cold boot. Rechecking at the
- * later boot barrier covers that race without changing an active music mode.
- *
- * The FPGA's A3-only 0x6B *READ* reports the actual mixer route (D0..D3);
- * 0x6B *WRITE* configures the slot map and locks the audio personality.
- * A rearm (0x6F <- F0) intentionally reasserts Apple reset. Caller must
- * relock via 0x6B after rearm and before releasing the Apple reset line.
+ * The FPGA powers up unlocked at mode 0. On a software MCU restart the
+ * explicit RESTART MCU action has already sent 0x6F=F0 and held the IIe.
+ * Therefore normal boot setup must NEVER write F0: doing so after Apple
+ * reset release caused double-chimes and lost physical disk autoboot.
+ * The last byte of each SPI write is protected by the R2 CS# hold.
  */
 bool audiocfg_ensure_boot_mode(bool *did_rearm)
 {
-    uint8_t mode = settings()->audio_mode;
-    if (did_rearm) *did_rearm = false;
+    const uint8_t mode = settings()->audio_mode;
+    if (did_rearm) *did_rearm = false; /* no automatic reset, ever */
     if (mode >= AUDIO_MODE_COUNT)
         return false;
 
-    for (int attempt = 0; attempt < 20; attempt++) {
+    for (int attempt = 0; attempt < 8; attempt++) {
         const uint8_t st = fpga_spi_read_status();
         if ((st & (FPGA_STATUS_FPGA_CONFIGURED | FPGA_STATUS_SDRAM_READY)) !=
             (FPGA_STATUS_FPGA_CONFIGURED | FPGA_STATUS_SDRAM_READY)) {
             bflb_mtimer_delay_ms(10);
             continue;
         }
-
-        uint8_t req = fpga_spi_reg_read(0x6Fu);
-        uint8_t route = fpga_spi_reg_read(0x6Bu);
-        if (req == (uint8_t)(0xA0u | mode) &&
-            route == (uint8_t)(0xD0u | mode))
-            return true;  /* idempotent: do not reset the Apple II */
-
-        /* Do not send rearm to a non-A3 FPGA; wait out transient
-         * invalid SPI readbacks, and let the menu report NO A3 CORE. */
-        if ((route & 0xFCu) != 0xD0u) {
-            bflb_mtimer_delay_ms(10);
-            continue;
-        }
-
-        /* Never inject an unrequested SECOND IIe reset. When the physical
-         * /RES line has already been released, a late boot recovery would
-         * interrupt ROM disk autoboot and fall through to BASIC. A manual
-         * menu RESTART MCU explicitly rearms and holds /RES before reboot. */
-        if (st & FPGA_STATUS_A2BUS_RESET_N)
-            return false;
-
-        fpga_spi_reg_write(0x6Fu, 0xF0u);
-        if (did_rearm) *did_rearm = true;
-        bflb_mtimer_delay_us(150);
-        fpga_spi_reg_write(0x6Fu, mode);
-        bflb_mtimer_delay_us(150);
-        req = fpga_spi_reg_read(0x6Fu);
-        route = fpga_spi_reg_read(0x6Bu);
+        const uint8_t req = fpga_spi_reg_read(0x6Fu);
+        const uint8_t route = fpga_spi_reg_read(0x6Bu);
         if (req == (uint8_t)(0xA0u | mode) &&
             route == (uint8_t)(0xD0u | mode))
             return true;
 
-        bflb_mtimer_delay_ms(10);
+        /* A1/A2 cannot provide A3 live-route identity; never interfere. */
+        if ((route & 0xFCu) != 0xD0u)
+            return false;
+
+        /* Power-on mode is unlocked. A manual restart explicitly unlocked
+         * it before the MCU jumped into this application. In both cases,
+         * writing 0x6F=mode is sufficient; 0x6B locks after validation. */
+        fpga_spi_reg_write(0x6Fu, mode);
+        bflb_mtimer_delay_us(150);
+        if (fpga_spi_reg_read(0x6Fu) == (uint8_t)(0xA0u | mode) &&
+            fpga_spi_reg_read(0x6Bu) == (uint8_t)(0xD0u | mode))
+            return true;
+        bflb_mtimer_delay_ms(5);
+    }
+    return false;
+}
+
+/* Native physical boot: avoid USB-disk mount deadline when there is no
+ * virtual Disk II (card 4) or ProDOS HDD (card 6) in the effective map.
+ * A physical floppy controller is outside the FPGA and can autoboot now. */
+bool audiocfg_virtual_storage_assigned(void)
+{
+    for (int i = 0; i < 8; ++i) {
+        uint8_t card = settings()->slot_cards[i];
+        if (card == 0xFFu)
+            card = settings_slot_hw_defaults[i];
+        if (card == 4u || card == 6u)
+            return true;
     }
     return false;
 }
@@ -1336,6 +1334,22 @@ int main(void)
             fpga_spi_reg_write(0x6B, 1);   /* commit slots and verified audio */
             g_slots_applied_early = true;
             bt_mark(BT_SLOTS_APPLIED);
+            if (!audiocfg_virtual_storage_assigned()) {
+                /* There are no virtual disk cards: don't make a real IIe
+                 * wait through the USB mass-storage mount/no-media deadline.
+                 * Release the CardROM overlay first, then RELEASE /RES ONCE
+                 * and allow the physical floppy/controller ROM to autoboot. */
+                fpga_spi_reg_write(REG_CARDROM_REL, 1);
+                for (int attempt = 0; attempt < 5 &&
+                     !g_physical_boot_released_early; ++attempt) {
+                    fpga_spi_reg_write(0x2E, 1);
+                    g_physical_boot_released_early =
+                        (fpga_spi_reg_read(0x2E) & 1u) != 0u;
+                }
+                osd_log("AUDIOCFG: PHYSICAL BOOT %s",
+                        g_physical_boot_released_early ?
+                        "RELEASED" : "RELEASE UNCONFIRMED");
+            }
         } else {
             osd_log("SLOTS: EARLY APPLY DEFERRED (SLOTS=%u AUDIO=%u)",
                     (unsigned)ok, (unsigned)g_audio_applied_early);

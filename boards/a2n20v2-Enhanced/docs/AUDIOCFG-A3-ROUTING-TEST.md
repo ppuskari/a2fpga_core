@@ -324,3 +324,45 @@ personality changes without an unexpected reset later during disk work.
 
 R4 is source-implemented only; FPGA timing closure, BL616 compilation and
 hardware boot testing are not yet confirmed.
+
+
+## A3-R5 single-pass native boot and mode selection (Nov 17, 2026)
+
+Hardware from R4: `AUDIOCFG: LATE APPLY FAILED S=1` and
+`BOOT: APPLE RUNNING; NO LATE RESET`, with one delayed startup beep
+and no desired AY playback. The R4 12-second no-MCU and 25-second
+backstop timers were unacceptable, so R5 restores the original
+3-second MCU-detection and 15-second safety budgets.
+
+R5 removes **all automatic AUDIOCFG F0 rearm writes** from early and late
+startup. On a cold FPGA configuration, the mode register starts unlocked
+and a direct write of the saved 0..3 selection is enough. On deliberate
+Main Menu -> RESTART MCU, the menu itself sends F0 while explicitly
+entering a new boot epoch; normal boot must not send it again. The MCU
+verifies FPGA 0x6F and 0x6B identities and commits the slot map with a
+0x6B write only after accepted mode and slot writeback.
+
+Additionally, R4 treated all IIe boots as if USB virtual storage had to
+mount. When only a Mockingboard virtual slot is active (the hardware
+screen shows `0 0 0 0 2 0 0 0`), the IIe does not need virtual Disk II
+(card 4) or ProDOS HDD (card 6) services before booting its **physical
+drive**. R5 resolves the slot-card defaults from settings, and releases
+CardROM and Apple /RES immediately after the verified startup config if
+neither virtual storage card is assigned. This avoids the seven-second
+no-media delay and leaves disk_poll out of the second-release path.
+
+When virtual Disk II or ProDOS HDD is configured, existing image-mount
+gating remains in place. Even there, late mode selection never performs
+a second reset: only direct 0x6F writes while the physical Apple reset
+input is asserted are allowed. The 15-second hardware backstop still
+covers startup failures; it is not intended as normal boot behavior.
+
+**Build both FPGA and MCU** (FPGA restores original reset timing).
+Hardware acceptance: saved Original survives a true cold power cycle,
+one normal startup sound, normal physical disk auto-boot, 0x6F=A1 and
+0x6B=D1 readback, with no extra 7/15-second wait; speech still works.
+When switching to Enhanced from the menu, save and deliberately
+RESTART MCU to enter a fresh boot epoch.
+
+This source change has not yet undergone Gowin timing closure or
+physical hardware validation.

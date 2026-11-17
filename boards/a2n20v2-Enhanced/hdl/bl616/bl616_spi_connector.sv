@@ -215,13 +215,10 @@ module bl616_spi_connector #(
     //   - the MCU writes A2_RST_RELEASE (0x2E) after its mounts complete, or
     //   - no MCU shows up on SPI within MCU_ALIVE_WAIT (standalone Apple), or
     //   - the absolute backstop expires (MCU alive but never released).
-    // With A3 audio mode + USB storage setup, the BL616 cold start may take
-    // longer than 3 seconds to first touch the SPI bus. Releasing the IIe
-    // before this and later issuing AUDIOCFG F0 causes a SECOND reset, which
-    // aborts disk autoboot. The no-MCU fallback now waits 12s; an MCU that
-    // is alive gets up to 25s to release reset after configuring everything.
-    localparam RST_MCU_ALIVE_WAIT = CLOCK_SPEED_HZ * 12;  // genuinely no MCU
-    localparam RST_HOLD_BACKSTOP  = CLOCK_SPEED_HZ * 25;  // failsafe only
+    // Preserve M641 startup timing. Audio mode must be written before the
+    // first reset release, not compensated by lengthening the reset hold.
+    localparam RST_MCU_ALIVE_WAIT = CLOCK_SPEED_HZ * 3;   // MCU first SPI contact
+    localparam RST_HOLD_BACKSTOP  = CLOCK_SPEED_HZ * 15;  // never hold forever
     localparam RST_CW = $clog2(RST_HOLD_BACKSTOP + 1);
     reg               a2_rst_release_r;   // set by reg 0x2E write
     reg [RST_CW-1:0]  rst_hold_cnt_r;

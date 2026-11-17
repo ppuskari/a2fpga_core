@@ -95,9 +95,16 @@ assert "if ((!g_slots_applied_early || audio_rearmed) && audio_ok)" in DISK
 assert "bool slots_commit_ok = g_slots_applied_early && !audio_rearmed;" in DISK
 assert "if (audio_ok && slots_commit_ok)" in DISK
 assert "BOOT: APPLE RUNNING; NO LATE RESET" in DISK
-assert "if (st & FPGA_STATUS_A2BUS_RESET_N)" in MAIN
-assert "RST_MCU_ALIVE_WAIT = CLOCK_SPEED_HZ * 12" in SPI
-assert "RST_HOLD_BACKSTOP  = CLOCK_SPEED_HZ * 25" in SPI
+assert "bool audiocfg_virtual_storage_assigned(void)" in MAIN
+assert "g_physical_boot_released_early" in MAIN
+assert "if (!audiocfg_virtual_storage_assigned())" in MAIN
+assert "bool apple_running =" in DISK
+assert "RST_MCU_ALIVE_WAIT = CLOCK_SPEED_HZ * 3" in SPI
+assert "RST_HOLD_BACKSTOP  = CLOCK_SPEED_HZ * 15" in SPI
+# Automatic boot configuration must never inject a second IIe RESET.
+helper = MAIN.split("bool audiocfg_ensure_boot_mode(bool *did_rearm)")[1].split("int main(void)")[0]
+assert "fpga_spi_reg_write(0x6Fu, 0xF0u)" not in helper
+assert "fpga_spi_reg_write(0x6Fu, mode)" in helper
 assert "fpga_spi_reg_write(0x6Fu, 0xF0u);" in MENU
 assert "slots_verified" in DISK
 
