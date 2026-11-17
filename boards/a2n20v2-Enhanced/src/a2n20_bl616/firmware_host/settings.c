@@ -46,6 +46,7 @@ void settings_reset_defaults(void)
     s_cfg.version     = SETTINGS_VERSION;
     s_cfg.size        = sizeof(s_cfg);
     s_cfg.boot_pref   = BOOT_PREF_AUTO;
+    s_cfg.audio_mode  = AUDIO_MB_ENHANCED;
     s_cfg.dhcp_enable = 1;
     memset(s_cfg.slot_cards, 0xFF, sizeof(s_cfg.slot_cards));  /* hw default */
 }
@@ -71,6 +72,9 @@ void settings_init(void)
     if (blob_crc(&blob) != blob.crc)  { s_load_why = "CRC"; return; }
 
     s_cfg = blob;
+    /* Old v3 blobs put zero here; reject an invalid future/corrupt value. */
+    if (s_cfg.audio_mode >= AUDIO_MODE_COUNT)
+        s_cfg.audio_mode = AUDIO_MB_ENHANCED;
     s_from_flash = true;
     s_load_why = "OK";
 }

@@ -22,6 +22,15 @@
 #define SETTINGS_MAGIC    0x41324650u   /* 'A2FP' */
 #define SETTINGS_VERSION  3
 
+/* Power-on audio mode for installed A3 routing FPGA. 0 is the M641
+ * Enhanced default; the byte occupies former reserved[0] so flash blob
+ * size, version, CRC offset and old settings compatibility are unchanged. */
+#define AUDIO_MB_ENHANCED 0u
+#define AUDIO_MB_ORIGINAL 1u
+#define AUDIO_DOC_NATIVE  2u
+#define AUDIO_SHARED      3u
+#define AUDIO_MODE_COUNT  4u
+
 /* boot_pref */
 enum {
     BOOT_PREF_AUTO = 0,   /* USB stick if present, else SD card */
@@ -65,7 +74,8 @@ typedef struct {
      * D1/D2, bits 4-5 = HDD unit 1/2. (Old blobs load as 0 = all mounted.) */
     uint8_t  eject_mask;
 
-    uint8_t  reserved[13];               /* future fields (shrink as used) */
+    uint8_t  audio_mode;                  /* formerly reserved[0], applied at boot */
+    uint8_t  reserved[12];               /* keep existing blob size/layout */
 
     uint32_t crc;                        /* CRC-32 of everything above */
 } a2_settings_t;

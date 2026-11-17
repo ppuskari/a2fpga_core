@@ -1232,6 +1232,29 @@ int main(void)
                 settings_loaded_from_flash() ? "FLASH" : "DEFAULTS", dbg);
     }
 
+    /* AUDIOCFG: Only addition to working M641 boot order. On FPGA config
+     * reset the A3 core allows 0x6F writes until the existing 0x6B slot
+     * commit. No automatic FPGA F0 re-arm, Apple reset, release, or delays.
+     * If the FPGA declines the selection, log it but boot normally. */
+    {
+        const uint8_t wanted = settings()->audio_mode;
+        uint8_t ack = 0u;
+        uint8_t route = 0u;
+        bool matched = false;
+        if (ready) {
+            for (int attempt = 0; attempt < 8 && !matched; ++attempt) {
+                fpga_spi_reg_write(0x6Fu, wanted);
+                ack = fpga_spi_reg_read(0x6Fu);
+                route = fpga_spi_reg_read(0x6Bu);
+                matched = ack == (uint8_t)(0xA0u | wanted) &&
+                          route == (uint8_t)(0xD0u | wanted);
+            }
+        }
+        osd_log("AUDIOCFG M641 S=%u FPGA=%02X RT=%02X %s",
+                (unsigned)wanted, (unsigned)ack, (unsigned)route,
+                matched ? "OK" : "FALLBACK");
+    }
+
     /* Apply the persisted slot map EARLY -- the gateware gates the Apple II
      * /RES release on the 0x6B reconfig strobe (reset contract: the Apple
      * never boots before the virtual cards know their slots), so this is what

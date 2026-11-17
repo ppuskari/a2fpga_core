@@ -173,7 +173,8 @@ static void paint(void)
         put_row(21, s_status, false);
     }
 
-    put_row(23, " A:OK B:BACK Y:CONSOLE SELECT:APPLE II ", true);
+    /* Keyboard keys AND gamepad labels; A/B are not keyboard letters. */
+    put_row(23, " ENTER/A:OK ESC/B:BACK TAB:APPLE Y:VIEW ", true);
 
     fpga_spi_reg_write(REG_TEXT_MODE, 1);
     fpga_spi_reg_write(REG_VIDEO_ENABLE, 1);
@@ -959,17 +960,108 @@ static void fpga_build(void)
 
 static const menu_screen_t SCR_FPGAUPDATE = { "FPGA UPDATE", fpga_build };
 
+/* ======================= SCREEN: AUDIO CONFIG ============================== */
+/* Save the next power-on personality, without applying it live or resetting
+ * the Apple II. All sources of board power must be removed to reload FPGA. */
+#define REG_AUDIO_MODE 0x6Fu
+#define REG_AUDIO_ROUTE_A3 0x6Bu /* D0-D3 from the active FPGA audio mux */
+static uint8_t s_audio_draft;
+static const uint8_t k_audio_order[AUDIO_MODE_COUNT] = {
+    AUDIO_MB_ORIGINAL, AUDIO_MB_ENHANCED, AUDIO_DOC_NATIVE, AUDIO_SHARED
+};
+static const char *audio_name(uint8_t mode)
+{
+    switch (mode) {
+    case AUDIO_MB_ORIGINAL: return "ORIGINAL MB";
+    case AUDIO_MB_ENHANCED: return "ENHANCED MB";
+    case AUDIO_DOC_NATIVE:  return "NATIVE DOC";
+    case AUDIO_SHARED:      return "SHARED";
+    default:                return "INVALID";
+    }
+}
+static void audio_change(int id, int dir)
+{
+    (void)id;
+    int idx = 0;
+    for (int i = 0; i < (int)AUDIO_MODE_COUNT; i++)
+        if (k_audio_order[i] == s_audio_draft) { idx = i; break; }
+    idx = (idx + (dir < 0 ? (int)AUDIO_MODE_COUNT - 1 : 1))
+        % (int)AUDIO_MODE_COUNT;
+    s_audio_draft = k_audio_order[idx];
+    set_status(" NOT SAVED - DOWN THEN ENTER TO SAVE");
+    screen_refresh();
+}
+static void audio_save(int id)
+{
+    (void)id;
+    uint8_t previous = settings()->audio_mode;
+    settings()->audio_mode = s_audio_draft;
+    if (settings_save())
+        set_status(" AUDIO SAVED - POWER CYCLE TO LOAD");
+    else {
+        settings()->audio_mode = previous;
+        set_status(" AUDIO SAVE FAILED - NOT CHANGED");
+    }
+    screen_refresh();
+}
+static void audio_build(void)
+{
+    menu_item_t *m = mi_add(MI_CHOICE, "BOOT AUDIO MODE",
+                           audio_name(s_audio_draft));
+    m->on_change = audio_change;
+    m = mi_add(MI_ACTION, "SAVE FOR NEXT BOOT (ENTER)", "");
+    m->action = audio_save;
+    mi_add(MI_INFO, "", "");
+    mi_add(MI_INFO, "1. LEFT/RIGHT TO SELECT AUDIO MODE", "");
+    mi_add(MI_INFO, "2. DOWN TO SAVE, THEN PRESS ENTER", "");
+    mi_add(MI_INFO, "* = AN ACTION, NOT A SAVED MARK", "");
+    mi_add(MI_INFO, "", "");
+    mi_add(MI_INFO, "ORIGINAL: AY PSG AND SSI263 SPEECH", "");
+    mi_add(MI_INFO, "ENHANCED: DOC MB AND SSI263 SPEECH", "");
+    mi_add(MI_INFO, "NATIVE: SLOT 4 DOC (FUTURE)", "");
+    mi_add(MI_INFO, "SHARED: MB + DOC (FUTURE)", "");
+    mi_add(MI_INFO, "", "");
+    mi_add(MI_INFO, "FLASH SAVED", audio_name(settings()->audio_mode));
+    uint8_t core = fpga_spi_reg_read(REG_AUDIO_MODE);
+    if ((core & 0xFCu) == 0xA0u)
+        mi_add(MI_INFO, "FPGA BOOT REQUEST", audio_name(core & 3u));
+    else
+        mi_add(MI_INFO, "FPGA AUDIOCFG", "UNAVAILABLE");
+    uint8_t route = fpga_spi_reg_read(REG_AUDIO_ROUTE_A3);
+    if ((route & 0xFCu) == 0xD0u) {
+        mi_add(MI_INFO, "FPGA ACTIVE AUDIO", audio_name(route & 3u));
+        if (core != (uint8_t)(0xA0u | (route & 3u)))
+            mi_add(MI_INFO, "FPGA ROUTING", "FPGA MISMATCH");
+        else if ((route & 3u) != settings()->audio_mode)
+            mi_add(MI_INFO, "FPGA ROUTING", "SAVED != ACTIVE");
+        else
+            mi_add(MI_INFO, "FPGA ROUTING", "A3 VERIFIED");
+    } else {
+        mi_add(MI_INFO, "FPGA ACTIVE AUDIO", "NO A3 CORE");
+        mi_add(MI_INFO, "REFLASH FPGA .BIN FOR AUDIO ROUTE", "");
+    }
+    mi_add(MI_INFO, "AFTER SAVE: FULL POWER CYCLE TO APPLY", "");
+}
+static const menu_screen_t SCR_AUDIO = { "AUDIO CONFIG", audio_build };
+static void audio_enter(int id)
+{
+    (void)id;
+    s_audio_draft = settings()->audio_mode;
+    screen_push(&SCR_AUDIO);
+}
+
 /* ======================= SCREEN: ROOT ===================================== */
 static void root_enter(int id)
 {
     switch (id) {
-    case 0: screen_push(&SCR_SLOTS);    break;
-    case 1: screen_push(&SCR_DISKS);    break;
-    case 2: screen_push(&SCR_STORAGE);  break;
-    case 3: screen_push(&SCR_NETWORK);  break;
-    case 4: screen_push(&SCR_USB);      break;
-    case 5: screen_push(&SCR_FWUPDATE); break;
-    case 6: screen_push(&SCR_FPGAUPDATE); break;
+    case 0: screen_push(&SCR_SLOTS);      break;
+    case 1: audio_enter(id);               break;
+    case 2: screen_push(&SCR_DISKS);      break;
+    case 3: screen_push(&SCR_STORAGE);    break;
+    case 4: screen_push(&SCR_NETWORK);    break;
+    case 5: screen_push(&SCR_USB);        break;
+    case 6: screen_push(&SCR_FWUPDATE);   break;
+    case 7: screen_push(&SCR_FPGAUPDATE); break;
     }
 }
 
@@ -995,10 +1087,10 @@ static void root_reset_defaults(int id)
 static void root_build(void)
 {
     static const char *const entries[] = {
-        "SLOT ASSIGNMENTS", "DISK IMAGES", "STORAGE", "NETWORK",
-        "USB DEVICES", "FIRMWARE UPDATE", "FPGA UPDATE"
+        "SLOT ASSIGNMENTS", "AUDIO CONFIG", "DISK IMAGES", "STORAGE",
+        "NETWORK", "USB DEVICES", "FIRMWARE UPDATE", "FPGA UPDATE"
     };
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < 8; i++) {
         menu_item_t *m = mi_add(MI_SUBMENU, entries[i], "");
         m->action = root_enter;
         m->id = i;
