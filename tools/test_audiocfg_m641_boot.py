@@ -21,6 +21,13 @@ def git_blob(data):
 
 # The validated M641 physical boot and reset code must remain untouched.
 assert git_blob(d) == "0e8a7b7c687a434077e78001e205e309f61d12ee"
+# Every byte of M641 main.c OUTSIDE the single audio-selection block is
+# unchanged. This protects native Slot 6 disk autoboot, USB and reset order.
+start = m.index("    /* AUDIOCFG: M641 still owns")
+end = m.index("    /* Apply the persisted slot map EARLY", start)
+assert git_blob((m[:start] + m[end:]).encode("utf-8")) == (
+    "cc90ddc7b93e735c4255bafb489f4f8e1b5db0df"
+), "M641 main.c changed outside AUDIOCFG early selection"
 assert "#define SETTINGS_VERSION  3" in settings_h
 for x in ("AUDIO_MB_ENHANCED 0u", "AUDIO_MB_ORIGINAL 1u",
           "AUDIO_DOC_NATIVE  2u", "AUDIO_SHARED      3u"):
