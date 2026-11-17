@@ -79,7 +79,9 @@ assert "uint8_t  audio_mode;" in settings_h
 assert "uint8_t  reserved[12];" in settings_h
 assert "s_cfg.audio_mode  = AUDIO_MB_ENHANCED;" in settings_c
 assert "SAVED != ACTIVE" in menu
-assert "FULL POWER CYCLE TO APPLY" in menu
+assert "MODE APPLIES IMMEDIATELY" in menu
+assert "AUD LIVE S=%u F=%02X RT=%02X %s" in menu
+assert "fpga_spi_reg_write(REG_AUDIO_MODE, s_audio_draft);" in menu
 
 steps = ("fpga_spi_init();", "fpga_spi_reg_write(REG_A2BUS_READY, 1);",
          "settings_init();", "const uint8_t wanted = settings()->audio_mode;",

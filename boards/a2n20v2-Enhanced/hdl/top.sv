@@ -470,6 +470,11 @@ module top #(
     slot_if slot_if();
     slotmaker_config_if slotmaker_config_if();
 
+    // Place mode bus outside the BL616 conditional so its width remains
+    // defined even in a no-MCU diagnostic build.
+    wire [1:0] mcu_audio_mode_w;
+    wire [1:0] audio_active_route_w;
+
     slotmaker slotmaker (
         .a2bus_if(a2bus_if),
         .a2mem_if(a2mem_if),
@@ -638,6 +643,8 @@ module top #(
         .mcu_ready_o(mcu_ready_w),
         .standalone_o(standalone_w),
         .scratch_o(mcu_scratch_w),
+        .audio_mode_o(mcu_audio_mode_w),
+        .audio_active_route_i(audio_active_route_w),
         .cardrom_active_i(!inh_n_w),
         .cardrom_release_o(cardrom_release_w),
         .button_i(s2),
@@ -684,6 +691,8 @@ module top #(
     assign slotmaker_config_if.wr = 1'b0;
     assign slotmaker_config_if.card_i = 8'b0;
     assign slotmaker_config_if.reconfig = 1'b0;
+
+    assign mcu_audio_mode_w = 2'd0; // legacy Enhanced personality without MCU
 
     // No BL616: Uthernet2 backing store has no host -- tie the link idle
     assign u2_host_wr_w    = 1'b0;
@@ -742,6 +751,26 @@ module top #(
 
 `endif
 
+
+    // AUDIOCFG A3: one owner per DOC oscillator/RAM resource.
+    // Enhanced keeps the M641 AY->DOC chain; Original and Shared use the
+    // real YM2149 PSGs. Native/Shared get CPU Sound GLU register access.
+    // Mode is latched at MCU boot, never switched during Apple II playback.
+    wire audio_enhanced_w = AUDIO_MODE_MB_DOC && (mcu_audio_mode_w == 2'd0);
+    wire audio_original_w = AUDIO_MODE_MB_DOC && (mcu_audio_mode_w == 2'd1);
+    wire audio_native_w   = AUDIO_MODE_MB_DOC && (mcu_audio_mode_w == 2'd2);
+    wire audio_shared_w   = AUDIO_MODE_MB_DOC && (mcu_audio_mode_w == 2'd3);
+    wire audio_native_doc_w = audio_native_w || audio_shared_w;
+    wire audio_mb_enabled_w = !audio_native_w;
+    wire audio_ay_enabled_w = audio_original_w || audio_shared_w;
+    // Feed the actual mixer-select predicates back to the MCU. The older
+    // A1/A2 core accepts 0x6F but cannot report an active audio route.
+    // This is a runtime A3 identity check, independent of the stored menu.
+    assign audio_active_route_w =
+        audio_enhanced_w ? 2'd0 :
+        audio_original_w ? 2'd1 :
+        audio_native_w   ? 2'd2 :
+        audio_shared_w   ? 2'd3 : 2'd0;
 
     // Video
 
@@ -1100,6 +1129,12 @@ wire [7:0] doc_128k_status_w;
     wire        mb_bridge_ready_w;
     wire [2:0]  mb_active_voice_w;
 
+    // Virtual slot's C0n0-C0nF device space; C0n0..3 are the GS-like GLU.
+    // The MB occupies Cn00..CnFF, so Shared uses nonoverlapping addresses.
+    wire native_doc_slot_w = AUDIO_MODE_MB_DOC && audio_native_doc_w &&
+        !a2bus_if.sw_gs && !slot_if.dev_select_n &&
+        (slot_if.card_id == MOCKINGBOARD_ID) && a2bus_if.phi0;
+
     sound_glu #(
         .ENABLE(ENSONIQ_ENABLE),
         .MB_DOC_MODE(AUDIO_MODE_MB_DOC),
@@ -1111,6 +1146,8 @@ wire [7:0] doc_128k_status_w;
        // .MONO_MIX(1'b1) // If true, mono mix is used instead of stereo
     ) sg (
         .a2bus_if(a2bus_if),
+        .audio_mode_i(mcu_audio_mode_w),
+        .native_slot_sel_i(native_doc_slot_w),
 
         .mb_doc_wr_i(mb_doc_wr_w),
         .mb_doc_addr_i(mb_doc_addr_w),
@@ -1332,6 +1369,7 @@ wire [7:0] doc_128k_status_w;
 
     Mockingboard #(
         .ENABLE(MOCKINGBOARD_ENABLE | AUDIO_MODE_MB_DOC),
+        .HAS_RUNTIME_ENABLE(AUDIO_MODE_MB_DOC),
         .ENABLE_SSI263(MOCKINGBOARD_SSI263_ENABLE),
         .SSI263_VOICE_PROFILE(MOCKINGBOARD_SSI263_VOICE_PROFILE),
         .SSI263_FULL_CHIP_ENABLE(MOCKINGBOARD_SSI263_FULL_CHIP_ENABLE),
@@ -1340,6 +1378,7 @@ wire [7:0] doc_128k_status_w;
     ) mockingboard (
         .a2bus_if(a2bus_if),  // use system_reset_n
         .slot_if(slot_if),
+        .active_i(audio_mb_enabled_w),
 
         .data_o(mb_d_w),
         .rd_en_o(mb_rd),
@@ -1407,7 +1446,7 @@ wire [7:0] doc_128k_status_w;
                 .COHERENT_PUBLISH_ENABLE(MB_DOC_COHERENT_PUBLISH_ENABLE)
             ) bridge (
                 .clk_i(clk_logic_w),
-                .reset_n_i(system_reset_n_w),
+                .reset_n_i(system_reset_n_w && audio_enhanced_w),
                 .sdram_ready_i(sdram_init_complete),
 
                 .ay_l_wr_i(mb_ay_l_wr_w),
@@ -1513,11 +1552,14 @@ wire [7:0] doc_128k_status_w;
 
     // Data output
 
-    assign data_out_en_w = ssp_rd || mb_rd || ssc_rd || u2_rd || diskii_rd || hdd_rd || cardrom_rd;
+    wire mb_bus_rd_w = mb_rd && audio_mb_enabled_w;
+    assign data_out_en_w = ssp_rd || mb_bus_rd_w || sg_rd_w || ssc_rd ||
+        u2_rd || diskii_rd || hdd_rd || cardrom_rd;
 
     assign data_out_w = ssc_rd ? ssc_d_w :
         ssp_rd ? ssp_d_w :
-        mb_rd ? mb_d_w :
+        sg_rd_w ? sg_d_w :
+        mb_bus_rd_w ? mb_d_w :
         u2_rd ? u2_d_w :
         diskii_rd ? diskii_d_w :
         hdd_rd ? hdd_d_w :
@@ -1526,7 +1568,8 @@ wire [7:0] doc_128k_status_w;
 
     // Interrupts
 
-    assign irq_n_w = mb_irq_n && vdp_irq_n && ssc_irq_n && u2_irq_n;
+    assign irq_n_w = (audio_mb_enabled_w ? mb_irq_n : 1'b1) &&
+        vdp_irq_n && ssc_irq_n && u2_irq_n;
 
     // Audio
 
@@ -1572,22 +1615,41 @@ wire [7:0] doc_128k_status_w;
     end
     wire signed [15:0] mb_fx_pcm_l = 16'(ay_hp_l_q16 >>> 12);
     wire signed [15:0] mb_fx_pcm_r = 16'(ay_hp_r_q16 >>> 12);
+    // In Shared, combine the native DOC and real AY PSG at unity before
+    // HDMI's native +3dB calibration. Enhanced remains exactly M641.
+    wire signed [16:0] shared_pcm_l_w =
+        $signed({sg_audio_l[15],sg_audio_l}) +
+        $signed({mb_fx_pcm_l[15],mb_fx_pcm_l});
+    wire signed [16:0] shared_pcm_r_w =
+        $signed({sg_audio_r[15],sg_audio_r}) +
+        $signed({mb_fx_pcm_r[15],mb_fx_pcm_r});
+    wire signed [15:0] shared_mix_l_w =
+        shared_pcm_l_w > 17'sd32767 ? 16'sh7FFF :
+        shared_pcm_l_w < -17'sd32768 ? 16'sh8000 : shared_pcm_l_w[15:0];
+    wire signed [15:0] shared_mix_r_w =
+        shared_pcm_r_w > 17'sd32767 ? 16'sh7FFF :
+        shared_pcm_r_w < -17'sd32768 ? 16'sh8000 : shared_pcm_r_w[15:0];
+
     // Preserve the P4 DOC/native-AY FX selector and its calibrated
     // downstream 8x HDMI gain (-2 dBFS ceiling). Mix speech upstream of
     // audio_out at 1/8 amplitude in MB_DOC mode to compensate for that gain.
     // This avoids applying an unintended second 8x boost to P5 speech.
     wire signed [15:0] mb_music_base_l_w =
-        (AUDIO_MODE_MB_DOC && mb_fx_ay_l_w) ? mb_fx_pcm_l : sg_audio_l;
+        audio_enhanced_w ? (mb_fx_ay_l_w ? mb_fx_pcm_l : sg_audio_l) :
+        audio_original_w ? mb_fx_pcm_l :
+        audio_shared_w ? shared_mix_l_w : sg_audio_l;
     wire signed [15:0] mb_music_base_r_w =
-        (AUDIO_MODE_MB_DOC && mb_fx_ay_r_w) ? mb_fx_pcm_r : sg_audio_r;
+        audio_enhanced_w ? (mb_fx_ay_r_w ? mb_fx_pcm_r : sg_audio_r) :
+        audio_original_w ? mb_fx_pcm_r :
+        audio_shared_w ? shared_mix_r_w : sg_audio_r;
     // Widen before gain to avoid 16-bit wraparound; compensate for the
     // downstream music HDMI 8x gain only in MB-DOC mode. A value of 3
     // targets the measured ~9.3dB shortfall in voice2.wav relative to
     // -2dBFS without touching piano/FX gain. Final HDMI limiter remains.
     wire signed [31:0] mb_speech_gain_w =
         $signed(mb_speech_pcm_w) * MB_SPEECH_GAIN_NUM;
-    wire signed [31:0] mb_speech_pre_mix_w = AUDIO_MODE_MB_DOC ?
-        (mb_speech_gain_w >>> 3) : mb_speech_gain_w;
+    wire signed [31:0] mb_speech_pre_mix_w = audio_native_w ? 32'sd0 :
+        audio_enhanced_w ? (mb_speech_gain_w >>> 3) : mb_speech_gain_w;
     wire signed [15:0] mb_speech_mix_w =
         (mb_speech_pre_mix_w > 32'sd32767) ? 16'sh7FFF :
         (mb_speech_pre_mix_w < -32'sd32768) ? 16'sh8000 :
@@ -1794,7 +1856,7 @@ wire [15:0] audio_sample_word[1:0];
     end
     endfunction
 
-    wire hdmi_gain_clip_w = AUDIO_MODE_MB_DOC ?
+    wire hdmi_gain_clip_w = audio_enhanced_w ?
         (mb_doc_gain_would_limit($signed(audio_sample_word_raw[0])) ||
          mb_doc_gain_would_limit($signed(audio_sample_word_raw[1]))) :
         (hdmi_gain_would_saturate($signed(audio_sample_word_raw[0])) ||
@@ -1839,11 +1901,11 @@ wire [15:0] audio_sample_word[1:0];
         end
     end
 
-    assign audio_sample_word[0] = AUDIO_MODE_MB_DOC ?
+    assign audio_sample_word[0] = audio_enhanced_w ?
         mb_doc_gain_minus_2db($signed(audio_sample_word_raw[0])) :
         hdmi_gain_plus_3db($signed(audio_sample_word_raw[0]));
 
-    assign audio_sample_word[1] = AUDIO_MODE_MB_DOC ?
+    assign audio_sample_word[1] = audio_enhanced_w ?
         mb_doc_gain_minus_2db($signed(audio_sample_word_raw[1])) :
         hdmi_gain_plus_3db($signed(audio_sample_word_raw[1]));
 

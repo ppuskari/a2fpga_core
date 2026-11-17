@@ -48,6 +48,8 @@ module bl616_spi_connector #(
     output wire        mcu_ready_o,
     output wire        standalone_o,   // high once standalone fallback engages (no BL616)
     output wire [39:0] scratch_o,      // 5 MCU scratch regs packed {s4,s3,s2,s1,s0} (0x07,0x0C-0x0F)
+    output wire [1:0]  audio_mode_o,   // FPGA-accepted boot selection
+    input  wire [1:0]  audio_active_route_i, // A3 live mixer-select identity
 
     // CardROM
     input  wire        cardrom_active_i,
@@ -116,6 +118,14 @@ module bl616_spi_connector #(
     wire [7:0]  reg_wdata;
     reg  [7:0]  reg_rdata;
     reg  [3:0]  ver_idx_r = 4'd0;   // reg 0x7F: version digit index
+
+    // Audio personality is a live 2-bit register, not a boot-time lock.
+    // Mode 0 keeps the legacy M641 Enhanced output. Slots/RESET are
+    // independent of this register and audio changes never reboot Apple.
+    reg [1:0] audio_mode_r;
+    // F0 retains legacy explicit Apple boot rearm compatibility only.
+    reg audio_boot_rearm_pulse_r;
+    assign audio_mode_o = audio_mode_r;
 
     wire        mem_wr_en;
     wire [2:0]  mem_space;
@@ -211,7 +221,7 @@ module bl616_spi_connector #(
     reg               a2_rst_release_r;   // set by reg 0x2E write
     reg [RST_CW-1:0]  rst_hold_cnt_r;
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
+        if (!rst_n || audio_boot_rearm_pulse_r)
             rst_hold_cnt_r <= '0;
         else if (rst_hold_cnt_r < RST_HOLD_BACKSTOP[RST_CW-1:0])
             rst_hold_cnt_r <= rst_hold_cnt_r + 1'b1;
@@ -866,11 +876,16 @@ module bl616_spi_connector #(
             7'h68: reg_rdata = {3'b0, led_o};
             7'h69: reg_rdata = {7'b0, ws2812_o};
             7'h6A: reg_rdata = {7'b0, button_i};
+            // A3-only live-route proof. A1/A2 returns 0x00 at 0x6B.
+            // Value D0..D3 is produced from top.sv's actual audio
+            // mixer-select path, not merely the MCU's saved preference.
+            7'h6B: reg_rdata = {6'b110100, audio_active_route_i};
 
             // SD card registers
             7'h6C: reg_rdata = {6'b0, sd_slow_clk_r, sd_cs_n_r};
             7'h6D: reg_rdata = sd_rx_data_w;
             7'h6E: reg_rdata = {7'b0, sd_busy_w};
+            7'h6F: reg_rdata = {6'b101000, audio_mode_r}; // 0xA0 | accepted request
 
             // Page 7: Bus event FIFO
             7'h70: reg_rdata = {fifo_empty, fifo_full, 6'b0};
@@ -944,6 +959,8 @@ module bl616_spi_connector #(
             slot_wr_slot_r   <= 3'd0;
             slot_wr_card_r   <= 8'd0;
             slot_reconfig_r  <= 1'b0;
+            audio_mode_r     <= 2'd0; // Enhanced legacy baseline at reset
+            audio_boot_rearm_pulse_r <= 1'b0;
             led_o            <= 5'd0;
             ws2812_o         <= 1'b0;
             capture_mode_o   <= 3'd0;
@@ -956,6 +973,7 @@ module bl616_spi_connector #(
             w5100_cmd_clr_r  <= 4'd0;
         end else begin
             // One-shot clears
+            audio_boot_rearm_pulse_r <= 1'b0;
             cardrom_release_r <= 1'b0;
             volume_ack_r[0]   <= 1'b0;
             volume_ack_r[1]   <= 1'b0;
@@ -1068,7 +1086,7 @@ module bl616_spi_connector #(
                     end
                     7'h68: led_o    <= reg_wdata[4:0];
                     7'h69: ws2812_o <= reg_wdata[0];
-                    7'h6B: slot_reconfig_r <= 1'b1;
+                    7'h6B: slot_reconfig_r <= 1'b1; // slots ONLY
 
                     // SD card registers
                     7'h6C: begin
@@ -1078,6 +1096,16 @@ module bl616_spi_connector #(
                     7'h6D: begin
                         sd_tx_data_r  <= reg_wdata;
                         sd_tx_start_r <= 1'b1;
+                    end
+                    7'h6F: begin
+                        // Legacy F0 explicitly resets Apple boot; selecting
+                        // a mode 0..3 does not reset, rearm, or lock anything.
+                        if (reg_wdata == 8'hF0) begin
+                            a2_rst_release_r <= 1'b0;
+                            audio_boot_rearm_pulse_r <= 1'b1;
+                                        end else if (reg_wdata[7:2] == 6'd0) begin
+                            audio_mode_r <= reg_wdata[1:0];
+                        end
                     end
 
                     // Page 7: Bus event FIFO control

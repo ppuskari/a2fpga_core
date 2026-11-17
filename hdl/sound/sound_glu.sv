@@ -33,6 +33,10 @@ module sound_glu #(
     parameter bit ENABLE_128K_EXTENSION = 1'b0
 ) (
     a2bus_if.slave a2bus_if,
+    // Enhanced-board-only boot personality. Older native GS builds compile
+    // MB_DOC_MODE=0 and retain their original Sound GLU behavior.
+    input logic [1:0] audio_mode_i,
+    input logic       native_slot_sel_i,
 
     // Mockingboard bridge host commands. Synchronous to clk_logic.
     // Address/data must remain valid with the write strobe; the
@@ -136,13 +140,19 @@ output [7:0] debug_128k_status_o,
     localparam [15:0] SOUND_PTR_LO_ADDR = 16'hC03E;
     localparam [15:0] SOUND_PTR_HI_ADDR = 16'hC03F;
 
-    // address in GLU range, $C03C-$C03F, during phi0 and m2sel_n asserted
-    // Disable only *GS CPU access* when Mockingboard owns DOC.
-    // Do not gate DOC execution or SDRAM waveform fetches.
-    wire glu_sel_w = ENABLE & !MB_DOC_MODE &
-        a2bus_if.phi0 &
-        (a2bus_if.addr[15:2] == SOUND_CONTROL_ADDR[15:2]) &
-        !a2bus_if.m2sel_n;
+    // Exactly one DOC owner at a time: Enhanced uses the MB translator;
+    // Native and Shared use native CPU GLU accesses. Original leaves DOC idle.
+    wire mb_owner_w = MB_DOC_MODE && (audio_mode_i == 2'd0);
+    wire native_owner_w = !MB_DOC_MODE || (audio_mode_i[1]);
+    // Preserve original $C03C-$C03F decoding for other native GS boards.
+    wire native_gs_sel_w = ENABLE && native_owner_w &&
+        (!MB_DOC_MODE || a2bus_if.sw_gs) &&
+        a2bus_if.phi0 && !a2bus_if.m2sel_n &&
+        (a2bus_if.addr[15:2] == SOUND_CONTROL_ADDR[15:2]);
+    // Apple IIe/II+ access through the current MB virtual slot's $C0n0-$C0n3.
+    wire native_slot_glu_sel_w = ENABLE && MB_DOC_MODE && native_owner_w &&
+        native_slot_sel_i && (a2bus_if.addr[3:2] == 2'b00);
+    wire glu_sel_w = native_gs_sel_w || native_slot_glu_sel_w;
     // sound control register is at $C03C
     wire sc_sel_w = glu_sel_w & (a2bus_if.addr[1:0] == 2'b00);
     // sound data register is at $C03D
@@ -180,16 +190,65 @@ wire [3:0] volume_w =
 assign debug_sound_control_o =
     sound_control_r;
 
-    //assign rd_en_o = glu_sel_w & a2bus_if.rw_n;
-    assign rd_en_o = 1'b0;
+    // Native slot reads are now driven onto the Apple II bus. Native IIgs
+    // $C03C reads on unrelated boards remain unchanged (historically off).
+    assign rd_en_o = MB_DOC_MODE && native_owner_w &&
+        native_slot_sel_i && a2bus_if.rw_n;
 
     logic [7:0] doc_data_o_w;
+    logic [7:0] doc_shadow_q;
+    logic [7:0] doc_shadow [0:255];
+    // One 2KB readback mirror, BSRAM-friendly synchronous read port.
+    // It reflects CPU register writes; live DOC status is separately exposed.
+    // The real DOC resets on Apple /RES; scrub this mirror on each reset too.
+    generate if (MB_DOC_MODE) begin : gen_doc_shadow
+        integer init_idx;
+        logic [7:0] scrub_ptr_r;
+        logic scrub_active_r;
+        initial begin
+            for (init_idx = 0; init_idx < 256; init_idx = init_idx + 1)
+                doc_shadow[init_idx] = 8'h00;
+        end
+        always_ff @(posedge a2bus_if.clk_logic) begin
+            if (!a2bus_if.system_reset_n) begin
+                doc_shadow_q <= 8'h00;
+                scrub_ptr_r <= 8'h00;
+                scrub_active_r <= 1'b1;
+            end else begin
+                doc_shadow_q <= doc_shadow[sound_ptr_lo_r];
+                if (scrub_active_r) begin
+                    doc_shadow[scrub_ptr_r] <= 8'h00;
+                    scrub_ptr_r <= scrub_ptr_r + 1'b1;
+                    if (scrub_ptr_r == 8'hFF)
+                        scrub_active_r <= 1'b0;
+                end else if (doc_host_wr_w && !mb_owner_w) begin
+                    doc_shadow[doc_host_addr_w] <= doc_host_data_w;
+                end
+            end
+        end
+    end else begin : gen_no_shadow
+        always_comb doc_shadow_q = doc_data_o_w;
+    end endgenerate
 
-    assign data_o = a2bus_if.addr[1:0] == 2'b00 ? sound_control_r :
-        (a2bus_if.addr[1:0] == 2'b01) & access_ram_w ? sound_data_r :
-        (a2bus_if.addr[1:0] == 2'b01) & access_doc_w ? doc_data_o_w :
-        a2bus_if.addr[1:0] == 2'b10 ? sound_ptr_lo_r :
+    wire [7:0] native_reg_data_w = (sound_ptr_lo_r == 8'hE1) ?
+        debug_osc_en_o : doc_shadow_q;
+    wire [7:0] glu_reg_data_w =
+        (a2bus_if.addr[1:0] == 2'b00) ? sound_control_r :
+        (a2bus_if.addr[1:0] == 2'b01) ?
+            (access_ram_w ? sound_data_r :
+             (MB_DOC_MODE ? native_reg_data_w : doc_data_o_w)) :
+        (a2bus_if.addr[1:0] == 2'b10) ? sound_ptr_lo_r :
         sound_ptr_hi_r;
+    // Slot offsets 4-F are read-only identity/status, not GS aliases.
+    assign data_o = (MB_DOC_MODE && native_slot_sel_i &&
+                     a2bus_if.addr[3:2] != 2'b00) ?
+        (a2bus_if.addr[3:0] == 4'h4 ? 8'h44 :   // 'D'
+         a2bus_if.addr[3:0] == 4'h5 ? 8'h4F :   // 'O'
+         a2bus_if.addr[3:0] == 4'h6 ? 8'h43 :   // 'C'
+         a2bus_if.addr[3:0] == 4'h7 ? 8'h11 :   // v1, register mirror
+         a2bus_if.addr[3:0] == 4'h8 ? {6'b101000, audio_mode_i} :
+         a2bus_if.addr[3:0] == 4'h9 ? debug_128k_status_o : 8'h00) :
+        glu_reg_data_w;
 
     // write only for a2fpga, will need to implement reads at alternate address
     // and for future standalone IIgs core
@@ -228,7 +287,7 @@ assign debug_128k_status_o =
         8'h00;
 
     assign mb_ram_ready_o =
-        MB_DOC_MODE && !USE_BSRAM && glu_mem_if.ready;
+        mb_owner_w && !USE_BSRAM && glu_mem_if.ready;
 
     // GLU mem_if driven to DDR3 when USE_BSRAM=0, idle when USE_BSRAM=1
     generate
@@ -243,13 +302,13 @@ assign debug_128k_status_o =
             assign glu_mem_if.rd = '0;
             // GS and MB sample loader never own RAM together.
             // Preserve the exact original GS path in mode 0.
-            assign glu_mem_if.addr = MB_DOC_MODE ?
+            assign glu_mem_if.addr = mb_owner_w ?
                 mb_ram_addr_i : glu_mem_addr_r;
-            assign glu_mem_if.wr = MB_DOC_MODE ?
+            assign glu_mem_if.wr = mb_owner_w ?
                 mb_ram_wr_i : glu_mem_wr_r;
-            assign glu_mem_if.byte_en = MB_DOC_MODE ?
+            assign glu_mem_if.byte_en = mb_owner_w ?
                 mb_ram_byte_en_i : glu_mem_byte_en_r;
-            assign glu_mem_if.data = MB_DOC_MODE ?
+            assign glu_mem_if.data = mb_owner_w ?
                 mb_ram_data_i :
                 {a2bus_if.data, a2bus_if.data,
                  a2bus_if.data, a2bus_if.data};
@@ -258,6 +317,7 @@ assign debug_128k_status_o =
     endgenerate
 
     reg doc_wr_r;
+    reg doc_rd_r;
     reg [7:0] doc_addr_r;
 
     always_ff @(posedge a2bus_if.clk_logic) begin
@@ -266,6 +326,7 @@ assign debug_128k_status_o =
             glu_mem_addr_r <= 21'h0;
             glu_mem_byte_en_r <= 4'b1111;
             doc_wr_r <= 1'b0;
+            doc_rd_r <= 1'b0;
             doc_addr_r <= 8'h00;
             sound_128k_enable_r <= 1'b0;
             sound_128k_unlocked_r <= 1'b0;
@@ -277,6 +338,7 @@ assign debug_128k_status_o =
         end else begin
             glu_mem_wr_r <= 1'b0;
             doc_wr_r <= 1'b0;
+            doc_rd_r <= 1'b0;
 
             if (ENABLE && glu_sel_w &&
                 a2bus_if.data_in_strobe &&
@@ -407,10 +469,16 @@ assign debug_128k_status_o =
             end else if (ENABLE && glu_sel_w &&
                          a2bus_if.data_in_strobe &&
                          a2bus_if.rw_n &&
-                         (a2bus_if.addr[1:0] == 2'b01) &&
-                         auto_inc_w) begin
-                {sound_ptr_hi_r, sound_ptr_lo_r} <=
-                    {sound_ptr_hi_r, sound_ptr_lo_r} + 1'd1;
+                         (a2bus_if.addr[1:0] == 2'b01)) begin
+                // Read events must also reach DOC for its status semantics.
+                if (access_doc_w) begin
+                    doc_rd_r <= 1'b1;
+                    doc_addr_r <= sound_ptr_lo_r;
+                end
+                if (auto_inc_w) begin
+                    {sound_ptr_hi_r, sound_ptr_lo_r} <=
+                        {sound_ptr_hi_r, sound_ptr_lo_r} + 1'd1;
+                end
             end
         end
     end
@@ -694,20 +762,20 @@ assign debug_internal_ctrl_data_o =
     // a2bus_if.data is intentionally used in the golden design.
     // The bridge must present a synchronous one-shot write with
     // its own stable address and data; it will be wired in P2.
-    wire doc_host_wr_w =
-        MB_DOC_MODE ? mb_doc_wr_i : doc_wr_r;
+    wire doc_host_wr_w = mb_owner_w ? mb_doc_wr_i : doc_wr_r;
+    wire doc_host_rd_w = !mb_owner_w && doc_rd_r;
     wire [7:0] doc_host_addr_w =
-        MB_DOC_MODE ? mb_doc_addr_i : doc_addr_r;
+        mb_owner_w ? mb_doc_addr_i : doc_addr_r;
     wire [7:0] doc_host_data_w =
-        MB_DOC_MODE ? mb_doc_data_i : a2bus_if.data;
+        mb_owner_w ? mb_doc_data_i : a2bus_if.data;
 
     doc5503 #(
     ) doc5503 (
         .clk_i(a2bus_if.clk_logic),
         .reset_n_i(a2bus_if.system_reset_n),
         .clk_en_i(a2bus_if.clk_7M_posedge),
-        .cs_n_i(~doc_host_wr_w),
-        .we_n_i(1'b0),
+        .cs_n_i(~(doc_host_wr_w || doc_host_rd_w)),
+        .we_n_i(~doc_host_wr_w),
         .addr_i(doc_host_addr_w),
         .data_i(doc_host_data_w),
         .data_o(doc_data_o_w),

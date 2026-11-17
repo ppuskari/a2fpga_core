@@ -996,9 +996,28 @@ static void audio_save(int id)
     (void)id;
     uint8_t previous = settings()->audio_mode;
     settings()->audio_mode = s_audio_draft;
-    if (settings_save())
-        set_status(" AUDIO SAVED - POWER CYCLE TO LOAD");
-    else {
+    if (settings_save()) {
+        /* A3 live: set the FPGA personality now. Do not touch slots,
+         * Apple RESET, USB, or the F0 boot-rearm command. Software
+         * already playing may need to reinitialize its AY/DOC voices. */
+        uint8_t request = 0u;
+        uint8_t route = 0u;
+        bool applied = false;
+        for (int attempt = 0; attempt < 8 && !applied; ++attempt) {
+            fpga_spi_reg_write(REG_AUDIO_MODE, s_audio_draft);
+            request = fpga_spi_reg_read(REG_AUDIO_MODE);
+            route = fpga_spi_reg_read(REG_AUDIO_ROUTE_A3);
+            applied = request == (uint8_t)(0xA0u | s_audio_draft) &&
+                      route == (uint8_t)(0xD0u | s_audio_draft);
+            if (!applied)
+                bflb_mtimer_delay_us(50);
+        }
+        osd_log("AUD LIVE S=%u F=%02X RT=%02X %s",
+                (unsigned)s_audio_draft, (unsigned)request, (unsigned)route,
+                applied ? "OK" : "FAILED");
+        set_status(applied ? " AUDIO SAVED + APPLIED LIVE" :
+                             " AUDIO SAVED; FPGA DID NOT APPLY");
+    } else {
         settings()->audio_mode = previous;
         set_status(" AUDIO SAVE FAILED - NOT CHANGED");
     }
@@ -1009,7 +1028,7 @@ static void audio_build(void)
     menu_item_t *m = mi_add(MI_CHOICE, "BOOT AUDIO MODE",
                            audio_name(s_audio_draft));
     m->on_change = audio_change;
-    m = mi_add(MI_ACTION, "SAVE FOR NEXT BOOT (ENTER)", "");
+    m = mi_add(MI_ACTION, "SAVE + APPLY AUDIO (ENTER)", "");
     m->action = audio_save;
     mi_add(MI_INFO, "", "");
     mi_add(MI_INFO, "1. LEFT/RIGHT TO SELECT AUDIO MODE", "");
@@ -1040,7 +1059,7 @@ static void audio_build(void)
         mi_add(MI_INFO, "FPGA ACTIVE AUDIO", "NO A3 CORE");
         mi_add(MI_INFO, "REFLASH FPGA .BIN FOR AUDIO ROUTE", "");
     }
-    mi_add(MI_INFO, "AFTER SAVE: FULL POWER CYCLE TO APPLY", "");
+    mi_add(MI_INFO, "AFTER SAVE: MODE APPLIES IMMEDIATELY", "");
 }
 static const menu_screen_t SCR_AUDIO = { "AUDIO CONFIG", audio_build };
 static void audio_enter(int id)
