@@ -1040,7 +1040,7 @@ static void audio_build(void)
         mi_add(MI_INFO, "FPGA ACTIVE AUDIO", "NO A3 CORE");
         mi_add(MI_INFO, "REFLASH FPGA .BIN FOR AUDIO ROUTE", "");
     }
-    mi_add(MI_INFO, "AFTER SAVE: RESTART MCU OR COLD BOOT", "");
+    mi_add(MI_INFO, "AFTER SAVE: FULL POWER CYCLE TO APPLY", "");
 }
 static const menu_screen_t SCR_AUDIO = { "AUDIO CONFIG", audio_build };
 static void audio_enter(int id)
@@ -1073,31 +1073,10 @@ static void root_restart_mcu(int id)
     put_row(8,  "            RESTARTING...               ", false);
     fpga_spi_reg_write(REG_TEXT_MODE, 1);
     fpga_spi_reg_write(REG_VIDEO_ENABLE, 1);
-
-    /* This is the USER-REQUESTED restart, not a normal boot or a raw
-     * BL616 reset button. A3 0x6B locks the audio mode until the FPGA
-     * receives 0x6F=F0; simply restarting the MCU leaves that lock and
-     * the Apple II running. Begin the *new* Apple boot epoch before
-     * the disk thread jumps back into the MCU application.
-     *
-     * Never put this F0 in settings_save(), main()'s normal path or
-     * disk_poll(): it would introduce an unsolicited second IIe reset.
-     * FPGA resets its backstop and asserts /RES before mode/slots are
-     * programmed by the restarted M641 firmware. */
-    uint8_t req = fpga_spi_reg_read(0x6Fu);
-    uint8_t route = fpga_spi_reg_read(0x6Bu);
-    if ((req & 0xFCu) == 0xA0u && (route & 0xFCu) == 0xD0u) {
-        bool reset_ack = false;
-        for (int attempt = 0; attempt < 3 && !reset_ack; ++attempt) {
-            fpga_spi_reg_write(0x6Fu, 0xF0u);
-            bflb_mtimer_delay_us(250);
-            reset_ack = (fpga_spi_reg_read(0x2Eu) & 1u) == 0u;
-        }
-        osd_log("AUDIOCFG MANUAL REBOOT: FPGA %s",
-                reset_ack ? "REARM ACK" : "REARM UNCONFIRMED");
-    } else {
-        osd_log("AUDIOCFG MANUAL REBOOT: NO A3 FPGA");
-    }
+    /* Restore the verified M641 menu behavior. A warm Apple /RESET does
+     * NOT repeat the IIe power-on Disk II autoboot (it drops into BASIC).
+     * Never rearm the A3 FPGA during an ordinary MCU application restart.
+     * Apply changed audio personalities only on full FPGA power-on. */
     fwupdate_request_restart();   /* disk thread quiesces USB and jumps */
 }
 

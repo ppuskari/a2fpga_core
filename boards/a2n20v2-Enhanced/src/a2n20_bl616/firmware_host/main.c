@@ -1232,59 +1232,48 @@ int main(void)
                 settings_loaded_from_flash() ? "FLASH" : "DEFAULTS", dbg);
     }
 
-    /* AUDIOCFG: M641 still owns the entire Apple II boot/reset path.
-     * The FPGA's slot strobe 0x6B locks 0x6F. On MCU-only restarts
-     * this lock survives and normal mode writes cannot change it.
-     * Try the saved mode first. Only if it fails and the PHYSICAL
-     * Apple /RESET signal is already asserted, and MCU 0x2E release
-     * has not occurred, send ONE early FPGA F0 rearm before slots.
-     * Never reset a running IIe or rearm from the disk thread. */
+    /* AUDIOCFG: select persisted audio BEFORE M641's slot commit.
+     * Do not gate this on the initial 'ready' boolean: that boolean
+     * requires SDRAM readiness, but 0x6F is an FPGA control register
+     * independent of SDRAM. On a cold boot it is possible for SDRAM
+     * to miss the 2-second deadline while FPGA control SPI is already
+     * usable. Skipping this write lets 0x6B lock Enhanced (mode 0).
+     *
+     * No F0 re-arm, no Apple reset and no change to normal USB/disk
+     * init. Failed mode selection is nonfatal and logged. A3's 0x6B
+     * READ is the actual audio-mux route, not just an ACK.
+     */
     {
         const uint8_t wanted = settings()->audio_mode;
         uint8_t ack = 0u;
         uint8_t route = 0u;
-        uint8_t reset_status = 0u;
-        uint8_t release_reg = 0u;
         bool matched = false;
-        bool rearmed = false;
+        bool seen_a3 = false;
 
-        if (ready) {
-            for (int attempt = 0; attempt < 8 && !matched; ++attempt) {
-                fpga_spi_reg_write(0x6Fu, wanted);
-                ack = fpga_spi_reg_read(0x6Fu);
-                route = fpga_spi_reg_read(0x6Bu);
+        for (int attempt = 0; attempt < 16 && !matched; ++attempt) {
+            ack = fpga_spi_reg_read(0x6Fu);
+            route = fpga_spi_reg_read(0x6Bu);
+            if ((ack & 0xFCu) == 0xA0u &&
+                (route & 0xFCu) == 0xD0u) {
+                seen_a3 = true;
                 matched = ack == (uint8_t)(0xA0u | wanted) &&
                           route == (uint8_t)(0xD0u | wanted);
-            }
-
-            if (!matched && (route & 0xFCu) == 0xD0u) {
-                reset_status = fpga_spi_read_status();
-                release_reg = fpga_spi_reg_read(0x2Eu);
-                /* Check both physical /RESET and MCU release latch.
-                 * A re-arm after CPU boot was the R3 double-reset defect. */
-                if (!(reset_status & FPGA_STATUS_A2BUS_RESET_N) &&
-                    !(release_reg & 1u)) {
-                    fpga_spi_reg_write(0x6Fu, 0xF0u);
-                    bflb_mtimer_delay_us(100);
-                    rearmed = true;
-                    for (int attempt = 0; attempt < 8 && !matched; ++attempt) {
-                        fpga_spi_reg_write(0x6Fu, wanted);
-                        ack = fpga_spi_reg_read(0x6Fu);
-                        route = fpga_spi_reg_read(0x6Bu);
-                        matched = ack == (uint8_t)(0xA0u | wanted) &&
-                                  route == (uint8_t)(0xD0u | wanted);
-                    }
+                if (!matched) {
+                    fpga_spi_reg_write(0x6Fu, wanted);
+                    ack = fpga_spi_reg_read(0x6Fu);
+                    route = fpga_spi_reg_read(0x6Bu);
+                    matched = ack == (uint8_t)(0xA0u | wanted) &&
+                              route == (uint8_t)(0xD0u | wanted);
                 }
             }
+            if (!matched)
+                bflb_mtimer_delay_us(50);
         }
-
-        osd_log("AUDIOCFG M641 S=%u FPGA=%02X RT=%02X %s",
+        osd_log("AUD S=%u F=%02X RT=%02X %s",
                 (unsigned)wanted, (unsigned)ack, (unsigned)route,
                 matched ? "OK" : "FALLBACK");
-        if (!matched || rearmed)
-            osd_log("AUDIOCFG PRE RST=%02X REL=%02X ARM=%u",
-                    (unsigned)reset_status, (unsigned)release_reg,
-                    (unsigned)rearmed);
+        osd_log("AUD INIT RDY=%u A3=%u", (unsigned)ready,
+                (unsigned)seen_a3);
     }
 
     /* Apply the persisted slot map EARLY -- the gateware gates the Apple II

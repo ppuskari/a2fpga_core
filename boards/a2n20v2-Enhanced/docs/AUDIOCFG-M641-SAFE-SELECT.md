@@ -1,4 +1,4 @@
-# M641-safe AudioCFG companion for existing A3 FPGA
+# M641-safe cold-boot Flash AudioCFG selection for existing A3 FPGA
 
 This branch is based directly on the **working M641 MCU**. It changes
 only the persisted settings layout (reusing reserved byte zero), the
@@ -82,3 +82,33 @@ Use the Menu restart or remove all Apple/Tang/USB power. Automatic
 power-on mode selection is unchanged and may still report FALLBACK;
 that must be diagnosed separately. No changes to FPGA, disk.c or FPGA
 reset timers.
+
+
+## Cold-boot SDRAM-ready gate removed
+
+The prior firmware skipped all A3 mode writes if its initial
+`fpga_spi_wait_ready(2000)` returned false. That function requires BOTH
+FPGA_CONFIGURED and SDRAM_READY. The audio `0x6F` and route `0x6B`
+registers do not depend on SDRAM initialization. Thus a cold startup
+could incorrectly skip saved Original mode and then lock Enhanced with
+M641's normal `0x6B` slot commit. Later MCU restarts can succeed after
+SDRAM initialization, misleadingly suggesting flash settings were lost.
+
+The new firmware probes the A3 register signatures directly and applies
+the persisted 0..3 audio selection with readback in a bounded 16-attempt
+loop (50 us spacing; no prolonged reset hold). It does not send F0,
+reassert Apple reset, or defer the physical Slot 6 disk boot. Failure
+keeps the previous Enhanced fallback and logs `AUD ... FALLBACK`.
+The second boot log `AUD INIT RDY=<0|1> A3=<0|1>` distinguishes initial
+SDRAM readiness from an accessible A3 audio-control register.
+
+The menu's RESTART MCU action returns to the original M641 behavior:
+it restarts BL616 application only. It intentionally does not reset
+the Apple II. The earlier F0 reset caused a *warm* IIe restart which
+can land at BASIC instead of the power-on disk autoboot vector;
+PR#6 booting the Slot 6 drive manually confirmed the controller works.
+**Only a genuine complete removal of all Apple/Tang/Debug USB power
+can initiate a clean power-on autoboot and unlock the audio mode.**
+
+Physical hardware test remains necessary. M641 disk.c, FPGA RTL,
+slot configuration and reset-release timing are unchanged.

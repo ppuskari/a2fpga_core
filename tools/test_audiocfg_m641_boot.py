@@ -79,7 +79,7 @@ assert "uint8_t  audio_mode;" in settings_h
 assert "uint8_t  reserved[12];" in settings_h
 assert "s_cfg.audio_mode  = AUDIO_MB_ENHANCED;" in settings_c
 assert "SAVED != ACTIVE" in menu
-assert "RESTART MCU OR COLD BOOT" in menu
+assert "FULL POWER CYCLE TO APPLY" in menu
 
 steps = ("fpga_spi_init();", "fpga_spi_reg_write(REG_A2BUS_READY, 1);",
          "settings_init();", "const uint8_t wanted = settings()->audio_mode;",
@@ -91,25 +91,23 @@ assert indices == sorted(indices), "Unexpected M641 startup ordering"
 assert "ack == (uint8_t)(0xA0u | wanted)" in m
 assert "route == (uint8_t)(0xD0u | wanted)" in m
 assert 'matched ? "OK" : "FALLBACK"' in m
+assert 'AUD INIT RDY=%u A3=%u' in m
 
-# One optional A3 re-arm is allowed only inside the physical reset window.
-assert m.count("fpga_spi_reg_write(0x6Fu, 0xF0u);") == 1
-assert "if (!(reset_status & FPGA_STATUS_A2BUS_RESET_N) &&" in m
-assert "!(release_reg & 1u))" in m
-assert m.index("reset_status = fpga_spi_read_status();") < m.index(
-    "fpga_spi_reg_write(0x6Fu, 0xF0u);")
-assert m.index("fpga_spi_reg_write(0x6Fu, 0xF0u);") < m.index(
-    "fpga_spi_reg_write(0x6B, 1);")
-assert "AUDIOCFG PRE RST=%02X REL=%02X ARM=%u" in m
-
-# No early Apple /RESET release or MCU-only warm restart re-arm.
+# The saved-mode selection MUST NOT depend on the old SDRAM-ready
+# result: control registers are available independently of SDRAM status.
+# An automatic F0 reset is forbidden, as it defeats physical Disk II boot.
+audio_start = m.index("    /* AUDIOCFG: select persisted audio BEFORE")
+audio_end = m.index("    /* Apply the persisted slot map EARLY", audio_start)
+audio = m[audio_start:audio_end]
+assert "if (ready)" not in audio
+assert "for (int attempt = 0; attempt < 16 && !matched; ++attempt)" in audio
+assert "fpga_spi_reg_read(0x6Fu)" in audio
+assert "fpga_spi_reg_read(0x6Bu)" in audio
+assert "fpga_spi_reg_write(0x6Fu, wanted);" in audio
+assert "fpga_spi_reg_write(0x6Fu, 0xF0u);" not in m
 assert "fpga_spi_reg_write(0x2E" not in m
-# F0 is permissible in menu only for explicit user-requested restart.
-assert menu.count("fpga_spi_reg_write(0x6Fu, 0xF0u);") == 1
-assert "static void root_restart_mcu(int id)" in menu
+assert "fpga_spi_reg_write(0x6Fu, 0xF0u);" not in menu
 assert "fwupdate_request_restart();" in menu
-assert menu.index("fpga_spi_reg_write(0x6Fu, 0xF0u);") < menu.index("fwupdate_request_restart();")
-assert "AUDIOCFG MANUAL REBOOT: FPGA %s" in menu
 assert "FPGA_SPI_REG_WRITE_CS_HOLD_US 3u" in spi
 assert spi.count("bflb_mtimer_delay_us(FPGA_SPI_REG_WRITE_CS_HOLD_US);") == 2
 
