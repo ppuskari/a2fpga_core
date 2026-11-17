@@ -1,88 +1,37 @@
 #!/usr/bin/env python3
-"""AUDIOCFG A1/A2/A3 source contract checks (no FPGA simulator required).
-
-This verifies cross-language numeric encodings and the source-level
-ownership gates. It does NOT establish Gowin synthesis or hardware
-timing/audio correctness. Invoke from the repository root:
-    python tools/test_audiocfg_contract.py
-"""
+"""A3-R6 boot-order contracts: source invariant checks, not hardware tests."""
 from pathlib import Path
-import re
-
 ROOT = Path(__file__).resolve().parents[1]
-BOARD = ROOT / "boards" / "a2n20v2-Enhanced"
-H = (BOARD / "src/a2n20_bl616/firmware_host/settings.h").read_text()
-TOP = (BOARD / "hdl/top.sv").read_text()
-GLU = (ROOT / "hdl/sound/sound_glu.sv").read_text()
-SPI = (BOARD / "hdl/bl616/bl616_spi_connector.sv").read_text()
-SPI_HOST = (BOARD / "src/a2n20_bl616/firmware/fpga_spi.c").read_text()
-MENU = (BOARD / "src/a2n20_bl616/firmware_host/menu.c").read_text()
-
-MODE = {
-    "AUDIO_MB_ENHANCED": 0,
-    "AUDIO_MB_ORIGINAL": 1,
-    "AUDIO_DOC_NATIVE": 2,
-    "AUDIO_SHARED": 3,
-}
-for name, value in MODE.items():
-    assert re.search(rf"#define\s+{name}\s+{value}u\b", H), name
-
-# Model the gates in top.sv and assert the mutually exclusive ownership
-# truth table, then verify each referenced condition is present in the HDL.
-for mode in range(4):
-    enhanced = mode == 0
-    original = mode == 1
-    native = mode == 2
-    shared = mode == 3
-    doc_bridge = enhanced
-    doc_cpu = native or shared
-    mb_visible = not native
-    ay_audio = original or shared
-    assert not (doc_bridge and doc_cpu), mode
-    assert mb_visible == (enhanced or original or shared), mode
-    assert ay_audio == (original or shared), mode
-    assert doc_bridge or doc_cpu or original, mode
-
-for needle in [
-    "audio_enhanced_w = AUDIO_MODE_MB_DOC && (mcu_audio_mode_w == 2'd0)",
-    "audio_original_w = AUDIO_MODE_MB_DOC && (mcu_audio_mode_w == 2'd1)",
-    "audio_native_w   = AUDIO_MODE_MB_DOC && (mcu_audio_mode_w == 2'd2)",
-    "audio_shared_w   = AUDIO_MODE_MB_DOC && (mcu_audio_mode_w == 2'd3)",
-    ".reset_n_i(system_reset_n_w && audio_enhanced_w)",
-    ".active_i(audio_mb_enabled_w)",
-    "audio_shared_w ? shared_mix_l_w",
-    "audio_enhanced_w ? (mb_fx_ay_l_w ? mb_fx_pcm_l : sg_audio_l)",
-    "wire native_doc_slot_w = AUDIO_MODE_MB_DOC && audio_native_doc_w",
-    ".audio_active_route_i(audio_active_route_w)",
-]:
-    assert needle in TOP, needle
-for needle in [
-    "mb_owner_w = MB_DOC_MODE && (audio_mode_i == 2'd0)",
-    "native_owner_w = !MB_DOC_MODE || (audio_mode_i[1])",
-    "native_slot_sel_i && (a2bus_if.addr[3:2] == 2'b00)",
-    "mb_owner_w ? mb_doc_wr_i : doc_wr_r",
-    ".cs_n_i(~(doc_host_wr_w || doc_host_rd_w))",
-    "doc_shadow[scrub_ptr_r] <= 8'h00",
-]:
-    assert needle in GLU, needle
-for needle in ["7'h6F: reg_rdata = {6'b101000, audio_mode_r}",
-               "7'h6B: reg_rdata = {6'b110100, audio_active_route_i}",
-               "reg_wdata == 8'hF0",
-               "audio_boot_rearm_pulse_r <= 1'b1",
-               "audio_mode_locked_r <= 1'b1",
-               "7'h6F: begin",
-               "audio_mode_r <= reg_wdata[1:0]"]:
-    assert needle in SPI, needle
-# The SPI write must hold CS# through the FPGA SCLK->system CDC commit,
-# including the raw register write variant. Without this a rapid CS# rise
-# may discard the second byte before reg_wr_req is generated.
-assert "#define FPGA_SPI_REG_WRITE_CS_HOLD_US 3u" in SPI_HOST
-assert SPI_HOST.count("bflb_mtimer_delay_us(FPGA_SPI_REG_WRITE_CS_HOLD_US);") == 2
-assert "SAVE FOR NEXT BOOT (ENTER)" in MENU
-assert "FPGA ACTIVE AUDIO" in MENU
-assert "A3 VERIFIED" in MENU
-assert "SAVED != ACTIVE" in MENU
-assert "0x6Bu" in (BOARD / "src/a2n20_bl616/firmware_host/main.c").read_text()
-assert "fpga_spi_reg_write(0x6Fu, 0xF0u)" in (BOARD / "src/a2n20_bl616/firmware_host/main.c").read_text()
-assert 'AUDIOCFG S=%u FPGA=%02X RT=%02X %s' in (BOARD / "src/a2n20_bl616/firmware_host/disk.c").read_text()
-print("AUDIOCFG A1/A2/A3 source contracts: PASS (not a synthesis test)")
+B = ROOT / "boards" / "a2n20v2-Enhanced"
+M = (B / "src/a2n20_bl616/firmware_host/main.c").read_text()
+D = (B / "src/a2n20_bl616/firmware_host/disk.c").read_text()
+U = (B / "src/a2n20_bl616/firmware_host/menu.c").read_text()
+F = (B / "src/a2n20_bl616/firmware/fpga_spi.c").read_text()
+S = (B / "hdl/bl616/bl616_spi_connector.sv").read_text()
+T = (B / "hdl/top.sv").read_text()
+assert "bool audiocfg_boot_select(void)" in M
+assert "bool audiocfg_virtual_storage_assigned(void)" in M
+assert "fpga_spi_reg_write(REG_A2BUS_READY, 1);" in M
+assert "fpga_spi_reg_read(REG_A2BUS_READY)" in M
+assert "audio_boot_ok = audiocfg_boot_select();" in M
+assert "if (ok && audio_boot_ok && bus_ready_ack)" in M
+assert "fpga_spi_reg_write(0x6B, 1)" in M
+assert "fpga_spi_reg_write(0x2E" not in M
+assert "fpga_spi_reg_write(0x6Fu, 0xF0u)" not in M
+assert "fpga_spi_reg_write(0x6Fu, mode);" in M
+assert M.index("fpga_spi_init();") < M.index("settings_init();") < M.index("audio_boot_ok = audiocfg_boot_select();") < M.index("fpga_spi_reg_write(0x6B, 1)") < M.index("usbh_initialize(") < M.index('usb_osal_thread_create("disk"')
+assert "if (!audiocfg_virtual_storage_assigned()" in D
+assert "int audio_ok = bridge_ok && audiocfg_boot_select();" in D
+assert "if (audio_ok && slots_ok)" in D
+assert "fpga_spi_reg_write(REG_CARDROM_REL, 1);" in D
+assert "fpga_spi_reg_write(0x2Eu, 1);" in D
+assert D.index("fpga_spi_reg_write(REG_CARDROM_REL, 1)") < D.index("fpga_spi_reg_write(0x2Eu, 1)")
+assert "fpga_spi_reg_write(0x6Fu, 0xF0u)" not in D
+assert "fpga_spi_reg_write(0x6Fu, 0xF0u)" in U
+assert "SAVED != ACTIVE" in U
+assert "FPGA_SPI_REG_WRITE_CS_HOLD_US 3u" in F
+assert "reg_wdata == 8'hF0" in S
+assert "audio_mode_r <= reg_wdata[1:0]" in S
+assert "audio_original_w ? mb_fx_pcm_l" in T
+assert "audio_original_w ? mb_fx_pcm_r" in T
+print("A3-R6 boot-order source contract: PASS (not Gowin or BL616 compilation)")

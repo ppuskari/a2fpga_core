@@ -1188,6 +1188,61 @@ int menu_hook_net_lines(char lines[][41], int max)
     return n;
 }
 
+/* A3-R6 boot-only contract. Audio mode must be selected and confirmed
+ * before SPI 0x6B locks the FPGA. NEVER send F0 in automatic startup:
+ * F0 is a disruptive Apple II reset reserved for the manual MCU restart. */
+bool audiocfg_boot_select(void)
+{
+    const uint8_t mode = settings()->audio_mode;
+    if (mode >= AUDIO_MODE_COUNT)
+        return false;
+
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        uint8_t st = fpga_spi_read_status();
+        if ((st & (FPGA_STATUS_FPGA_CONFIGURED | FPGA_STATUS_SDRAM_READY)) !=
+            (FPGA_STATUS_FPGA_CONFIGURED | FPGA_STATUS_SDRAM_READY)) {
+            bflb_mtimer_delay_us(100);
+            continue;
+        }
+        uint8_t ack = fpga_spi_reg_read(0x6Fu);
+        uint8_t active = fpga_spi_reg_read(0x6Bu);
+        if (ack == (uint8_t)(0xA0u | mode) &&
+            active == (uint8_t)(0xD0u | mode))
+            return true;
+
+        /* A3 core identity is required. A1/A2 only echoes mode but
+         * has no effective audio-routing implementation. */
+        if ((active & 0xFCu) != 0xD0u) {
+            bflb_mtimer_delay_us(100);
+            continue;
+        }
+        /* Do not switch personalities after MCU-triggered /RES release.
+         * On cold FPGA boot this latch is zero; on explicit RESTART MCU
+         * the menu's F0 command also clears it before this code runs. */
+        if (fpga_spi_reg_read(0x2Eu) & 1u)
+            return false;
+
+        fpga_spi_reg_write(0x6Fu, mode);
+        bflb_mtimer_delay_us(100);
+    }
+    return false;
+}
+
+/* Virtual media require USB/SD mount before Apple ROM boot. When only
+ * physical Apple disk controllers are in use, release can happen as soon
+ * as USB host initialization and disk task startup have completed. */
+bool audiocfg_virtual_storage_assigned(void)
+{
+    for (int slot = 0; slot < 8; ++slot) {
+        uint8_t card = settings()->slot_cards[slot];
+        if (card == 0xFFu)
+            card = settings_slot_hw_defaults[slot];
+        if (card == 4u || card == 6u) /* Disk II / ProDOS HDD */
+            return true;
+    }
+    return false;
+}
+
 int main(void)
 {
     board_init();
@@ -1208,8 +1263,15 @@ int main(void)
      * fallback no longer asserts this for us — an MCU that never writes
      * 0x30 would leave the Apple bus interface parked. Ready means "grab
      * the bus now"; the mount-gated 0x2E release means "boot for real". */
-    fpga_spi_reg_write(REG_A2BUS_READY, 1);
-    bt_mark(BT_A2BUS_READY);   /* FPGA now grabs+holds the Apple II /RES */
+    /* Register 0x30 is essential for the Apple bridge. Early writes can
+     * be dropped by SPI CDC: verify instead of fire-and-forget. */
+    int bus_ready_ack = 0;
+    for (int n = 0; n < 10 && !bus_ready_ack; ++n) {
+        fpga_spi_reg_write(REG_A2BUS_READY, 1);
+        bus_ready_ack = (fpga_spi_reg_read(REG_A2BUS_READY) & 1u) != 0;
+        if (!bus_ready_ack) bflb_mtimer_delay_us(100);
+    }
+    bt_mark(BT_A2BUS_READY);
 
     /* Persisted preferences, then the gamepad menu that edits them. */
     settings_init();
@@ -1232,55 +1294,18 @@ int main(void)
                 settings_loaded_from_flash() ? "FLASH" : "DEFAULTS", dbg);
     }
 
-    /* AUDIOCFG A3: 0x6F acknowledges mode acceptance on both A1/A2 and A3
-     * FPGA bitstreams. Only A3 reports the EFFECTIVE AUDIO ROUTE via read
-     * of 0x6B (D0..D3). This check executes BEFORE the 0x6B slot-map strobe.
-     * Never report "boot routing" solely from the legacy A1/A2 ACK. */
-    {
-        uint8_t mode = settings()->audio_mode;
-        uint8_t request_read = 0;
-        uint8_t route_read = 0;
-        int verified = 0;
-        if (ready) {
-            // Explicit boot epoch: FPGA's 0x6B lock survives RESTART MCU.
-            // New A3 gateware now asserts Apple reset and clears that lock.
-            // Early SPI writes can be lost; repeat the full rearm+select
-            // transaction on each attempt until BOTH registers agree.
-            for (int attempt = 0; attempt < 5 && !verified; attempt++) {
-                fpga_spi_reg_write(0x6Fu, 0xF0u);
-                bflb_mtimer_delay_us(100);
-                fpga_spi_reg_write(0x6Fu, mode);
-                request_read = fpga_spi_reg_read(0x6Fu);
-                route_read = fpga_spi_reg_read(0x6Bu);
-                verified = request_read == (uint8_t)(0xA0u | mode) &&
-                           route_read == (uint8_t)(0xD0u | mode);
-                if (!verified) bflb_mtimer_delay_us(100);
-            }
-        }
-        if (verified) {
-            osd_log("AUDIOCFG A3: REQ=%u ROUTE=%u OK",
-                    (unsigned)mode, (unsigned)(route_read & 3u));
-        } else if (request_read == (uint8_t)(0xA0u | mode) &&
-                   (route_read & 0xFCu) != 0xD0u) {
-            osd_log("AUDIOCFG: OLD FPGA CORE (NO A3)");
-            osd_log("AUDIOCFG: REFLASH A3 FPGA .BIN");
-        } else {
-            osd_log("AUDIOCFG: MODE=%u REQ=%02X RT=%02X",
-                    (unsigned)mode, (unsigned)request_read,
-                    (unsigned)route_read);
-            osd_log("AUDIOCFG: MODE ROUTING UNVERIFIED");
-        }
-    }
+    /* Persistence is loaded now. Program the FPGA's actual audio route
+     * BEFORE slot commit 0x6B. No automatic F0, reset or 0x2E here. */
+    bool audio_boot_ok = audiocfg_boot_select();
+    osd_log("AUDIOCFG BOOT S=%u %s",
+            (unsigned)settings()->audio_mode,
+            audio_boot_ok ? "ACK" : "DEFER");
 
-    /* Apply the persisted slot map EARLY -- the gateware gates the Apple II
-     * /RES release on the 0x6B reconfig strobe (reset contract: the Apple
-     * never boots before the virtual cards know their slots), so this is what
-     * lets the machine boot at native-like speed instead of waiting for
-     * storage mounts. Early-main SPI writes are occasionally LOST (same
-     * failure mode as the 0x2E release), so verify every register by readback
-     * and only strobe once the whole map is confirmed; on failure, leave the
-     * strobe to the mount-time path in disk_poll (reset then releases later
-     * but still slot-correct). */
+    /* Configure the FPGA slot assignments before USB startup. 0x6B
+     * locks the audio personality AND tells slotmaker to reconfigure;
+     * it does NOT release the Apple reset line. Only disk_poll() sends
+     * 0x2E, after USB host startup and virtual media readiness if needed.
+     * Failed SPI writes are retried once in the disk thread. */
     {
         int ok = 1;
         for (int i = 0; i < 8; i++) {
@@ -1294,12 +1319,14 @@ int main(void)
             }
             ok &= good;
         }
-        if (ok) {
-            fpga_spi_reg_write(0x6B, 1);   /* reconfig strobe -> /RES may release */
+        if (ok && audio_boot_ok && bus_ready_ack) {
+            fpga_spi_reg_write(0x6B, 1);   /* commit slots and lock verified audio */
             g_slots_applied_early = true;
             bt_mark(BT_SLOTS_APPLIED);
         } else {
-            osd_log("SLOTS: EARLY APPLY UNCONFIRMED (deferred to mount path)");
+            osd_log("SLOTS: DEFER BR=%u AUDIO=%u SLOT=%u",
+                    (unsigned)bus_ready_ack, (unsigned)audio_boot_ok,
+                    (unsigned)ok);
         }
     }
     osd_log("USB HOST: WAITING FOR DEVICE...");

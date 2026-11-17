@@ -31,6 +31,8 @@
 #include "boot_timeline.h" /* boot-milestone timeline (mount / reset-release) */
 
 extern bool g_slots_applied_early;  /* main.c: early slot map confirmed+strobed */
+extern bool audiocfg_boot_select(void);      /* main.c: verified boot selector */
+extern bool audiocfg_virtual_storage_assigned(void); /* main.c */
 
 /* ---- Volume register map (must match bl616_spi_connector.sv 0x40-0x5F) ---- */
 #define VOL_BASE(v)       (0x40u + (v) * 0x10u)
@@ -901,67 +903,81 @@ void disk_poll(void)
             for (int v = 0; v < NDRV; v++) any = any || g_mounted[v];
             for (int u = 0; u < NHDD; u++) any = any || g_hdd_mounted[u];
             if (any) bt_mark(BT_MOUNT_FOUND);   /* first volume seen (pre-release) */
-            if ((any && !g_remount_req) ||
+            if (!audiocfg_virtual_storage_assigned() ||
+                (any && !g_remount_req) ||
                 bflb_mtimer_get_time_us() > 7000000u) {
-                /* Fallback slot-map apply: normally main() already programmed
-                 * and strobed the map (readback-verified, g_slots_applied_early)
-                 * and /RES released on that strobe per the reset contract. Only
-                 * if the early apply could not be confirmed do we program here
-                 * -- this late in boot the SPI link is proven good (the mounts
-                 * above ran over it), and the Apple II is STILL held in reset
-                 * (the gateware waits for the 0x6B strobe), so the reconfig
-                 * remains race-free. Never re-strobe once applied: the Apple
-                 * is running by then and a slotmaker reconfig mid-run would
-                 * glitch card decode. 0xFF = hardware default. */
-                if (!g_slots_applied_early) {
-                    for (int i = 0; i < 8; i++) {
-                        uint8_t c = settings()->slot_cards[i];
-                        if (c == 0xFF)
-                            c = settings_slot_hw_defaults[i];
-                        fpga_spi_reg_write((uint8_t)(0x60 + i), c);
+                /* This is the ONLY automatic Apple reset-release path.
+                 * main() never writes 0x2E. Recover any missed early SPI
+                 * writes BEFORE the slot-map lock, without sending F0. */
+                int bridge_ok = 0;
+                for (int retry = 0; retry < 5 && !bridge_ok; ++retry) {
+                    fpga_spi_reg_write(0x30u, 1);
+                    bridge_ok = (fpga_spi_reg_read(0x30u) & 1u) != 0u;
+                }
+                int audio_ok = bridge_ok && audiocfg_boot_select();
+                int slots_ok = g_slots_applied_early;
+
+                if (audio_ok && !slots_ok) {
+                    slots_ok = 1;
+                    for (int i = 0; i < 8; ++i) {
+                        uint8_t card = settings()->slot_cards[i];
+                        if (card == 0xFFu)
+                            card = settings_slot_hw_defaults[i];
+                        int confirmed = 0;
+                        for (int retry = 0; retry < 5 && !confirmed; ++retry) {
+                            fpga_spi_reg_write((uint8_t)(0x60u + i), card);
+                            confirmed =
+                                fpga_spi_reg_read((uint8_t)(0x60u + i)) == card;
+                        }
+                        slots_ok &= confirmed;
                     }
-                    fpga_spi_reg_write(0x6B, 1);   /* slotmaker reconfig strobe */
-                    bt_mark(BT_SLOTS_APPLIED);
+                    if (slots_ok) {
+                        fpga_spi_reg_write(0x6Bu, 1); /* commit and lock */
+                        g_slots_applied_early = true;
+                        bt_mark(BT_SLOTS_APPLIED);
+                    }
                 }
-                osd_log("SLOTS: %d %d %d %d %d %d %d %d",
-                        fpga_spi_reg_read(0x60), fpga_spi_reg_read(0x61),
-                        fpga_spi_reg_read(0x62), fpga_spi_reg_read(0x63),
-                        fpga_spi_reg_read(0x64), fpga_spi_reg_read(0x65),
-                        fpga_spi_reg_read(0x66), fpga_spi_reg_read(0x67));
 
-                /* Release the CardROM INH overlay BEFORE the Apple II
-                 * starts: releasing after opens a race where the CPU's
-                 * first $FFFC fetch reads the CardROM stub vector and the
-                 * machine strands in the keyboard stub until a manual
-                 * reset. (The CardROM is also parameter-disabled in HDL
-                 * until the keyboard-snoop bootstrap is finished.) */
-                fpga_spi_reg_write(REG_CARDROM_REL, 1);
-
-                /* Robust A2_RST_RELEASE: the single 0x2E write has been observed
-                 * to get LOST on the SPI link -> the FPGA never sees it and
-                 * falls through to its 15 s backstop instead of releasing here.
-                 * Write, read back reg 0x2E bit0 (a2_rst_release_r), and retry
-                 * until it sticks. Bounded, one-time, microsecond-scale. */
-                bt_mark(BT_RST_WRITE);
-                int rst_ok = 0;
-                for (int a = 0; a < 5; a++) {
-                    fpga_spi_reg_write(0x2E, 1);        /* A2_RST_RELEASE */
-                    if (fpga_spi_reg_read(0x2E) & 0x01) { rst_ok = 1; break; }
-                    bflb_mtimer_delay_us(50);
+                if (audio_ok && slots_ok) {
+                    /* CardROM INH must be removed before the CPU fetches
+                     * its first ROM reset vector. Once that is done,
+                     * release /RES with readback and never touch it again. */
+                    fpga_spi_reg_write(REG_CARDROM_REL, 1);
+                    bt_mark(BT_RST_WRITE);
+                    int released = 0;
+                    for (int retry = 0; retry < 5 && !released; ++retry) {
+                        fpga_spi_reg_write(0x2Eu, 1);
+                        released = (fpga_spi_reg_read(0x2Eu) & 1u) != 0u;
+                        if (!released) bflb_mtimer_delay_us(50);
+                    }
+                    if (released) {
+                        s_released = true;
+                        osd_log("A2: RESET RELEASED%s",
+                                any ? "" : " (PHYSICAL/NO MEDIA)");
+                        uint8_t r = fpga_spi_reg_read(0x6Fu);
+                        uint8_t a = fpga_spi_reg_read(0x6Bu);
+                        osd_log("AUDIOCFG S=%u FPGA=%02X RT=%02X %s",
+                                (unsigned)settings()->audio_mode,
+                                (unsigned)r, (unsigned)a,
+                                (r == (uint8_t)(0xA0u | settings()->audio_mode) &&
+                                 a == (uint8_t)(0xD0u | settings()->audio_mode)) ?
+                                 "OK" : "MISMATCH");
+                    } else {
+                        osd_log("A2: RESET RELEASE UNCONFIRMED");
+                    }
+                } else {
+                    /* Do not lock Enhanced or reset the Apple because
+                     * an early SPI write was lost. The next 2ms disk tick
+                     * retries. The FPGA's original 15s backstop applies. */
+                    static uint32_t last_boot_log_us = 0;
+                    uint32_t now_us = (uint32_t)bflb_mtimer_get_time_us();
+                    if (now_us - last_boot_log_us >= 1000000u) {
+                        osd_log("AUDIOCFG BOOT HOLD BR=%u A=%u SLOT=%u",
+                                (unsigned)bridge_ok,
+                                (unsigned)audio_ok, (unsigned)slots_ok);
+                        last_boot_log_us = now_us;
+                    }
                 }
-                s_released = true;
-                osd_log("A2: RESET RELEASED%s%s", any ? "" : " (NO MEDIA)",
-                        rst_ok ? "" : " (0x2E UNCONFIRMED)");
-                // The initial A3 boot log scrolls away during USB startup.
-                // Keep the *actual* FPGA route in the final console rows.
-                uint8_t audio_req = fpga_spi_reg_read(0x6Fu);
-                uint8_t audio_route = fpga_spi_reg_read(0x6Bu);
-                uint8_t wanted = settings()->audio_mode;
-                bool audio_ok = audio_req == (uint8_t)(0xA0u | wanted) &&
-                                audio_route == (uint8_t)(0xD0u | wanted);
-                osd_log("AUDIOCFG S=%u FPGA=%02X RT=%02X %s",
-                        (unsigned)wanted, (unsigned)audio_req,
-                        (unsigned)audio_route, audio_ok ? "OK" : "MISMATCH");
             }
         }
         /* (BT_RST_RELEASED is stamped at the top of disk_poll, independent of
