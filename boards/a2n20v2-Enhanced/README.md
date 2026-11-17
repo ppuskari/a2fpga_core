@@ -401,11 +401,15 @@ present there); ROM 03 models work in any slot.
 
 ## Building from source
 
-- **FPGA bitstream**: open `a2n20v2_enhanced.gprj` in the Gowin IDE
-  (educational or commercial), or build headless with the Gowin CLI — see
-  the [project wiki](../../docs/README.md). (When using the Gowin IDE, do
-  not add/remove files from the project or it will rewrite relative paths
-  as absolute.)
+- **FPGA bitstream**: FIRST generate/verify the local authentic SynthLAB
+  piano ROM with `py -3 tools/extract_synthlab_piano.py --download`
+  and `py -3 tools/extract_synthlab_piano.py --check` from the repository
+  root. The ROM is intentionally not in Git. The Enhanced `prebuild.tcl`
+  automatically generates missing ROM and rejects invalid ROM, but an
+  explicit check avoids a silent no-piano bitstream. Then open
+  `a2n20v2_enhanced.gprj` in Gowin IDE (educational/commercial), or
+  use the headless CLI in [project wiki](../../docs/README.md).
+  (Do not add/remove project files in Gowin IDE; it rewrites paths.)
 - **BL616 firmware**: T-Head RISC-V toolchain + Bouffalo SDK — full
   instructions in the [BL616 firmware README](src/a2n20_bl616/README.md).
   The end-user build is `firmware_host` (USB host + disks + menu); the

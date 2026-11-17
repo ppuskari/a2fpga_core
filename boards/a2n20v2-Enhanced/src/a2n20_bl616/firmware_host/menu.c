@@ -961,8 +961,8 @@ static void fpga_build(void)
 static const menu_screen_t SCR_FPGAUPDATE = { "FPGA UPDATE", fpga_build };
 
 /* ======================= SCREEN: AUDIO CONFIG ============================== */
-/* Save the next power-on personality, without applying it live or resetting
- * the Apple II. All sources of board power must be removed to reload FPGA. */
+/* Persist the audio personality and apply it LIVE through A3 0x6F;
+ * never reconfigure slots or reset the Apple II to change audio. */
 #define REG_AUDIO_MODE 0x6Fu
 #define REG_AUDIO_ROUTE_A3 0x6Bu /* D0-D3 from the active FPGA audio mux */
 static uint8_t s_audio_draft;

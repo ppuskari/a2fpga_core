@@ -755,7 +755,7 @@ module top #(
     // AUDIOCFG A3: one owner per DOC oscillator/RAM resource.
     // Enhanced keeps the M641 AY->DOC chain; Original and Shared use the
     // real YM2149 PSGs. Native/Shared get CPU Sound GLU register access.
-    // Mode is latched at MCU boot, never switched during Apple II playback.
+    // Live 0x6F audio selection; Apple II reset is not involved.
     wire audio_enhanced_w = AUDIO_MODE_MB_DOC && (mcu_audio_mode_w == 2'd0);
     wire audio_original_w = AUDIO_MODE_MB_DOC && (mcu_audio_mode_w == 2'd1);
     wire audio_native_w   = AUDIO_MODE_MB_DOC && (mcu_audio_mode_w == 2'd2);
