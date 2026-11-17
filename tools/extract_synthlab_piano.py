@@ -127,8 +127,23 @@ def main():
     source = ap.add_mutually_exclusive_group(required=True)
     source.add_argument("--disk", type=Path)
     source.add_argument("--download", action="store_true")
+    source.add_argument("--check", action="store_true",
+                        help="Verify the locally generated ROM without network access")
     ap.add_argument("--out", type=Path, default=DEFAULT_OUTPUT)
     opts = ap.parse_args()
+    if opts.check:
+        raw_lines = opts.out.read_text(encoding="ascii").splitlines()
+        if len(raw_lines) != 1408:
+            raise ValueError(f"Invalid SynthLAB ROM word count: {len(raw_lines)}, expected 1408")
+        packed = bytearray()
+        for n, line in enumerate(raw_lines, 1):
+            if len(line) != 8 or any(c not in "0123456789ABCDEFabcdef" for c in line):
+                raise ValueError(f"Invalid SynthLAB hex at word {n}")
+            packed.extend(int(line, 16).to_bytes(4, "little"))
+        if len(packed) != 5632 or 0 in packed or fnv32(packed) != SAMPLE_FNV:
+            raise ValueError(f"SynthLAB ROM FNV mismatch: {fnv32(packed):08X}; expected 170BB8B3")
+        print("PASS: SynthLAB piano ROM, 5632 bytes/1408 words, FNV32=170BB8B3")
+        return
     if opts.download:
         with urllib.request.urlopen(DISK_URL, timeout=45) as response:
             disk = response.read()
