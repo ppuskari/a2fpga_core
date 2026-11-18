@@ -12,6 +12,7 @@ module tb_sensei_tracker_bridge;
     wire rd_valid,doc_owner,doc_wr;
     wire [7:0] rd_data,doc_addr,doc_data;
     integer writes=0;
+    reg previous_doc_wr=0;
 
     sensei_tracker_bridge #(.CLOCK_HZ(1000),.FIFO_AW(3)) dut (
         .clk(clk),.rst_n(rst_n),.native_enabled_i(native),
@@ -27,6 +28,9 @@ module tb_sensei_tracker_bridge;
         .doc_addr_o(doc_addr),.doc_data_o(doc_data)
     );
     always @(posedge clk) begin
+        if (doc_wr && previous_doc_wr)
+            $fatal(1,"DOC /CS was not deasserted between writes");
+        previous_doc_wr <= doc_wr;
         if (doc_wr) begin
             writes=writes+1;
             if (doc_addr!=8'h41 || doc_data!=8'h79)
@@ -83,11 +87,14 @@ module tb_sensei_tracker_bridge;
         transfer(8'h12,8'h41);
         transfer(8'h13,8'h79);
         transfer(8'h14,8'hA5);
-        read_check(8'h06,8'h01); // one pending event
+        // Same absolute deadline for a second write: must still produce
+        // a new DOC /CS falling edge, not a continuous write strobe.
+        transfer(8'h14,8'hA5);
+        read_check(8'h06,8'h02); // two pending events
         repeat(75) @(negedge clk);
-        if (writes!=1) $fatal(1,"Expected one scheduled write got %0d",writes);
+        if (writes!=2) $fatal(1,"Expected two scheduled writes got %0d",writes);
         read_check(8'h06,8'h00);
-        read_check(8'h0A,8'h01);
+        read_check(8'h0A,8'h02);
         transfer(8'h16,8'h00);
         if(doc_owner) $fatal(1,"DOC ownership did not release");
         // Old MCU/FreeRTOS stall: IIe emergency STOP revokes ownership
