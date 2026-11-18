@@ -41,6 +41,7 @@
 #include "usbh_asix.h"      /* stock vendor driver for ASIX AX88772x adapters */
 #include "w5100.h"          /* emulated W5100 (Uthernet II) MACRAW bridge */
 #include "disk.h"           /* Disk II image serving (track-on-demand) */
+#include "sensei_tracker.h" /* Native DOC P1D MCU tracker thread */
 #include "boot_timeline.h"  /* boot-milestone timeline (FPGA sys_time capture) */
 
 /* True once the early slot-map apply (below, in main()) has been confirmed by
@@ -1290,6 +1291,11 @@ int main(void)
 
     /* Disk II image serving: mount SD, serve track-on-demand requests. */
     usb_osal_thread_create("disk", 3072, CONFIG_USBHOST_PSC_PRIO + 1, disk_thread, NULL);
+
+    /* SenseiPlay8 tracker is dormant until an IIe command arrives.
+     * Uses dedicated SPI SPACE 6, never alters legacy audio personalities. */
+    usb_osal_thread_create("sensei", 3072, CONFIG_USBHOST_PSC_PRIO + 1,
+                           sensei_tracker_task, NULL);
 
     /* R8: keep speech below BOTH the USB PSC host-service task (28)
      * and the HID/menu poll task (29). R7 accidentally ran the hot
