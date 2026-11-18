@@ -7,6 +7,7 @@ on:
       - petar/sensei8-p2-runtime-mod-picker-20261118
       - petar/sensei8-p2-playable-20261118
       - petar/sensei8-p2-attack-sustain-20261118
+      - petar/sensei8-p2s-lossless-fifo-20261118
   pull_request:
   workflow_dispatch:
 jobs:
@@ -26,10 +27,10 @@ jobs:
           vvp /tmp/tb_pcm
       - name: Compile BL616 tracker C in a portable SDK-free harness
         run: |
-          gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_tracker.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_runtime.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_decode.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_pcm_upload.c
+          gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_tracker.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_runtime.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_decode.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_pcm_upload.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_event_queue.c
       - name: Run MCU tick engine full-song and STOP integration simulation
         run: |
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/tests/test_p1d_mcu.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p1d_mcu
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/tests/test_p1d_mcu.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_event_queue.c -o /tmp/test_p1d_mcu
           /tmp/test_p1d_mcu
       - name: Simulate P1E two-song real-time tracker effects
         run: |
@@ -56,6 +57,10 @@ jobs:
         run: |
           gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2r_attack_sustain.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_decode.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p2r
           /tmp/test_p2r
+      - name: Reproduce and eliminate P2R four-channel FIFO overflow
+        run: |
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2s_backpressure.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_event_queue.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p2s_fifo
+          /tmp/test_p2s_fifo
       - name: Validate integrated top-level source wiring
         run: |
           python -c "from pathlib import Path; t=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text(); g=Path('hdl/sound/sound_glu.sv').read_text(); c=Path('boards/a2n20v2-Enhanced/hdl/bl616/bl616_spi_connector.sv').read_text(); assert all(s in t for s in ('sensei_tracker_bridge','tracker_doc_wr_i','trk_spi_wr_o','trk_slot_rd_w')); assert 'tracker_owner_w' in g and 'tracker_doc_wr_i' in g; assert 'mem_space == 3\x27d6' in c; print('PASS: top, Sound GLU and SPI6 connections present')"
