@@ -253,6 +253,7 @@ void sensei_tracker_task(void *unused)
                 osd_log("SENSEI P2: MOD INVALID OR TOO LARGE");
             } else {
                 tracker_write(REG_STATE,5); /* LOADING SAMPLES */
+                sensei_runtime_set_status(SENSEI_RT_LOADING);
                 if (!sensei_pcm_upload(user_mod.pcm,user_mod.pcm_length)) {
                     tracker_write(REG_STATE,STATE_ERROR);
                     sensei_runtime_set_status(SENSEI_RT_ERROR);
