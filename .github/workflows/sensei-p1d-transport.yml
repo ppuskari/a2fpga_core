@@ -1,0 +1,24 @@
+name: SenseiPlay8 P1D tracker transport validation
+on:
+  push:
+    branches:
+      - petar/sensei8-p1d-mcu-fpga-20261118
+  pull_request:
+  workflow_dispatch:
+jobs:
+  p1d-protocol-and-mcu-c:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SystemVerilog simulator
+        run: sudo apt-get update -qq && sudo apt-get install -y iverilog
+      - name: Validate FPGA native-slot mailbox and SPI6 scheduler
+        run: |
+          iverilog -g2012 -s tb_sensei_tracker_bridge -o /tmp/tb_p1d boards/a2n20v2-Enhanced/hdl/sensei_tracker_bridge.sv boards/a2n20v2-Enhanced/tests/tb_sensei_tracker_bridge.sv
+          vvp /tmp/tb_p1d
+      - name: Compile BL616 tracker C in a portable SDK-free harness
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_tracker.c
+      - name: Validate integrated top-level source wiring
+        run: |
+          python -c "from pathlib import Path; t=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text(); g=Path('hdl/sound/sound_glu.sv').read_text(); c=Path('boards/a2n20v2-Enhanced/hdl/bl616/bl616_spi_connector.sv').read_text(); assert all(s in t for s in ('sensei_tracker_bridge','tracker_doc_wr_i','trk_spi_wr_o','trk_slot_rd_w')); assert 'tracker_owner_w' in g and 'tracker_doc_wr_i' in g; assert 'mem_space == 3\x27d6' in c; print('PASS: top, Sound GLU and SPI6 connections present')"
