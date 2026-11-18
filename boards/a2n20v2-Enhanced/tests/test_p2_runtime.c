@@ -72,7 +72,7 @@ int main(void)
          "unexpected raw file size or DOC sample bytes");
     must(song.song.count==0 && song.song.rows!=NULL,
          "runtime player must not silently treat raw patterns as flattened rows");
-    must(song.order_count==1 && song.catalog[7]==48,
+    must(song.order_count==1 && song.catalog[11]==48,
          "runtime sample catalog not decoded");
     must(max_alloc==sizeof synthetic && total_alloc==sizeof synthetic+256u,
          "runtime loader reserved more PCM memory than this MOD needs");
