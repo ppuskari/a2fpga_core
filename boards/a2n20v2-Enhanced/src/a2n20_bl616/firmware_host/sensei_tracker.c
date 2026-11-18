@@ -166,7 +166,10 @@ static void tracker_stop(tracker_state *s, uint16_t now, uint8_t state)
     /* Drop stale future events, mute the owned DOC at a near-future deadline,
      * then release owner only AFTER these writes have been executed. */
     tracker_write(REG_FLUSH, 0xA5);
-    for (ch=0; ch<4; ++ch)
+    // Runtime ProTracker uses four PAIRS: DOC 0/1,2/3,4/5,6/7.
+    // Stop all eight physical oscillators so sustain partners cannot
+    // continue after STOP, end-of-song or the next MOD selection.
+    for (ch=0; ch<(s->real_mod==2u?8u:4u); ++ch)
         tracker_halt((uint16_t)(now+4u), (uint8_t)ch);
     vTaskDelay(pdMS_TO_TICKS(25));
     tracker_write(REG_OWNER, 0);
