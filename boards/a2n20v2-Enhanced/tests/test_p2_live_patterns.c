@@ -9,7 +9,7 @@
 
 static const uint8_t order_list[2]={0,1};
 static uint8_t pattern_data[2*1024];
-static uint8_t catalog[128];
+static uint8_t catalog[32*8];
 static unsigned writes,starts,zero_vol;
 static uint16_t previous_ms;
 
@@ -33,7 +33,7 @@ int main(void)
 {
     sensei_mod_player_t p;
     /* instrument 1 starts in bank page 0 at volume 48 */
-    catalog[7]=48;
+    catalog[11]=48;
     /* pattern 0, row 0, ch0, trigger instrument 1, period 428 */
     pattern_data[0]=0x01;pattern_data[1]=0xAC;pattern_data[2]=0x10;
     /* pattern 0 row 1: E60 defines loop start */
