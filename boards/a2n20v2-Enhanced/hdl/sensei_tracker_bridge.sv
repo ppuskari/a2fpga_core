@@ -173,6 +173,18 @@ module sensei_tracker_bridge #(
                     !flush_w && !release_w) begin
                     if (overflow_r != 8'hFF) overflow_r <= overflow_r + 1'b1;
                 end
+
+                // CPU panic: $C0CF=$A5 forcibly revokes MCU DOC ownership.
+                // Old MCU images may fail to service the STOP command.
+                // This allows the 6502 to issue StopDOC directly afterward.
+                if (host_write && slot_addr_i == 4'hF &&
+                    slot_data_i == 8'hA5) begin
+                    owner_r <= 1'b0;
+                    read_ptr_r <= 0;
+                    write_ptr_r <= 0;
+                    count_r <= 0;
+                    mcu_state_r <= 8'd4;
+                end
             end
 
             if (spi_rd_i) begin
