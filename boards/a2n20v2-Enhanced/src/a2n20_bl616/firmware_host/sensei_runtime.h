@@ -15,7 +15,8 @@
 
 typedef enum {
     SENSEI_RT_IDLE=0, SENSEI_RT_SELECTED=1, SENSEI_RT_LOADING=2,
-    SENSEI_RT_READY_PCM=3, SENSEI_RT_PLAYING=4, SENSEI_RT_ERROR=5
+    SENSEI_RT_READY_PCM=3, SENSEI_RT_PLAYING=4, SENSEI_RT_ERROR=5,
+    SENSEI_RT_DONE=6
 } sensei_runtime_status_t;
 
 typedef struct {
@@ -33,6 +34,9 @@ typedef struct {
 bool sensei_runtime_choose(const char *relative_path);
 bool sensei_runtime_pending(char *dst,size_t cap);
 sensei_runtime_status_t sensei_runtime_status(void);
+void sensei_runtime_set_status(sensei_runtime_status_t value);
+void sensei_runtime_request_stop(void);
+bool sensei_runtime_take_stop_request(void);
 /* Must run from BL616 tracker worker, through serialized disk_fs_request. */
 bool sensei_runtime_load(const char *relative_path, sensei_runtime_module_t *out);
 void sensei_runtime_free(sensei_runtime_module_t *out);
