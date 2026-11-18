@@ -1,5 +1,13 @@
 # SenseiPlay8 P2: generic runtime ProTracker player
 
+> Note: This document describes the earlier Stage A file-loader milestone.
+> For the current sample-DMA and playback implementation, see
+> [SENSEI_P2_PLAYABLE_CANDIDATE.md](SENSEI_P2_PLAYABLE_CANDIDATE.md).
+> Stage B is now implemented and portable-C / FPGA simulation tested,
+> but full board synthesis, BL616 SDK linking and physical HDMI playback
+> have not yet been verified.
+
+
 **Status: developer branch, NOT a flashable music-player release.**
 
 Goal: one permanent IIe launcher and BL616 firmware, open any
