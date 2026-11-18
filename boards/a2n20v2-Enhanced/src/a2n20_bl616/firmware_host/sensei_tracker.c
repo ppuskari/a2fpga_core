@@ -14,6 +14,7 @@
  * Copyright (c) 2026 Petar Puskarich and contributors.
  */
 #include "sensei_tracker.h"
+#include "sensei_mod_player.h"
 #include "fpga_spi.h"
 #include "osd_console.h"
 #include "FreeRTOS.h"
@@ -38,6 +39,8 @@ typedef struct {
     uint8_t active;
     uint8_t last_seq;
     uint8_t finishing;
+    uint8_t real_mod;
+    sensei_mod_player_t mod;
     uint16_t time_next;
     uint16_t time_finish;
     uint16_t row;
@@ -170,19 +173,26 @@ static void tracker_stop(tracker_state *s, uint16_t now, uint8_t state)
     s->finishing=0;
 }
 
-static void tracker_begin(tracker_state *s, uint16_t now)
+static bool tracker_begin(tracker_state *s, uint16_t now, uint8_t song_id)
 {
     memset(s->base_fc,0,sizeof s->base_fc);
     memset(s->vol,0,sizeof s->vol);
     s->row=0;
     s->tick=0;
+    s->real_mod=(song_id==1 || song_id==2) ? 1u : 0u;
+    if (s->real_mod && !sensei_mod_init(&s->mod,song_id,now)) {
+        tracker_write(REG_STATE, STATE_ERROR);
+        return false;
+    }
     s->time_next=(uint16_t)(now+100u);
     s->active=1;
     s->finishing=0;
     tracker_write(REG_FLUSH, 0xA5);
     tracker_write(REG_OWNER, 1);
     tracker_write(REG_STATE, STATE_PLAY);
-    osd_log("SENSEI P1D: MCU/FPGA TRACKER START");
+    osd_log(s->real_mod ? "SENSEI P1E: REAL MOD START" :
+           "SENSEI P1D: MCU/FPGA TRACKER START");
+    return true;
 }
 
 void sensei_tracker_task(void *unused)
@@ -209,9 +219,8 @@ void sensei_tracker_task(void *unused)
             if (cmd==2 && s.active) {
                 tracker_stop(&s,now,STATE_IDLE);
             } else if (cmd==1 && !s.active) {
-                if (arg==0) {
-                    tracker_begin(&s,now);
-                    just_started=true;
+                if (arg<=2) {
+                    just_started=tracker_begin(&s,now,arg);
                 } else tracker_write(REG_STATE,STATE_ERROR);
             }
         }
@@ -225,17 +234,24 @@ void sensei_tracker_task(void *unused)
         if (s.active) {
             /* Look ahead 80 ms, bounded by FIFO occupancy. This isolates
              * audio timing from USB/Disk/FreeRTOS scheduling jitter. */
-            if (s.row<SONG_ROWS && level<=FIFO_SAFE_LEVEL &&
-                (int16_t)((uint16_t)(now+80u)-s.time_next)>=0) {
-                tracker_emit_tick(&s);
+            if ((s.real_mod ? !sensei_mod_done(&s.mod) : s.row<SONG_ROWS) &&
+                level<=FIFO_SAFE_LEVEL &&
+                (int16_t)((uint16_t)(now+80u)-
+                           (s.real_mod ? sensei_mod_next_ms(&s.mod) :
+                                         s.time_next))>=0) {
+                if (s.real_mod) sensei_mod_tick(&s.mod,tracker_event);
+                else tracker_emit_tick(&s);
             }
-            if (s.row==SONG_ROWS && !s.finishing) {
+            if ((s.real_mod ? sensei_mod_done(&s.mod) : s.row==SONG_ROWS) &&
+                !s.finishing) {
                 s.finishing=1;
-                s.time_finish=(uint16_t)(s.time_next+25u);
+                s.time_finish=(uint16_t)((s.real_mod ?
+                        sensei_mod_next_ms(&s.mod) : s.time_next)+25u);
             }
             if (s.finishing && (int16_t)(now-s.time_finish)>=0) {
                 tracker_stop(&s,now,STATE_DONE);
-                osd_log("SENSEI P1D: DONE 192 ROWS");
+                osd_log(s.real_mod ? "SENSEI P1E: REAL MOD DONE" :
+                        "SENSEI P1D: DONE 192 ROWS");
             }
         }
         vTaskDelay(pdMS_TO_TICKS(5));
