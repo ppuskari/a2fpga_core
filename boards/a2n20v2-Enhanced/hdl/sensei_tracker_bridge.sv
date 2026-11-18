@@ -78,7 +78,7 @@ module sensei_tracker_bridge #(
             4'hB: slot_rdata_o = 8'h1D; // tracker P1D protocol revision
             4'hC: slot_rdata_o = mcu_state_r;
             4'hD: slot_rdata_o = host_seq_r;
-            4'hE: slot_rdata_o = count_r[7:0];
+            4'hE: slot_rdata_o = count_r;
             4'hF: slot_rdata_o = overflow_r;
             default: ;
         endcase
@@ -183,7 +183,7 @@ module sensei_tracker_bridge #(
                     8'h03: spi_rd_data_o <= host_seq_r;
                     8'h04: spi_rd_data_o <= host_arg_r;
                     8'h05: spi_rd_data_o <= mcu_state_r;
-                    8'h06: spi_rd_data_o <= count_r[7:0];
+                    8'h06: spi_rd_data_o <= count_r;
                     8'h07: spi_rd_data_o <= overflow_r;
                     8'h08: spi_rd_data_o <= millis_r[7:0];
                     8'h09: spi_rd_data_o <= millis_r[15:8];
