@@ -37,6 +37,8 @@ target_sources(app PRIVATE
     disk.c
     sensei_tracker.c
     sensei_mod_player.c
+    sensei_mod_decode.c
+    sensei_runtime.c
     diskio_host.c
     osd_console.c
     settings.c
