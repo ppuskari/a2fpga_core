@@ -79,7 +79,7 @@ bool sensei_pcm_upload(const uint8_t *pcm, uint32_t bytes)
     spi_write(0x1F,0x5A);
     spi_read(0x20,status,4);
     if (status[0]!=0x08 || status[3] ||
-        (((uint16_t)status[1]|((uint16_t)status[2]<<8))!=word_count)) {
+        (((uint32_t)status[1]|((uint32_t)status[2]<<8))!=word_count)) {
         abort_upload();
         return false;
     }
