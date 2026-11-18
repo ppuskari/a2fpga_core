@@ -53,6 +53,14 @@ module sound_glu #(
     input  logic [7:0] tracker_doc_addr_i,
     input  logic [7:0] tracker_doc_data_i,
 
+    // P2 MCU DMA: 32-bit word-addressed direct DOC SDRAM upload.
+    // This port is exclusively enabled in Enhanced Native/Shared audio.
+    input  logic        tracker_ram_owner_i,
+    input  logic        tracker_ram_wr_i,
+    input  logic [20:0] tracker_ram_addr_i,
+    input  logic [31:0] tracker_ram_data_i,
+    output logic        tracker_ram_ready_o,
+
     // Exclusive MB-DOC waveform preload uses the existing GLU
     // SDRAM write port; DOC oscillator fetch stays on DOC_MEM_PORT.
     input  logic        mb_ram_wr_i,
@@ -295,6 +303,10 @@ assign debug_128k_status_o =
 
     assign mb_ram_ready_o =
         mb_owner_w && !USE_BSRAM && glu_mem_if.ready;
+    wire tracker_pcm_owner_w = ENABLE && MB_DOC_MODE && native_owner_w &&
+        tracker_ram_owner_i;
+    assign tracker_ram_ready_o = tracker_pcm_owner_w &&
+        !USE_BSRAM && glu_mem_if.ready;
 
     // GLU mem_if driven to DDR3 when USE_BSRAM=0, idle when USE_BSRAM=1
     generate
@@ -309,14 +321,20 @@ assign debug_128k_status_o =
             assign glu_mem_if.rd = '0;
             // GS and MB sample loader never own RAM together.
             // Preserve the exact original GS path in mode 0.
+            // The active tracker PCM upload wins over native CPU
+            // writes until DMA END; Mockingboard is a different mode.
             assign glu_mem_if.addr = mb_owner_w ?
-                mb_ram_addr_i : glu_mem_addr_r;
+                mb_ram_addr_i : tracker_pcm_owner_w ?
+                tracker_ram_addr_i : glu_mem_addr_r;
             assign glu_mem_if.wr = mb_owner_w ?
-                mb_ram_wr_i : glu_mem_wr_r;
+                mb_ram_wr_i : tracker_pcm_owner_w ?
+                tracker_ram_wr_i : glu_mem_wr_r;
             assign glu_mem_if.byte_en = mb_owner_w ?
-                mb_ram_byte_en_i : glu_mem_byte_en_r;
+                mb_ram_byte_en_i : tracker_pcm_owner_w ?
+                4'hF : glu_mem_byte_en_r;
             assign glu_mem_if.data = mb_owner_w ?
-                mb_ram_data_i :
+                mb_ram_data_i : tracker_pcm_owner_w ?
+                tracker_ram_data_i :
                 {a2bus_if.data, a2bus_if.data,
                  a2bus_if.data, a2bus_if.data};
             assign glu_mem_if.burst = 1'b0;
