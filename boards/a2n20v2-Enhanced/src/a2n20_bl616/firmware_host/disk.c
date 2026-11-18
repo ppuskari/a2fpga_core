@@ -1151,6 +1151,10 @@ static volatile int       g_fs_fr;
 static FIL                g_fs_fil;
 static DIR                g_fs_dir;
 static bool               g_fs_fil_open, g_fs_dir_open;
+/* Dedicated MOD handle, never alias FTP's g_fs_fil. FatFS remains owned
+ * exclusively by disk-thread service dispatch. */
+static FIL                g_mod_fil;
+static bool               g_mod_fil_open;
 
 int disk_fs_request(fs_req_t *r)
 {
@@ -1195,6 +1199,33 @@ static void fs_service(void)
     UINT n = 0;
 
     switch (r->op) {
+    case FSOP_MOD_OPEN:
+        if (g_mod_fil_open) {
+            f_close(&g_mod_fil);
+            g_mod_fil_open=false;
+        }
+        if (!r->path || strstr(r->path,"..") ||
+            strlen(r->path)+4u>=sizeof(full) ||
+            disk_path_mounted(r->path)) {
+            fr=FR_INVALID_NAME;
+            break;
+        }
+        snprintf(full,sizeof(full),"0:/%s",r->path);
+        fr=f_open(&g_mod_fil,full,FA_READ);
+        g_mod_fil_open=(fr==FR_OK);
+        if(fr==FR_OK)r->size=(uint32_t)f_size(&g_mod_fil);
+        break;
+    case FSOP_MOD_READ:
+        fr=g_mod_fil_open ? f_read(&g_mod_fil,r->buf,r->len,&n)
+                          : FR_NOT_ENABLED;
+        r->out=n;
+        break;
+    case FSOP_MOD_CLOSE:
+        if(g_mod_fil_open) {
+            fr=f_close(&g_mod_fil);
+            g_mod_fil_open=false;
+        }
+        break;
     case FSOP_OPEN_R:
     case FSOP_OPEN_W:
         if (g_fs_fil_open) {
