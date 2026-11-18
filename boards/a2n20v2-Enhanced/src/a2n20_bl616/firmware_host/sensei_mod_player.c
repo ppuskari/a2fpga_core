@@ -93,30 +93,73 @@ static uint16_t arp_fc(uint16_t period,uint8_t semitone)
                        pitch_multiplier[semitone & 15u] + 2048u) >> 12);
 }
 
-static void pitch_write(sensei_doc_event_t out,uint16_t ms,uint8_t ch,uint16_t fc)
+/* A ProTracker channel maps to two paired DOC oscillators in runtime P2R.
+ * DOC MODE_SWAP starts the sustain partner on the precise attack-end
+ * sentinel, without any MCU timing estimate or extra FPGA hardware. */
+static void pitch_write(const sensei_mod_player_t *s,sensei_doc_event_t out,
+                        uint16_t ms,uint8_t ch,uint16_t fc)
 {
-    out(ms,ch,(uint8_t)fc);
-    out(ms,(uint8_t)(0x20u+ch),(uint8_t)(fc>>8));
+    if(s->runtime_mode) {
+        const uint8_t first=(uint8_t)(ch*2u);
+        out(ms,first,(uint8_t)fc);
+        out(ms,(uint8_t)(0x20u+first),(uint8_t)(fc>>8));
+        out(ms,(uint8_t)(first+1u),(uint8_t)fc);
+        out(ms,(uint8_t)(0x21u+first),(uint8_t)(fc>>8));
+    } else {
+        out(ms,ch,(uint8_t)fc);
+        out(ms,(uint8_t)(0x20u+ch),(uint8_t)(fc>>8));
+    }
 }
-static void volume_write(sensei_doc_event_t out,uint16_t ms,uint8_t ch,uint8_t volume)
+static void volume_write(const sensei_mod_player_t *s,sensei_doc_event_t out,
+                         uint16_t ms,uint8_t ch,uint8_t volume)
 {
-    out(ms,(uint8_t)(0x40u+ch),(uint8_t)(volume*3u));
+    const uint8_t value=(uint8_t)(volume*3u);
+    if(s->runtime_mode) {
+        const uint8_t first=(uint8_t)(ch*2u);
+        out(ms,(uint8_t)(0x40u+first),value);
+        out(ms,(uint8_t)(0x41u+first),value);
+    } else {
+        out(ms,(uint8_t)(0x40u+ch),value);
+    }
 }
 static void note_start(const sensei_mod_player_t *s,sensei_doc_event_t out,
                        uint16_t ms,uint8_t ch,uint16_t period,uint8_t inst,uint8_t volume)
 {
-    uint8_t ctrl, wtp, rts;
+    uint8_t ctrl,wtp,rts;
     const uint8_t *d;
-    if (!inst || inst >= 32 || !period) return;
-    d=s->song->catalog+(unsigned)inst*4u;
+    if(!inst || inst>=32 || !period)return;
+    d=s->song->catalog+(unsigned)inst*(s->runtime_mode?8u:4u);
     wtp=d[0];rts=d[1];
-    ctrl=(uint8_t)(((ch==1 || ch==2) ? 0x10u : 0u) | d[2]);
-    out(ms,(uint8_t)(0xA0u+ch),(uint8_t)(ctrl|1u));
-    out(ms,(uint8_t)(0x80u+ch),wtp);
-    out(ms,(uint8_t)(0xC0u+ch),rts);
-    pitch_write(out,ms,ch,fc_from_period(period));
-    volume_write(out,ms,ch,volume);
-    out(ms,(uint8_t)(0xA0u+ch),(uint8_t)(ctrl&0xFEu));
+    ctrl=(uint8_t)(((ch==1 || ch==2)?0x10u:0u)|d[2]);
+
+    if(s->runtime_mode) {
+        const uint8_t first=(uint8_t)(ch*2u);
+        const uint8_t second=(uint8_t)(first+1u);
+        const uint8_t pan=(ch==1 || ch==2)?0x10u:0u;
+        /* Halt BOTH voices before touching waveform metadata or pitch.
+         * No old sustain may survive note replacement or retrigger. */
+        out(ms,(uint8_t)(0xA0u+first),(uint8_t)(pan|1u));
+        out(ms,(uint8_t)(0xA0u+second),(uint8_t)(pan|1u));
+        out(ms,(uint8_t)(0x80u+first),wtp);
+        out(ms,(uint8_t)(0xC0u+first),rts);
+        if(d[7]&1u) {
+            out(ms,(uint8_t)(0x80u+second),d[4]);
+            out(ms,(uint8_t)(0xC0u+second),d[5]);
+        }
+        pitch_write(s,out,ms,ch,fc_from_period(period));
+        volume_write(s,out,ms,ch,volume);
+        /* The partner starts halted, MODE_FREE. A DOC zero byte on
+         * primary MODE_SWAP automatically starts it sample-accurately. */
+        out(ms,(uint8_t)(0xA0u+second),(uint8_t)(pan|1u|d[6]));
+        out(ms,(uint8_t)(0xA0u+first),(uint8_t)(ctrl&0xFEu));
+    } else {
+        out(ms,(uint8_t)(0xA0u+ch),(uint8_t)(ctrl|1u));
+        out(ms,(uint8_t)(0x80u+ch),wtp);
+        out(ms,(uint8_t)(0xC0u+ch),rts);
+        pitch_write(s,out,ms,ch,fc_from_period(period));
+        volume_write(s,out,ms,ch,volume);
+        out(ms,(uint8_t)(0xA0u+ch),(uint8_t)(ctrl&0xFEu));
+    }
 }
 static uint8_t clamp64(int volume)
 {
@@ -176,7 +219,8 @@ static void process_tick0(sensei_mod_player_t *s,sensei_doc_event_t out,
         c->delayed_tick=0;
         if (inst) {
             c->instrument=inst;
-            c->volume=s->song->catalog[(unsigned)inst*4u+3u];
+            c->volume=s->song->catalog[(unsigned)inst*
+                (s->runtime_mode?8u:4u)+3u];
         }
         if (fx==3 || fx==5) {
             if(period) {
@@ -224,7 +268,7 @@ static void process_tick0(sensei_mod_player_t *s,sensei_doc_event_t out,
         }
         if (fx==12) {
             c->volume=clamp64(arg);
-            volume_write(out,ms,(uint8_t)ch,c->volume);
+            volume_write(s,out,ms,(uint8_t)ch,c->volume);
         }
         if (fx==4) {
             if(arg>>4) c->vib_speed=arg>>4;
@@ -289,7 +333,7 @@ static void process_tick_nonzero(sensei_mod_player_t *s,sensei_doc_event_t out,
                 c->delayed_tick=0;
             }
         }
-        if (update_pitch) pitch_write(out,ms,(uint8_t)ch,fc);
+        if (update_pitch) pitch_write(s,out,ms,(uint8_t)ch,fc);
         if (update_volume) volume_write(out,ms,(uint8_t)ch,c->volume);
     }
 }
