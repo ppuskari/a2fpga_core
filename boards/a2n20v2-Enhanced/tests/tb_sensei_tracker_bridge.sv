@@ -39,12 +39,12 @@ module tb_sensei_tracker_bridge;
         @(negedge clk);
         slot_sel=0;slot_wr=0;slot_rw=1;
     endtask
-    task host_read_check(input [3:0] addr,input [7:0] expect);
+    task host_read_check(input [3:0] addr,input [7:0] expected);
         @(negedge clk);
         slot_sel=1;slot_rw=1;slot_addr=addr;
         #1;
-        if (!slot_rd || slot_out!==expect)
-            $fatal(1,"Slot %h got %h expected %h",addr,slot_out,expect);
+        if (!slot_rd || slot_out!==expected)
+            $fatal(1,"Slot %h got %h expected %h",addr,slot_out,expected);
         @(negedge clk);slot_sel=0;
     endtask
     task transfer(input [7:0] addr,input [7:0] data);
