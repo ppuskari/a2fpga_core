@@ -1145,6 +1145,7 @@ bool disk_remount_pending(void)
 #define FS_IDLE 0
 #define FS_PEND 1
 #define FS_DONE 2
+#define FS_CLAIM 3 /* producer owns submission slot, pointer not published */
 static fs_req_t *volatile g_fs_req;
 static volatile int       g_fs_state = FS_IDLE;
 static volatile int       g_fs_fr;
@@ -1158,19 +1159,35 @@ static bool               g_mod_fil_open;
 
 int disk_fs_request(fs_req_t *r)
 {
-    /* single submitter (ftpd thread); serialize defensively anyway */
-    while (g_fs_state != FS_IDLE)
+    int expected;
+    int result;
+    bool timed_out=false;
+    if (!r) return -1;
+    /* FTP and Sensei MOD loader are now independent producer threads.
+     * CAS claims the entire request lifecycle, without racing another
+     * caller between the old IDLE test and publication of g_fs_req. */
+    do {
+        expected=FS_IDLE;
+        if (__atomic_compare_exchange_n(&g_fs_state,&expected,FS_CLAIM,
+               false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE)) break;
         usb_osal_msleep(1);
-    r->out = 0;
-    g_fs_req = r;
-    g_fs_state = FS_PEND;
-    for (int waited = 0; g_fs_state != FS_DONE; waited++) {
-        if (waited > 30000)            /* 30 s: something is very wrong */
-            return -1;
+    } while (1);
+    r->out=0;
+    g_fs_req=r;
+    __atomic_store_n(&g_fs_state,FS_PEND,__ATOMIC_RELEASE);
+    for (unsigned waited=0;
+         __atomic_load_n(&g_fs_state,__ATOMIC_ACQUIRE)!=FS_DONE;
+         ++waited) {
+        if(waited>30000u)timed_out=true;
+        /* Never return with g_fs_req pointing into this caller's stack.
+         * On disk-thread stalls retain the ownership until the disk
+         * service completes, avoiding a use-after-free corruption. */
         usb_osal_msleep(1);
     }
-    g_fs_state = FS_IDLE;
-    return g_fs_fr;
+    result=g_fs_fr;
+    g_fs_req=NULL;
+    __atomic_store_n(&g_fs_state,FS_IDLE,__ATOMIC_RELEASE);
+    return timed_out ? -1 : result;
 }
 
 bool disk_path_mounted(const char *path)
@@ -1191,9 +1208,10 @@ bool disk_path_mounted(const char *path)
  * track serving keeps its cadence; everything else completes in one step. */
 static void fs_service(void)
 {
-    fs_req_t *r = g_fs_req;
-    if (g_fs_state != FS_PEND || !r)
+    if (__atomic_load_n(&g_fs_state,__ATOMIC_ACQUIRE)!=FS_PEND)
         return;
+    fs_req_t *r=g_fs_req;
+    if (!r) return;
     char full[SETTINGS_NAME_LEN + 4];
     FRESULT fr = FR_OK;
     UINT n = 0;
@@ -1323,7 +1341,7 @@ static void fs_service(void)
     }
 
     g_fs_fr = fr;
-    g_fs_state = FS_DONE;
+    __atomic_store_n(&g_fs_state,FS_DONE,__ATOMIC_RELEASE);
 }
 
 void disk_list_begin(const char *path, const char *const *exts)
