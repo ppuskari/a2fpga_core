@@ -24,6 +24,10 @@ jobs:
         run: |
           gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/tests/test_p1d_mcu.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p1d_mcu
           /tmp/test_p1d_mcu
+      - name: Simulate P1E two-song real-time tracker effects
+        run: |
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/tests/p1e_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p1e_mod_player.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p1e_mod
+          /tmp/test_p1e_mod
       - name: Validate integrated top-level source wiring
         run: |
           python -c "from pathlib import Path; t=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text(); g=Path('hdl/sound/sound_glu.sv').read_text(); c=Path('boards/a2n20v2-Enhanced/hdl/bl616/bl616_spi_connector.sv').read_text(); assert all(s in t for s in ('sensei_tracker_bridge','tracker_doc_wr_i','trk_spi_wr_o','trk_slot_rd_w')); assert 'tracker_owner_w' in g and 'tracker_doc_wr_i' in g; assert 'mem_space == 3\x27d6' in c; print('PASS: top, Sound GLU and SPI6 connections present')"
