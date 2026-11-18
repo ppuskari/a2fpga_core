@@ -280,7 +280,7 @@ static void process_tick0(sensei_mod_player_t *s,sensei_doc_event_t out,
         }
         if (fx==14 && sub==12 && (arg&15)==0) {
             c->volume=0;
-            volume_write(out,ms,(uint8_t)ch,0);
+            volume_write(s,out,ms,(uint8_t)ch,0);
         }
     }
 }
@@ -334,7 +334,7 @@ static void process_tick_nonzero(sensei_mod_player_t *s,sensei_doc_event_t out,
             }
         }
         if (update_pitch) pitch_write(s,out,ms,(uint8_t)ch,fc);
-        if (update_volume) volume_write(out,ms,(uint8_t)ch,c->volume);
+        if (update_volume) volume_write(s,out,ms,(uint8_t)ch,c->volume);
     }
 }
 
