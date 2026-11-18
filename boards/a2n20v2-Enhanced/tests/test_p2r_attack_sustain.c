@@ -123,7 +123,7 @@ static void test_playback(void)
     /* Axx should update volume on BOTH paired oscillators. */
     modfile[1084u+16u+2u]=0x0A;
     modfile[1084u+16u+3u]=0x01;
-    for(unsigned i=1;i<7;i++)
+    for(unsigned i=1;i<8;i++)
         require(sensei_mod_tick(&s,emit),"runtime tick failed");
     int v0=0,v1=0;
     for(unsigned i=0;i<count;i++) {
