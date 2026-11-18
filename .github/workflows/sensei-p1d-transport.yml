@@ -48,6 +48,9 @@ jobs:
         run: |
           gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2_live_patterns.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p2_live
           /tmp/test_p2_live
+      - name: Verify exclusive P2 PCM DMA is connected to native DOC SDRAM
+        run: |
+          python -c "from pathlib import Path; t=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text(); g=Path('hdl/sound/sound_glu.sv').read_text(); b=Path('boards/a2n20v2-Enhanced/hdl/sensei_tracker_bridge.sv').read_text(); assert all(x in t for x in ('pcm_ram_owner_o(trk_pcm_owner_w)','pcm_ram_ready_i(trk_pcm_ready_w)','tracker_ram_owner_i(trk_pcm_owner_w)','tracker_ram_ready_o(trk_pcm_ready_w)')); assert all(x in g for x in ('tracker_pcm_owner_w','tracker_ram_data_i','tracker_ram_wr_i','glu_mem_if.ready')); assert all(x in b for x in ('pcm_write_addr_r','pcm_words_acked_r','pcm_ram_ready_i')); print('PASS: P2 dedicated PCM SDRAM writer is wired to Sound GLU and ACK')"
       - name: Validate integrated top-level source wiring
         run: |
           python -c "from pathlib import Path; t=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text(); g=Path('hdl/sound/sound_glu.sv').read_text(); c=Path('boards/a2n20v2-Enhanced/hdl/bl616/bl616_spi_connector.sv').read_text(); assert all(s in t for s in ('sensei_tracker_bridge','tracker_doc_wr_i','trk_spi_wr_o','trk_slot_rd_w')); assert 'tracker_owner_w' in g and 'tracker_doc_wr_i' in g; assert 'mem_space == 3\x27d6' in c; print('PASS: top, Sound GLU and SPI6 connections present')"
