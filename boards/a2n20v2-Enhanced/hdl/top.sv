@@ -481,6 +481,9 @@ module top #(
     wire [7:0] trk_spi_wr_data_w, trk_spi_rd_data_w;
     wire trk_slot_rd_w, trk_doc_owner_w, trk_doc_wr_w;
     wire [7:0] trk_slot_data_w, trk_doc_addr_w, trk_doc_data_w;
+    wire trk_pcm_owner_w, trk_pcm_wr_w, trk_pcm_ready_w;
+    wire [20:0] trk_pcm_addr_w;
+    wire [31:0] trk_pcm_data_w;
 
     slotmaker slotmaker (
         .a2bus_if(a2bus_if),
@@ -1180,7 +1183,12 @@ wire [7:0] doc_128k_status_w;
         .doc_owner_o(trk_doc_owner_w),
         .doc_wr_o(trk_doc_wr_w),
         .doc_addr_o(trk_doc_addr_w),
-        .doc_data_o(trk_doc_data_w)
+        .doc_data_o(trk_doc_data_w),
+        .pcm_ram_owner_o(trk_pcm_owner_w),
+        .pcm_ram_wr_o(trk_pcm_wr_w),
+        .pcm_ram_addr_o(trk_pcm_addr_w),
+        .pcm_ram_data_o(trk_pcm_data_w),
+        .pcm_ram_ready_i(trk_pcm_ready_w)
     );
 
     sound_glu #(
@@ -1204,6 +1212,11 @@ wire [7:0] doc_128k_status_w;
         .tracker_doc_wr_i(trk_doc_wr_w),
         .tracker_doc_addr_i(trk_doc_addr_w),
         .tracker_doc_data_i(trk_doc_data_w),
+        .tracker_ram_owner_i(trk_pcm_owner_w),
+        .tracker_ram_wr_i(trk_pcm_wr_w),
+        .tracker_ram_addr_i(trk_pcm_addr_w),
+        .tracker_ram_data_i(trk_pcm_data_w),
+        .tracker_ram_ready_o(trk_pcm_ready_w),
 
         .mb_ram_wr_i(mb_ram_wr_w),
         .mb_ram_addr_i(mb_ram_addr_w),
