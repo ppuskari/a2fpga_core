@@ -196,6 +196,7 @@ void sensei_tracker_task(void *unused)
     for (;;) {
         uint16_t now;
         uint8_t seq,cmd,arg,level;
+        bool just_started=false;
         tracker_read(st);
         if (st[0]!=0x53 || st[1]!=0x1D || !(st[12]&1u)) {
             vTaskDelay(pdMS_TO_TICKS(100));
@@ -208,11 +209,13 @@ void sensei_tracker_task(void *unused)
             if (cmd==2 && s.active) {
                 tracker_stop(&s,now,STATE_IDLE);
             } else if (cmd==1 && !s.active) {
-                if (arg==0) tracker_begin(&s,now);
-                else tracker_write(REG_STATE,STATE_ERROR);
+                if (arg==0) {
+                    tracker_begin(&s,now);
+                    just_started=true;
+                } else tracker_write(REG_STATE,STATE_ERROR);
             }
         }
-        if (s.active && !(st[12] & 0x02u)) {
+        if (s.active && !just_started && !(st[12] & 0x02u)) {
             /* A2 reset, audio-mode change, or IIe C0CF panic revoked
              * FPGA ownership: immediately stop sending timed events. */
             s.active=0;
