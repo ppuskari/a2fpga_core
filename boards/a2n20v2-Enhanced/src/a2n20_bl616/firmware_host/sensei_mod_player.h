@@ -11,7 +11,7 @@ typedef void (*sensei_doc_event_t)(uint16_t when, uint8_t doc_reg, uint8_t data)
 typedef struct {
     const uint8_t *rows;     /* flattened played 16-byte rows */
     uint16_t count;
-    const uint8_t *catalog;  /* 32 instruments x [WTP,RTS,CTRL,VOL] */
+    const uint8_t *catalog;  /* P2R runtime: 32x8, legacy tests 32x4 */
 } sensei_mod_song_t;
 
 typedef struct {
@@ -20,6 +20,7 @@ typedef struct {
     uint8_t porta_speed, vib_speed, vib_depth, vib_phase;
     uint8_t volslide, delayed_inst, delayed_tick;
     uint8_t last_ctrl;
+    uint8_t last_effect;
 } sensei_mod_chan_t;
 
 typedef struct {
