@@ -475,6 +475,13 @@ module top #(
     wire [1:0] mcu_audio_mode_w;
     wire [1:0] audio_active_route_w;
 
+    // P1D tracker SPI SPACE 6, native-slot mailbox, and DOC owner.
+    wire trk_spi_wr_w, trk_spi_rd_w, trk_spi_rd_valid_w;
+    wire [23:0] trk_spi_wr_addr_w, trk_spi_rd_addr_w;
+    wire [7:0] trk_spi_wr_data_w, trk_spi_rd_data_w;
+    wire trk_slot_rd_w, trk_doc_owner_w, trk_doc_wr_w;
+    wire [7:0] trk_slot_data_w, trk_doc_addr_w, trk_doc_data_w;
+
     slotmaker slotmaker (
         .a2bus_if(a2bus_if),
         .a2mem_if(a2mem_if),
@@ -678,7 +685,14 @@ module top #(
         .ssi_spi_rd_space_o(hybrid_spi_rd_space_w),
         .ssi_spi_rd_addr_o(hybrid_spi_rd_addr_w),
         .ssi_spi_rd_valid_i(hybrid_spi_rd_valid_w),
-        .ssi_spi_rd_data_i(hybrid_spi_rd_data_w)
+        .ssi_spi_rd_data_i(hybrid_spi_rd_data_w),
+        .trk_spi_wr_o(trk_spi_wr_w),
+        .trk_spi_wr_addr_o(trk_spi_wr_addr_w),
+        .trk_spi_wr_data_o(trk_spi_wr_data_w),
+        .trk_spi_rd_o(trk_spi_rd_w),
+        .trk_spi_rd_addr_o(trk_spi_rd_addr_w),
+        .trk_spi_rd_valid_i(trk_spi_rd_valid_w),
+        .trk_spi_rd_data_i(trk_spi_rd_data_w)
     );
 
     assign ws2812 = mcu_ws2812_w;
@@ -693,6 +707,11 @@ module top #(
     assign slotmaker_config_if.reconfig = 1'b0;
 
     assign mcu_audio_mode_w = 2'd0; // legacy Enhanced personality without MCU
+    assign trk_spi_wr_w = 1'b0;
+    assign trk_spi_rd_w = 1'b0;
+    assign trk_spi_wr_addr_w = 24'b0;
+    assign trk_spi_rd_addr_w = 24'b0;
+    assign trk_spi_wr_data_w = 8'b0;
 
     // No BL616: Uthernet2 backing store has no host -- tie the link idle
     assign u2_host_wr_w    = 1'b0;
@@ -1135,6 +1154,35 @@ wire [7:0] doc_128k_status_w;
         !a2bus_if.sw_gs && !slot_if.dev_select_n &&
         (slot_if.card_id == MOCKINGBOARD_ID) && a2bus_if.phi0;
 
+    // Native IIe C0nA-C0nF tracker mailbox. SPI XFER SPACE 6 is
+    // independent of the existing 4/5 SSI263 transport.
+    sensei_tracker_bridge #(
+        .CLOCK_HZ(CLOCK_SPEED_HZ),
+        .FIFO_AW(6)
+    ) sensei_tracker (
+        .clk(clk_logic_w),
+        .rst_n(device_reset_n_w && a2bus_if.system_reset_n),
+        .native_enabled_i(audio_native_doc_w),
+        .slot_selected_i(native_doc_slot_w),
+        .slot_addr_i(a2bus_if.addr[3:0]),
+        .slot_data_i(a2bus_if.data),
+        .slot_rw_n_i(a2bus_if.rw_n),
+        .slot_write_strobe_i(a2bus_if.data_in_strobe),
+        .slot_read_o(trk_slot_rd_w),
+        .slot_rdata_o(trk_slot_data_w),
+        .spi_wr_i(trk_spi_wr_w),
+        .spi_wr_addr_i(trk_spi_wr_addr_w),
+        .spi_wr_data_i(trk_spi_wr_data_w),
+        .spi_rd_i(trk_spi_rd_w),
+        .spi_rd_addr_i(trk_spi_rd_addr_w),
+        .spi_rd_valid_o(trk_spi_rd_valid_w),
+        .spi_rd_data_o(trk_spi_rd_data_w),
+        .doc_owner_o(trk_doc_owner_w),
+        .doc_wr_o(trk_doc_wr_w),
+        .doc_addr_o(trk_doc_addr_w),
+        .doc_data_o(trk_doc_data_w)
+    );
+
     sound_glu #(
         .ENABLE(ENSONIQ_ENABLE),
         .MB_DOC_MODE(AUDIO_MODE_MB_DOC),
@@ -1152,6 +1200,10 @@ wire [7:0] doc_128k_status_w;
         .mb_doc_wr_i(mb_doc_wr_w),
         .mb_doc_addr_i(mb_doc_addr_w),
         .mb_doc_data_i(mb_doc_data_w),
+        .tracker_owner_i(trk_doc_owner_w),
+        .tracker_doc_wr_i(trk_doc_wr_w),
+        .tracker_doc_addr_i(trk_doc_addr_w),
+        .tracker_doc_data_i(trk_doc_data_w),
 
         .mb_ram_wr_i(mb_ram_wr_w),
         .mb_ram_addr_i(mb_ram_addr_w),
@@ -1553,10 +1605,11 @@ wire [7:0] doc_128k_status_w;
     // Data output
 
     wire mb_bus_rd_w = mb_rd && audio_mb_enabled_w;
-    assign data_out_en_w = ssp_rd || mb_bus_rd_w || sg_rd_w || ssc_rd ||
-        u2_rd || diskii_rd || hdd_rd || cardrom_rd;
+    assign data_out_en_w = trk_slot_rd_w || ssp_rd || mb_bus_rd_w ||
+        sg_rd_w || ssc_rd || u2_rd || diskii_rd || hdd_rd || cardrom_rd;
 
-    assign data_out_w = ssc_rd ? ssc_d_w :
+    assign data_out_w = trk_slot_rd_w ? trk_slot_data_w :
+        ssc_rd ? ssc_d_w :
         ssp_rd ? ssp_d_w :
         sg_rd_w ? sg_d_w :
         mb_bus_rd_w ? mb_d_w :
