@@ -36,6 +36,7 @@ target_sources(app PRIVATE
     w5100.c
     disk.c
     sensei_tracker.c
+    sensei_mod_player.c
     diskio_host.c
     osd_console.c
     settings.c
