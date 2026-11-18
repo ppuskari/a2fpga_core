@@ -18,6 +18,21 @@
  * separately rewritten model of tracker state transitions. */
 #include "../src/a2n20_bl616/firmware_host/sensei_tracker.c"
 
+/* P1D compatibility test is intentionally filesystem-free: the new P2
+ * browser/loader has its own focused tests and remains dormant here. */
+bool sensei_runtime_pending(char *dst,size_t cap)
+{
+    (void)dst;(void)cap;return false;
+}
+void sensei_runtime_free(sensei_runtime_module_t *m)
+{
+    (void)m;
+}
+bool sensei_runtime_load(const char *p,sensei_runtime_module_t *m)
+{
+    (void)p;(void)m;return false;
+}
+
 static jmp_buf test_return;
 static uint32_t fake_ms, events;
 static uint8_t owner, playback, command, sequence, argument;
