@@ -39,6 +39,7 @@ target_sources(app PRIVATE
     sensei_mod_player.c
     sensei_mod_decode.c
     sensei_runtime.c
+    sensei_pcm_upload.c
     diskio_host.c
     osd_console.c
     settings.c
