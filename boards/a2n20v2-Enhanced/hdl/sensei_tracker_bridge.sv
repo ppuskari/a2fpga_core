@@ -32,7 +32,15 @@ module sensei_tracker_bridge #(
     output wire        doc_owner_o,
     output reg         doc_wr_o,
     output reg  [7:0]  doc_addr_o,
-    output reg  [7:0]  doc_data_o
+    output reg  [7:0]  doc_data_o,
+
+    // P2 bulk sample upload: 32-bit word-addressed GLU SDRAM port.
+    // Only the tracker DMA owner can access the port during upload.
+    output wire        pcm_ram_owner_o,
+    output wire        pcm_ram_wr_o,
+    output wire [20:0] pcm_ram_addr_o,
+    output wire [31:0] pcm_ram_data_o,
+    input  wire        pcm_ram_ready_i
 );
     localparam integer FIFO_DEPTH = 1 << FIFO_AW;
     localparam integer MS_DIVIDER = (CLOCK_HZ >= 1000) ? CLOCK_HZ/1000 : 1;
@@ -57,6 +65,24 @@ module sensei_tracker_bridge #(
     // one-cycle bubble, adjacent same-deadline FIFO events collapse
     // into one continuous /CS assertion and all but the first are lost.
     reg doc_cooldown_r;
+
+    // SPI6 $18..$1F: staging registers and commit/ownership.
+    // One outstanding SDRAM word at a time, acked in $21..$22.
+    // The BL616 MUST poll the ack before submitting another word.
+    reg pcm_upload_r;
+    reg pcm_finished_r;
+    reg pcm_pending_r;
+    reg pcm_cooldown_r;
+    reg [15:0] pcm_staged_addr_r;
+    reg [31:0] pcm_staged_data_r;
+    reg [15:0] pcm_write_addr_r;
+    reg [31:0] pcm_write_data_r;
+    reg [15:0] pcm_words_acked_r;
+    reg [7:0] pcm_error_r;
+    assign pcm_ram_owner_o = native_enabled_i && pcm_upload_r;
+    assign pcm_ram_wr_o = pcm_ram_owner_o && pcm_pending_r;
+    assign pcm_ram_addr_o = {5'b0,pcm_write_addr_r};
+    assign pcm_ram_data_o = pcm_write_data_r;
 
     wire host_write = native_enabled_i && slot_selected_i &&
                       !slot_rw_n_i && slot_write_strobe_i;
@@ -107,6 +133,16 @@ module sensei_tracker_bridge #(
             played_r <= 0;
             doc_wr_o <= 0;
             doc_cooldown_r <= 0;
+            pcm_upload_r <= 0;
+            pcm_finished_r <= 0;
+            pcm_pending_r <= 0;
+            pcm_cooldown_r <= 0;
+            pcm_staged_addr_r <= 0;
+            pcm_staged_data_r <= 0;
+            pcm_write_addr_r <= 0;
+            pcm_write_data_r <= 0;
+            pcm_words_acked_r <= 0;
+            pcm_error_r <= 0;
             doc_addr_o <= 0;
             doc_data_o <= 0;
             spi_rd_valid_o <= 0;
@@ -116,6 +152,7 @@ module sensei_tracker_bridge #(
             // Deassert /CS for at least one complete logic clock between
             // consecutive DOC writes (even for equal deadlines).
             doc_cooldown_r <= due_w;
+            pcm_cooldown_r <= 1'b0;
             spi_rd_valid_o <= spi_rd_i;
             if (divider_r == MS_DIVIDER - 1) begin
                 divider_r <= 0;
@@ -123,6 +160,9 @@ module sensei_tracker_bridge #(
             end else divider_r <= divider_r + 1'b1;
 
             if (!native_enabled_i) begin
+                pcm_upload_r <= 0;
+                pcm_pending_r <= 0;
+                pcm_finished_r <= 0;
                 owner_r <= 0;
                 mcu_state_r <= 0;
                 read_ptr_r <= 0;
@@ -147,11 +187,63 @@ module sensei_tracker_bridge #(
                         8'h11: staging_time_r[15:8] <= spi_wr_data_i;
                         8'h12: staging_addr_r <= spi_wr_data_i;
                         8'h13: staging_data_r <= spi_wr_data_i;
-                        8'h16: owner_r <= spi_wr_data_i[0];
+                        8'h16: begin
+                            if (!pcm_upload_r && !pcm_pending_r)
+                                owner_r <= spi_wr_data_i[0];
+                            else if (pcm_error_r == 0)
+                                pcm_error_r <= 8'h04;
+                        end
+                        // 16-bit SDRAM word index, little-endian.
+                        8'h18: pcm_staged_addr_r[7:0] <= spi_wr_data_i;
+                        8'h19: pcm_staged_addr_r[15:8] <= spi_wr_data_i;
+                        8'h1A: pcm_staged_data_r[7:0] <= spi_wr_data_i;
+                        8'h1B: pcm_staged_data_r[15:8] <= spi_wr_data_i;
+                        8'h1C: pcm_staged_data_r[23:16] <= spi_wr_data_i;
+                        8'h1D: pcm_staged_data_r[31:24] <= spi_wr_data_i;
+                        // Commit is a word-addressed request, not a packet
+                        // stream. Refuse writes unless a previous ack cleared.
+                        8'h1E: if (spi_wr_data_i == 8'hA5) begin
+                            if (!pcm_upload_r || pcm_pending_r ||
+                                pcm_cooldown_r || owner_r ||
+                                pcm_staged_addr_r >= 16'd16384) begin
+                                if (pcm_error_r == 0)
+                                    pcm_error_r <= 8'h01;
+                            end else begin
+                                pcm_write_addr_r <= pcm_staged_addr_r;
+                                pcm_write_data_r <= pcm_staged_data_r;
+                                pcm_pending_r <= 1'b1;
+                            end
+                        end
+                        // BEGIN / END (must wait for last word to ack).
+                        8'h1F: begin
+                            if (spi_wr_data_i == 8'hA5 && !owner_r &&
+                                !pcm_pending_r) begin
+                                pcm_upload_r <= 1'b1;
+                                pcm_finished_r <= 1'b0;
+                                pcm_words_acked_r <= 0;
+                                pcm_error_r <= 0;
+                            end else if (spi_wr_data_i == 8'h5A &&
+                                         pcm_upload_r && !pcm_pending_r &&
+                                         pcm_error_r == 0) begin
+                                pcm_upload_r <= 1'b0;
+                                pcm_finished_r <= 1'b1;
+                            end else if (spi_wr_data_i == 8'h00) begin
+                                pcm_upload_r <= 1'b0;
+                                pcm_finished_r <= 1'b0;
+                                pcm_pending_r <= 1'b0;
+                            end else if (pcm_error_r == 0)
+                                pcm_error_r <= 8'h02;
+                        end
                         default: ;
                     endcase
                 end
 
+                // Remain asserted until GLU's real SDRAM-ready handshake.
+                if (pcm_pending_r && pcm_ram_ready_i) begin
+                    pcm_pending_r <= 1'b0;
+                    pcm_cooldown_r <= 1'b1;
+                    pcm_words_acked_r <= pcm_words_acked_r + 1'b1;
+                end
                 if (flush_w || release_w) begin
                     read_ptr_r <= 0;
                     write_ptr_r <= 0;
@@ -192,6 +284,9 @@ module sensei_tracker_bridge #(
                     write_ptr_r <= 0;
                     count_r <= 0;
                     mcu_state_r <= 8'd4;
+                    pcm_upload_r <= 0;
+                    pcm_pending_r <= 0;
+                    pcm_finished_r <= 0;
                 end
             end
 
@@ -210,6 +305,13 @@ module sensei_tracker_bridge #(
                     8'h0A: spi_rd_data_o <= played_r[7:0];
                     8'h0B: spi_rd_data_o <= played_r[15:8];
                     8'h0C: spi_rd_data_o <= {6'b0, owner_r, native_enabled_i};
+                    8'h20: spi_rd_data_o <= {4'b0,pcm_finished_r,
+                                           (pcm_error_r!=0),pcm_pending_r,
+                                           pcm_upload_r};
+                    8'h21: spi_rd_data_o <= pcm_words_acked_r[7:0];
+                    8'h22: spi_rd_data_o <= pcm_words_acked_r[15:8];
+                    8'h23: spi_rd_data_o <= pcm_error_r;
+                    8'h26: spi_rd_data_o <= 8'h42; // P2 PCM DMA capability
                     default: spi_rd_data_o <= 8'h00;
                 endcase
             end
