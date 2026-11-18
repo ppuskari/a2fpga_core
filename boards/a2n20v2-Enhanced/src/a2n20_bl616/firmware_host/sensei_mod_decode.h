@@ -11,7 +11,7 @@ typedef struct {
     uint16_t pattern_count;
     uint8_t order_count;
     uint8_t orders[128];
-    uint8_t catalog[128];      /* index 1..31 * 4 bytes */
+    uint8_t catalog[32*8];      /* index 1..31 x [attack, sustain, flags] */
     uint32_t doc_pcm_bytes;
     uint32_t file_sample_bytes;
 } sensei_mod_decoded_t;
