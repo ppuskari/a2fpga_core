@@ -1,4 +1,4 @@
-'timescale 1ns/1ps
+`timescale 1ns/1ps
 module tb_sensei_tracker_bridge;
     reg clk=0; always #5 clk=~clk;
     reg rst_n=0, native=1, slot_sel=0, slot_rw=1, slot_wr=0;
