@@ -20,6 +20,8 @@ static volatile uint32_t g_path_seq;
 static char g_path[SENSEI_PATH_CAP];
 static uint32_t g_consumed_seq;
 static volatile sensei_runtime_status_t g_status=SENSEI_RT_IDLE;
+static volatile uint32_t g_stop_request;
+
 
 static bool mod_path_ok(const char *path)
 {
@@ -62,6 +64,18 @@ bool sensei_runtime_pending(char *dst,size_t cap)
 sensei_runtime_status_t sensei_runtime_status(void)
 {
     return g_status;
+}
+void sensei_runtime_set_status(sensei_runtime_status_t value)
+{
+    g_status=value;
+}
+void sensei_runtime_request_stop(void)
+{
+    __atomic_store_n(&g_stop_request,1u,__ATOMIC_RELEASE);
+}
+bool sensei_runtime_take_stop_request(void)
+{
+    return __atomic_exchange_n(&g_stop_request,0u,__ATOMIC_ACQ_REL)!=0;
 }
 void sensei_runtime_free(sensei_runtime_module_t *m)
 {
