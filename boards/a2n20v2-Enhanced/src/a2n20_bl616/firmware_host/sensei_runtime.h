@@ -24,7 +24,7 @@ typedef struct {
     uint32_t file_size;
     uint8_t *pcm;            /* Adapted PCM for DOC RAM; generated at load time */
     uint32_t pcm_length;
-    uint8_t catalog[32*4];   /* WTP, RTS, CTRL, VOL for 31 instruments */
+    uint8_t catalog[32*8];   /* P2R attack/sustain WTP/RTS/CTRL/VOL/flags */
     uint8_t order_table[128];
     uint8_t order_count;
     sensei_mod_song_t song;
