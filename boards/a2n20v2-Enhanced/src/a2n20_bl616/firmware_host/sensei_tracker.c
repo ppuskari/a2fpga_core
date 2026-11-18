@@ -15,6 +15,7 @@
  */
 #include "sensei_tracker.h"
 #include "sensei_mod_player.h"
+#include "sensei_runtime.h"
 #include "fpga_spi.h"
 #include "osd_console.h"
 #include "FreeRTOS.h"
@@ -199,6 +200,8 @@ void sensei_tracker_task(void *unused)
 {
     uint8_t st[13];
     tracker_state s;
+    static sensei_runtime_module_t user_mod;
+    char requested_mod[SENSEI_PATH_CAP];
     (void)unused;
     memset(&s,0,sizeof s);
     s.last_seq=0xFF;
@@ -207,6 +210,17 @@ void sensei_tracker_task(void *unused)
         uint16_t now;
         uint8_t seq,cmd,arg,level;
         bool just_started=false;
+        // Load original MOD bytes from USB/SD through the exclusive FAT
+        // service only while no DOC playback is active. Stage B must add
+        // a verified PCM transfer before enabling song playback.
+        if (!s.active && sensei_runtime_pending(requested_mod,
+                                                sizeof requested_mod)) {
+            sensei_runtime_free(&user_mod);
+            if (sensei_runtime_load(requested_mod,&user_mod))
+                osd_log("SENSEI P2: MOD DECODED; PCM UPLOAD REQUIRED");
+            else
+                osd_log("SENSEI P2: MOD LOAD/FORMAT ERROR");
+        }
         tracker_read(st);
         if (st[0]!=0x53 || st[1]!=0x1D || !(st[12]&1u)) {
             vTaskDelay(pdMS_TO_TICKS(100));
