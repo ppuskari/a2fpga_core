@@ -202,8 +202,9 @@ static void process_tick_nonzero(sensei_mod_player_t *s,sensei_doc_event_t out,
             fc=arp_fc(c->period,shift);
             update_pitch=true;
         } else if (fx==1 && c->period) {
-            c->period=(uint16_t)(c->period>c->porta_speed?
-                                  c->period-c->porta_speed:1u);
+            if (c->period>c->porta_speed)
+                c->period=(uint16_t)(c->period-c->porta_speed);
+            else c->period=1u;
             fc=fc_from_period(c->period);
             update_pitch=true;
         } else if (fx==2 && c->period) {
