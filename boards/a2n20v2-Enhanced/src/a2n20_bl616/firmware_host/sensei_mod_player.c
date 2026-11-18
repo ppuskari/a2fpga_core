@@ -57,6 +57,29 @@ bool sensei_mod_init(sensei_mod_player_t *s, uint8_t song_id, uint16_t now)
 #endif
 }
 
+/* Runtime raw MOD: keep original order table and full 64-row patterns.
+ * No offline flattening or precomputed tick/effect stream exists. */
+bool sensei_mod_init_runtime(sensei_mod_player_t *s,
+                            const uint8_t *patterns,
+                            const uint8_t *orders, uint8_t order_count,
+                            const uint8_t *catalog, uint16_t now)
+{
+    if (!s || !patterns || !orders || !catalog || !order_count ||
+        order_count>128u)return false;
+    memset(s,0,sizeof(*s));
+    s->runtime_mode=1u;
+    s->runtime_song.rows=patterns;   /* 1024 bytes per pattern */
+    s->runtime_song.catalog=catalog;
+    s->runtime_song.count=0;
+    s->song=&s->runtime_song;
+    s->order_table=orders;
+    s->order_count=order_count;
+    s->speed=6u;
+    s->bpm=125u;
+    s->next_tick_fp=((uint32_t)(uint16_t)(now+100u))<<16;
+    return true;
+}
+
 static uint16_t fc_from_period(uint16_t period)
 {
     if (!period) return 0;
@@ -132,8 +155,13 @@ static uint16_t vibrato_fc(sensei_mod_chan_t *c)
 static void process_tick0(sensei_mod_player_t *s,sensei_doc_event_t out,
                           uint16_t ms)
 {
-    const uint8_t *row=s->song->rows+(uint32_t)s->row*16u;
+    const uint8_t *row;
     unsigned ch;
+    if(s->runtime_mode) {
+        unsigned pattern=s->order_table[s->order_pos];
+        row=s->song->rows+(uint32_t)pattern*1024u+(uint32_t)s->row*16u;
+        s->jump_pending=s->break_pending=s->loop_pending=0;
+    } else row=s->song->rows+(uint32_t)s->row*16u;
     for(ch=0;ch<4;ch++) {
         const uint8_t *ev=row+ch*4u;
         uint8_t inst=(uint8_t)((ev[0]&0xF0u)|(ev[2]>>4));
@@ -163,6 +191,30 @@ static void process_tick0(sensei_mod_player_t *s,sensei_doc_event_t out,
             c->delayed_tick=arg&15u;
             c->delayed_period=period;
             c->delayed_inst=c->instrument;
+        }
+        if (s->runtime_mode) {
+            if (fx==11) { // Bxx: jump to order, end if beyond song
+                s->jump_pending=1u;
+                s->jump_to=arg;
+            } else if (fx==13) { // Dxx: decimal row break
+                unsigned next=(unsigned)(arg>>4)*10u+(arg&15u);
+                s->break_pending=1u;
+                s->break_row=(uint8_t)(next<=63u?next:0u);
+            } else if (fx==14 && sub==6) { // E6x pattern loop
+                unsigned n=arg&15u;
+                if(!n)s->loop_start[ch]=(uint8_t)s->row;
+                else if(s->loop_count[ch]==0) {
+                    s->loop_count[ch]=(uint8_t)n;
+                    s->loop_pending=1u;
+                    s->loop_to=s->loop_start[ch];
+                } else {
+                    --s->loop_count[ch];
+                    if(s->loop_count[ch]) {
+                        s->loop_pending=1u;
+                        s->loop_to=s->loop_start[ch];
+                    }
+                }
+            }
         }
         if (fx==15 && arg) {
             if (arg<32) s->speed=arg;
@@ -252,7 +304,26 @@ bool sensei_mod_tick(sensei_mod_player_t *s, sensei_doc_event_t emit)
     s->next_tick_fp += (uint32_t)(((uint64_t)2500u<<16)/s->bpm);
     if (++s->tick>=s->speed) {
         s->tick=0;
-        if (++s->row>=s->song->count) s->done=1;
+        if(s->runtime_mode) {
+            uint8_t previous=s->order_pos;
+            if(++s->visited_rows>65535u) {
+                s->done=1u; // malformed/infinite tracker flow
+            } else if(s->jump_pending || s->break_pending) {
+                s->order_pos=s->jump_pending?
+                             s->jump_to:(uint8_t)(s->order_pos+1u);
+                s->row=s->break_pending?s->break_row:0u;
+            } else if(s->loop_pending) {
+                s->row=s->loop_to;
+            } else if(++s->row>=64u) {
+                s->row=0;
+                ++s->order_pos;
+            }
+            if(s->order_pos!=previous) {
+                memset(s->loop_start,0,sizeof s->loop_start);
+                memset(s->loop_count,0,sizeof s->loop_count);
+            }
+            if(s->order_pos>=s->order_count)s->done=1u;
+        } else if (++s->row>=s->song->count) s->done=1;
     }
     return true;
 }
