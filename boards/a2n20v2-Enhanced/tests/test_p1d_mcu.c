@@ -32,6 +32,18 @@ bool sensei_runtime_load(const char *p,sensei_runtime_module_t *m)
 {
     (void)p;(void)m;return false;
 }
+void sensei_runtime_set_status(sensei_runtime_status_t v)
+{
+    (void)v;
+}
+bool sensei_runtime_take_stop_request(void)
+{
+    return false;
+}
+bool sensei_pcm_upload(const uint8_t *data,uint32_t bytes)
+{
+    (void)data;(void)bytes;return false;
+}
 
 static jmp_buf test_return;
 static uint32_t fake_ms, events;
