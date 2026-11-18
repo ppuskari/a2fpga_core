@@ -270,7 +270,7 @@ module sensei_tracker_bridge #(
                     // events that arrive after their scheduled millisecond.
                     if (push_w && !due_w &&
                         (count_r+1'b1 > {1'b0,fifo_highwater_r}))
-                        fifo_highwater_r <= count_r[7:0]+1'b1;
+                        fifo_highwater_r <= count_r+1'b1;
                     if (due_w &&
                         ($signed(millis_r-event_time_r[read_ptr_r])>0)
                         && fifo_late_r!=16'hFFFF)
@@ -287,7 +287,7 @@ module sensei_tracker_bridge #(
                 if (spi_wr_i && spi_wr_addr_i[7:0] == 8'h17 &&
                     spi_wr_data_i == 8'hA5) begin
                     overflow_r <= 0;
-                    fifo_highwater_r <= count_r[7:0];
+                    fifo_highwater_r <= count_r;
                     fifo_late_r <= 0;
                 end
                 if (spi_wr_i && spi_wr_addr_i[7:0] == 8'h14 &&
