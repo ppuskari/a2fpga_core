@@ -59,6 +59,10 @@ void osd_log(const char *fmt, ...) {(void)fmt;}
 
 void fpga_spi_xfer_read(uint8_t space, uint32_t addr, uint8_t *dst, uint16_t n)
 {
+    if(space==6 && addr==0x06 && n==1) {
+        dst[0]=0; // FPGA consumed prior events by the next 5ms task
+        return;
+    }
     if (space != 6 || addr != 0 || n != 13)
         fail("Unexpected SPI status read");
     memset(dst,0,n);
@@ -81,8 +85,8 @@ void fpga_spi_xfer_write(uint8_t space, uint32_t addr,
     } else if (addr==0x16) {
         if (len!=1 || buf[0]>1)fail("bad owner control");
         owner=buf[0];
-    } else if (addr==0x15) {
-        if (len!=1 || buf[0]!=0xA5)fail("bad queue flush");
+    } else if (addr==0x15 || addr==0x17) {
+        if (len!=1 || buf[0]!=0xA5)fail("bad queue/diagnostic reset");
     } else if (addr==0x05) {
         if (len!=1)fail("bad state update");
         playback=buf[0];
