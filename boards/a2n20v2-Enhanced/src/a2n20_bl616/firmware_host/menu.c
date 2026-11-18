@@ -16,6 +16,7 @@
 #include "osd_console.h"
 #include "settings.h"
 #include "disk.h"
+#include "sensei_runtime.h"
 #include "fwupdate.h"
 #include "fpgaupdate.h"
 #include "menu.h"
@@ -353,6 +354,7 @@ static disk_list_ent_t s_pick_ents[DISK_LIST_MAX];
 static int   s_pick_count;
 static bool  s_pick_fw;                        /* firmware picker mode */
 static bool  s_pick_fpga;                      /* FPGA bitstream picker mode */
+static bool  s_pick_mod;                       /* runtime .MOD music picker */
 static char  s_pick_path[SETTINGS_NAME_LEN];   /* current subdir ("" = root) */
 static char *s_pick_target;            /* settings field to write */
 static const char *const *s_pick_exts; /* NULL-terminated extension list */
@@ -404,7 +406,7 @@ static void picker_choose(int id)
         return;
     }
 
-    if (s_pick_fw || s_pick_fpga) {            /* update file selected */
+    if (s_pick_fw || s_pick_fpga || s_pick_mod) { /* update or runtime MOD */
         char full[SETTINGS_NAME_LEN];
         int n;
         if (s_pick_path[0])
@@ -416,11 +418,16 @@ static void picker_choose(int id)
             set_status(" PATH TOO LONG");
             return;
         }
-        if (s_pick_fpga)
+        if (s_pick_mod) {
+            if (sensei_runtime_choose(full))
+                set_status("MOD SELECTED - MCU LOADING");
+            else
+                set_status("INVALID .MOD FILE PATH");
+        } else if (s_pick_fpga)
             fpgaupdate_request(full);
         else
             fwupdate_request(full);
-        screen_pop();                          /* back to the update screen */
+        screen_pop();                          /* back to the parent screen */
         return;
     }
 
@@ -461,7 +468,7 @@ static void picker_build(void)
         m = mi_add(MI_ACTION, "(UP ONE DIRECTORY)", "");
         m->action = picker_choose;
         m->id = -3;
-    } else if (!s_pick_fw && !s_pick_fpga) {
+    } else if (!s_pick_fw && !s_pick_fpga && !s_pick_mod) {
         m = mi_add(MI_ACTION, "(AUTO - BUILT-IN NAMES)", "");
         m->action = picker_choose;
         m->id = -1;
@@ -484,13 +491,14 @@ static void picker_build(void)
         mi_add(MI_INFO, "NO MATCHING IMAGES OR FOLDERS", "");
 }
 
-static const menu_screen_t SCR_PICKER = { "CHOOSE IMAGE", picker_build };
+static const menu_screen_t SCR_PICKER = { "CHOOSE FILE", picker_build };
 
 static void picker_open(char *target, const char *const *exts,
                         uint8_t eject_bit)
 {
     s_pick_fw        = false;
     s_pick_fpga      = false;
+    s_pick_mod       = false;
     s_pick_target    = target;
     s_pick_exts      = exts;
     s_pick_eject_bit = eject_bit;
@@ -749,6 +757,7 @@ static void fw_pick(int id)
     (void)id;
     s_pick_fw        = true;
     s_pick_fpga      = false;
+    s_pick_mod       = false;
     s_pick_target    = NULL;
     s_pick_exts      = k_fw_exts;
     s_pick_eject_bit = 0;
@@ -847,6 +856,7 @@ static void fpga_pick(int id)
     (void)id;
     s_pick_fw        = false;
     s_pick_fpga      = true;
+    s_pick_mod       = false;
     s_pick_target    = NULL;
     s_pick_exts      = k_fw_exts;              /* .bin */
     s_pick_eject_bit = 0;
@@ -1150,6 +1160,46 @@ static void audio_enter(int id)
     screen_push(&SCR_AUDIO);
 }
 
+/* ======================= SCREEN: SENSEI MOD LIBRARY ======================== */
+static const char *const k_mod_exts[] = {"mod",NULL};
+
+static void mod_library_open(int id)
+{
+    (void)id;
+    s_pick_fw = false;
+    s_pick_fpga = false;
+    s_pick_mod = true;
+    s_pick_target = NULL;
+    s_pick_exts = k_mod_exts;
+    s_pick_eject_bit = 0;
+    s_pick_path[0] = '\0';
+    picker_load();
+    screen_push(&SCR_PICKER);
+}
+
+static void mod_library_build(void)
+{
+    const char *status="IDLE";
+    switch (sensei_runtime_status()) {
+    case SENSEI_RT_SELECTED: status="SELECTED"; break;
+    case SENSEI_RT_LOADING: status="LOADING"; break;
+    case SENSEI_RT_READY_PCM: status="PCM READY"; break;
+    case SENSEI_RT_PLAYING: status="PLAYING"; break;
+    case SENSEI_RT_ERROR: status="ERROR"; break;
+    default:break;
+    }
+    mi_add(MI_INFO,"RUNTIME PROTRACKER MOD PLAYER","");
+    mi_add(MI_INFO,"STORAGE: USB/SD FAT VOLUME","");
+    mi_add(MI_INFO,"MOD FILE STATUS",status);
+    menu_item_t *m=mi_add(MI_SUBMENU,"BROWSE .MOD FILES","");
+    m->action=mod_library_open;
+    mi_add(MI_INFO,"","");
+    mi_add(MI_INFO,"P2 STAGE A: RUNTIME FILE LOADER","");
+    mi_add(MI_INFO,"DOC PCM UPLOAD STILL IN PROGRESS","");
+    mi_add(MI_INFO,"NO OFFLINE SONG CONVERSION","");
+}
+static const menu_screen_t SCR_MOD_LIBRARY={"MOD LIBRARY",mod_library_build};
+
 /* ======================= SCREEN: ROOT ===================================== */
 static void root_enter(int id)
 {
@@ -1162,6 +1212,7 @@ static void root_enter(int id)
     case 5: screen_push(&SCR_USB);        break;
     case 6: screen_push(&SCR_FWUPDATE);   break;
     case 7: screen_push(&SCR_FPGAUPDATE); break;
+    case 8: screen_push(&SCR_MOD_LIBRARY); break;
     }
 }
 
@@ -1192,9 +1243,10 @@ static void root_build(void)
 {
     static const char *const entries[] = {
         "SLOT ASSIGNMENTS", "AUDIO CONFIG", "DISK IMAGES", "STORAGE",
-        "NETWORK", "USB DEVICES", "FIRMWARE UPDATE", "FPGA UPDATE"
+        "NETWORK", "USB DEVICES", "FIRMWARE UPDATE", "FPGA UPDATE",
+        "MOD LIBRARY"
     };
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 9; i++) {
         menu_item_t *m = mi_add(MI_SUBMENU, entries[i], "");
         m->action = root_enter;
         m->id = i;
