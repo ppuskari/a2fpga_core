@@ -1,4 +1,4 @@
-\`timescale 1ns/1ps
+`timescale 1ns/1ps
 module tb_sensei_p2_pcm;
     reg clk=0;
     always #5 clk=~clk;
