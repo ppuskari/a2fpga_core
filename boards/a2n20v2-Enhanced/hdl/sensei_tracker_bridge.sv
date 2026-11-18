@@ -53,6 +53,10 @@ module sensei_tracker_bridge #(
     reg [FIFO_AW:0] count_r;
     reg [7:0] overflow_r;
     reg [15:0] played_r;
+    // DOC5503 registers are strobed by /CS falling edge. Without a
+    // one-cycle bubble, adjacent same-deadline FIFO events collapse
+    // into one continuous /CS assertion and all but the first are lost.
+    reg doc_cooldown_r;
 
     wire host_write = native_enabled_i && slot_selected_i &&
                       !slot_rw_n_i && slot_write_strobe_i;
@@ -64,7 +68,7 @@ module sensei_tracker_bridge #(
     wire empty_w = (count_r == 0);
     wire push_w = spi_wr_i && (spi_wr_addr_i[7:0] == 8'h14) &&
                   (spi_wr_data_i == 8'hA5) && !full_w;
-    wire due_w = doc_owner_o && !empty_w &&
+    wire due_w = doc_owner_o && !doc_cooldown_r && !empty_w &&
                  ($signed(millis_r - event_time_r[read_ptr_r]) >= 0);
     wire flush_w = spi_wr_i && (spi_wr_addr_i[7:0] == 8'h15) &&
                    (spi_wr_data_i == 8'hA5);
@@ -102,12 +106,16 @@ module sensei_tracker_bridge #(
             overflow_r <= 0;
             played_r <= 0;
             doc_wr_o <= 0;
+            doc_cooldown_r <= 0;
             doc_addr_o <= 0;
             doc_data_o <= 0;
             spi_rd_valid_o <= 0;
             spi_rd_data_o <= 8'hFF;
         end else begin
             doc_wr_o <= 1'b0;
+            // Deassert /CS for at least one complete logic clock between
+            // consecutive DOC writes (even for equal deadlines).
+            doc_cooldown_r <= due_w;
             spi_rd_valid_o <= spi_rd_i;
             if (divider_r == MS_DIVIDER - 1) begin
                 divider_r <= 0;
