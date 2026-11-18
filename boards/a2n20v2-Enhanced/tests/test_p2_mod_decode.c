@@ -38,7 +38,7 @@ int main(void)
             "exact-sized DOC PCM buffer rejected");
     require(mod.order_count==1 && mod.pattern_count==1,"order metadata");
     require(mod.pattern_offset==1084 && mod.file_sample_bytes==256,"offsets");
-    require(mod.doc_pcm_bytes==256 && mod.catalog[7]==48,"sample bank/catalog");
+    require(mod.doc_pcm_bytes==256 && mod.catalog[11]==48,"sample bank/catalog");
     require(pcm[0]==0x80 && pcm[1]==0x81 && pcm[255]==0x7f,
             "signed MOD PCM to DOC bytes");
     puts("PASS P2 parser: original MOD header, order table and DOC instrument");
