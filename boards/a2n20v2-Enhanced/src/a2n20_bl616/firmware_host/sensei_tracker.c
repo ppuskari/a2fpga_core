@@ -17,6 +17,7 @@
 #include "sensei_mod_player.h"
 #include "sensei_runtime.h"
 #include "sensei_pcm_upload.h"
+#include "sensei_event_queue.h"
 #include "fpga_spi.h"
 #include "osd_console.h"
 #include "FreeRTOS.h"
@@ -35,7 +36,11 @@
 #define STATE_DONE  3
 #define STATE_ERROR 4
 #define SONG_ROWS  192u
-#define FIFO_SAFE_LEVEL 24u /* largest tick burst <=35 in a 64-entry FIFO */
+#define REG_DIAG_CLEAR 0x17u
+// The hardware FIFO is 64 events. The MCU stages a complete ProTracker
+// tick separately, then sends only the slots the FPGA reports as free.
+// The previous `level<=24` check could submit 56 notes into 40 slots.
+static sensei_event_queue_t g_doc_pending;
 
 typedef struct {
     uint8_t active;
@@ -75,12 +80,33 @@ static void tracker_read(uint8_t status[13])
     fpga_spi_xfer_read(TRACK_SPACE, 0, status, 13);
 }
 
+/* The tracker computes events in ProTracker tick order; the MCU queues
+ * them atomically before transport. No 5-byte SPI writes in callbacks. */
 static void tracker_event(uint16_t when, uint8_t doc_reg, uint8_t value)
 {
-    const uint8_t packet[5] = {
-        (uint8_t)when, (uint8_t)(when >> 8), doc_reg, value, 0xA5
+    (void)sensei_queue_push(&g_doc_pending,when,doc_reg,value);
+}
+static void tracker_event_send(uint16_t when,uint8_t reg,uint8_t value)
+{
+    const uint8_t packet[5]={
+        (uint8_t)when,(uint8_t)(when>>8),reg,value,0xA5
     };
-    fpga_spi_xfer_write(TRACK_SPACE, 0x10, packet, sizeof packet);
+    fpga_spi_xfer_write(TRACK_SPACE,0x10,packet,sizeof packet);
+}
+static uint8_t tracker_fpga_level(void)
+{
+    uint8_t level=0xFFu;
+    fpga_spi_xfer_read(TRACK_SPACE,0x06,&level,1);
+    return level;
+}
+static void tracker_pump(uint16_t now)
+{
+    if(!g_doc_pending.count)return;
+    const uint8_t level=tracker_fpga_level();
+    // Occupancy is sampled before this single-producer batch. Concurrent
+    // DOC consumption only adds free slots; no other SPI6 producer pushes.
+    (void)sensei_queue_drain(&g_doc_pending,level,SENSEI_FPGA_FIFO_CAP,
+                            now,SENSEI_FPGA_FIFO_CAP,tracker_event_send);
 }
 
 static uint16_t period_to_fc(uint16_t period)
@@ -166,11 +192,14 @@ static void tracker_stop(tracker_state *s, uint16_t now, uint8_t state)
     /* Drop stale future events, mute the owned DOC at a near-future deadline,
      * then release owner only AFTER these writes have been executed. */
     tracker_write(REG_FLUSH, 0xA5);
+    // Drop all outstanding MCU events from the previous song before STOP.
+    sensei_queue_reset(&g_doc_pending);
     // Runtime ProTracker uses four PAIRS: DOC 0/1,2/3,4/5,6/7.
     // Stop all eight physical oscillators so sustain partners cannot
     // continue after STOP, end-of-song or the next MOD selection.
     for (ch=0; ch<(s->real_mod==2u?8u:4u); ++ch)
         tracker_halt((uint16_t)(now+4u), (uint8_t)ch);
+    tracker_pump(now);
     vTaskDelay(pdMS_TO_TICKS(25));
     tracker_write(REG_OWNER, 0);
     tracker_write(REG_STATE, state);
@@ -195,7 +224,9 @@ static bool tracker_begin(tracker_state *s, uint16_t now, uint8_t song_id)
     s->time_next=(uint16_t)(now+100u);
     s->active=1;
     s->finishing=0;
+    sensei_queue_reset(&g_doc_pending);
     tracker_write(REG_FLUSH, 0xA5);
+    tracker_write(REG_DIAG_CLEAR, 0xA5);
     tracker_write(REG_OWNER, 1);
     tracker_write(REG_STATE, STATE_PLAY);
     osd_log(s->real_mod ? "SENSEI P1E: REAL MOD START" :
@@ -217,7 +248,9 @@ static bool tracker_begin_runtime(tracker_state *s,
     s->real_mod=2u;
     s->active=1;
     s->finishing=0;
+    sensei_queue_reset(&g_doc_pending);
     tracker_write(REG_FLUSH,0xA5);
+    tracker_write(REG_DIAG_CLEAR,0xA5);
     tracker_write(REG_OWNER,1);
     // P0 uses E1=$3E (32 oscillators) for the established
     // FC=69013/period conversion. Generic P2 ProDOS skips P0 InitDOC,
@@ -244,7 +277,7 @@ void sensei_tracker_task(void *unused)
 
     for (;;) {
         uint16_t now;
-        uint8_t seq,cmd,arg,level;
+        uint8_t seq,cmd,arg;
         bool just_started=false;
         tracker_read(st);
         // The menu chooses a normal .MOD file from USB/SD; all parsing,
@@ -287,7 +320,7 @@ void sensei_tracker_task(void *unused)
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;  /* old FPGA, disabled personality or not configured */
         }
-        seq=st[3]; cmd=st[2]; arg=st[4]; level=st[6];
+        seq=st[3]; cmd=st[2]; arg=st[4];
         now=(uint16_t)((uint16_t)st[8] | ((uint16_t)st[9]<<8));
         if (seq!=s.last_seq) {
             s.last_seq=seq;
@@ -316,27 +349,48 @@ void sensei_tracker_task(void *unused)
                 sensei_runtime_set_status(SENSEI_RT_ERROR);
         }
         if (s.active) {
-            /* Look ahead 80 ms, bounded by FIFO occupancy. This isolates
-             * audio timing from USB/Disk/FreeRTOS scheduling jitter. */
+            /* Drain prior work first. The FPGA is the source of truth
+             * for free slots, not a guessed upper bound on tick size. */
+            tracker_pump(now);
+            /* 160 ms lookahead helps multi-register DOC note setup.
+             * Never generate a tick unless its worst-case 64 DOC writes
+             * fit in the MCU's 256-event staging queue. We do not
+             * advance the ProTracker tick until it is safely staged. */
             if ((s.real_mod ? !sensei_mod_done(&s.mod) : s.row<SONG_ROWS) &&
-                level<=FIFO_SAFE_LEVEL &&
-                (int16_t)((uint16_t)(now+80u)-
+                g_doc_pending.count<=SENSEI_EVENT_CAP-SENSEI_MAX_TICK_EVENTS &&
+                (int16_t)((uint16_t)(now+160u)-
                            (s.real_mod ? sensei_mod_next_ms(&s.mod) :
                                          s.time_next))>=0) {
                 if (s.real_mod) sensei_mod_tick(&s.mod,tracker_event);
                 else tracker_emit_tick(&s);
+                tracker_pump(now);
             }
-            if ((s.real_mod ? sensei_mod_done(&s.mod) : s.row==SONG_ROWS) &&
-                !s.finishing) {
-                s.finishing=1;
-                s.time_finish=(uint16_t)((s.real_mod ?
-                        sensei_mod_next_ms(&s.mod) : s.time_next)+25u);
-            }
-            if (s.finishing && (int16_t)(now-s.time_finish)>=0) {
-                tracker_stop(&s,now,STATE_DONE);
-                osd_log(s.real_mod==2u ? "SENSEI P2: RUNTIME MOD DONE" :
-                        s.real_mod ? "SENSEI P1E: REAL MOD DONE" :
-                        "SENSEI P1D: DONE 192 ROWS");
+            if (g_doc_pending.failed) {
+                osd_log("SENSEI P2S: MCU STAGING OVERFLOW");
+                tracker_stop(&s,now,STATE_ERROR);
+                sensei_runtime_set_status(SENSEI_RT_ERROR);
+            } else {
+                if ((s.real_mod ? sensei_mod_done(&s.mod) : s.row==SONG_ROWS) &&
+                    !s.finishing) {
+                    s.finishing=1;
+                    s.time_finish=(uint16_t)((s.real_mod ?
+                            sensei_mod_next_ms(&s.mod) : s.time_next)+25u);
+                }
+                if (s.finishing && !g_doc_pending.count &&
+                    tracker_fpga_level()==0u &&
+                    (int16_t)(now-s.time_finish)>=0) {
+                    const uint32_t sent=g_doc_pending.emitted;
+                    const uint16_t high=g_doc_pending.high_water;
+                    const uint32_t late=g_doc_pending.late;
+                    const uint16_t maxlate=g_doc_pending.max_late_ms;
+                    tracker_stop(&s,now,STATE_DONE);
+                    osd_log("SENSEI P2S: EVENTS=%lu HIGH=%u LATE=%lu MAXMS=%u",
+                        (unsigned long)sent,(unsigned)high,
+                        (unsigned long)late,(unsigned)maxlate);
+                    osd_log(s.real_mod==2u ? "SENSEI P2S: RUNTIME MOD DONE" :
+                            s.real_mod ? "SENSEI P1E: REAL MOD DONE" :
+                            "SENSEI P1D: DONE 192 ROWS");
+                }
             }
         }
         vTaskDelay(pdMS_TO_TICKS(5));
