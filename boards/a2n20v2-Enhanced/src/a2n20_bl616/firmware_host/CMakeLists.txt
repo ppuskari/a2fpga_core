@@ -35,6 +35,7 @@ target_sources(app PRIVATE
     ../../../../../reference/ssi263/pico-v1.0.1/ssi263dsp.c
     w5100.c
     disk.c
+    sensei_tracker.c
     diskio_host.c
     osd_console.c
     settings.c
