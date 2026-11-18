@@ -111,8 +111,9 @@ static void slide_towards_target(sensei_mod_chan_t *c)
         unsigned step=(unsigned)c->period+c->porta_speed;
         c->period=(uint16_t)(step>=c->target?c->target:step);
     } else if (c->period > c->target) {
-        c->period=(uint16_t)(c->period-c->target<=c->porta_speed?
-                             c->target:c->period-c->porta_speed);
+        if ((unsigned)(c->period-c->target)<=c->porta_speed)
+            c->period=c->target;
+        else c->period=(uint16_t)(c->period-c->porta_speed);
     }
 }
 static uint16_t vibrato_fc(sensei_mod_chan_t *c)
