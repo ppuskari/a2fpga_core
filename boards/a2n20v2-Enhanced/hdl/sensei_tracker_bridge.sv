@@ -60,6 +60,8 @@ module sensei_tracker_bridge #(
     reg [FIFO_AW-1:0] read_ptr_r, write_ptr_r;
     reg [FIFO_AW:0] count_r;
     reg [7:0] overflow_r;
+    reg [7:0] fifo_highwater_r;
+    reg [15:0] fifo_late_r;
     reg [15:0] played_r;
     // DOC5503 registers are strobed by /CS falling edge. Without a
     // one-cycle bubble, adjacent same-deadline FIFO events collapse
@@ -130,6 +132,8 @@ module sensei_tracker_bridge #(
             write_ptr_r <= 0;
             count_r <= 0;
             overflow_r <= 0;
+            fifo_highwater_r <= 0;
+            fifo_late_r <= 0;
             played_r <= 0;
             doc_wr_o <= 0;
             doc_cooldown_r <= 0;
@@ -262,11 +266,29 @@ module sensei_tracker_bridge #(
                         played_r <= played_r + 1'b1;
                         read_ptr_r <= read_ptr_r + 1'b1;
                     end
+                    // The diagnostics include MCU FIFO overfill and
+                    // events that arrive after their scheduled millisecond.
+                    if (push_w && !due_w &&
+                        (count_r+1'b1 > {1'b0,fifo_highwater_r}))
+                        fifo_highwater_r <= count_r[7:0]+1'b1;
+                    if (due_w &&
+                        ($signed(millis_r-event_time_r[read_ptr_r])>0)
+                        && fifo_late_r!=16'hFFFF)
+                        fifo_late_r <= fifo_late_r+1'b1;
                     case ({push_w,due_w})
                         2'b10: count_r <= count_r + 1'b1;
                         2'b01: count_r <= count_r - 1'b1;
                         default: ;
                     endcase
+                end
+                // Explicit per-song reset; unlike a physical power
+                // cycle this permits a meaningful PEEK($C0CF) after each
+                // runtime MOD playback on the same mounted SD card.
+                if (spi_wr_i && spi_wr_addr_i[7:0] == 8'h17 &&
+                    spi_wr_data_i == 8'hA5) begin
+                    overflow_r <= 0;
+                    fifo_highwater_r <= count_r[7:0];
+                    fifo_late_r <= 0;
                 end
                 if (spi_wr_i && spi_wr_addr_i[7:0] == 8'h14 &&
                     spi_wr_data_i == 8'hA5 && full_w &&
@@ -312,6 +334,10 @@ module sensei_tracker_bridge #(
                     8'h22: spi_rd_data_o <= pcm_words_acked_r[15:8];
                     8'h23: spi_rd_data_o <= pcm_error_r;
                     8'h26: spi_rd_data_o <= 8'h42; // P2 PCM DMA capability
+                    8'h27: spi_rd_data_o <= FIFO_DEPTH; // FIFO capacity
+                    8'h28: spi_rd_data_o <= fifo_highwater_r;
+                    8'h29: spi_rd_data_o <= fifo_late_r[7:0];
+                    8'h2A: spi_rd_data_o <= fifo_late_r[15:8];
                     default: spi_rd_data_o <= 8'h00;
                 endcase
             end
