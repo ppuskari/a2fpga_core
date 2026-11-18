@@ -46,6 +46,13 @@ module sound_glu #(
     input  logic [7:0] mb_doc_addr_i,
     input  logic [7:0] mb_doc_data_i,
 
+    // P1D: exclusive MCU/FPGA tracker register owner. Active only for the
+    // native IIe DOC personality and only AFTER 6502 sample preload.
+    input  logic       tracker_owner_i,
+    input  logic       tracker_doc_wr_i,
+    input  logic [7:0] tracker_doc_addr_i,
+    input  logic [7:0] tracker_doc_data_i,
+
     // Exclusive MB-DOC waveform preload uses the existing GLU
     // SDRAM write port; DOC oscillator fetch stays on DOC_MEM_PORT.
     input  logic        mb_ram_wr_i,
@@ -762,12 +769,17 @@ assign debug_internal_ctrl_data_o =
     // a2bus_if.data is intentionally used in the golden design.
     // The bridge must present a synchronous one-shot write with
     // its own stable address and data; it will be wired in P2.
-    wire doc_host_wr_w = mb_owner_w ? mb_doc_wr_i : doc_wr_r;
-    wire doc_host_rd_w = !mb_owner_w && doc_rd_r;
+    wire tracker_owner_w = MB_DOC_MODE && native_owner_w &&
+        tracker_owner_i;
+    wire doc_host_wr_w = mb_owner_w ? mb_doc_wr_i :
+        tracker_owner_w ? tracker_doc_wr_i : doc_wr_r;
+    wire doc_host_rd_w = !mb_owner_w && !tracker_owner_w && doc_rd_r;
     wire [7:0] doc_host_addr_w =
-        mb_owner_w ? mb_doc_addr_i : doc_addr_r;
+        mb_owner_w ? mb_doc_addr_i :
+        tracker_owner_w ? tracker_doc_addr_i : doc_addr_r;
     wire [7:0] doc_host_data_w =
-        mb_owner_w ? mb_doc_data_i : a2bus_if.data;
+        mb_owner_w ? mb_doc_data_i :
+        tracker_owner_w ? tracker_doc_data_i : a2bus_if.data;
 
     doc5503 #(
     ) doc5503 (
