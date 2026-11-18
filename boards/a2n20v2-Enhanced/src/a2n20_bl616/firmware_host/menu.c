@@ -1177,6 +1177,12 @@ static void mod_library_open(int id)
     screen_push(&SCR_PICKER);
 }
 
+static void mod_library_stop(int id)
+{
+    (void)id;
+    sensei_runtime_request_stop();
+    set_status("MOD STOP REQUESTED");
+}
 static void mod_library_build(void)
 {
     const char *status="IDLE";
@@ -1186,6 +1192,7 @@ static void mod_library_build(void)
     case SENSEI_RT_READY_PCM: status="PCM READY"; break;
     case SENSEI_RT_PLAYING: status="PLAYING"; break;
     case SENSEI_RT_ERROR: status="ERROR"; break;
+    case SENSEI_RT_DONE: status="DONE"; break;
     default:break;
     }
     mi_add(MI_INFO,"RUNTIME PROTRACKER MOD PLAYER","");
@@ -1193,9 +1200,11 @@ static void mod_library_build(void)
     mi_add(MI_INFO,"MOD FILE STATUS",status);
     menu_item_t *m=mi_add(MI_SUBMENU,"BROWSE .MOD FILES","");
     m->action=mod_library_open;
+    m=mi_add(MI_ACTION,"STOP PLAYBACK","");
+    m->action=mod_library_stop;
     mi_add(MI_INFO,"","");
-    mi_add(MI_INFO,"P2 STAGE A: RUNTIME FILE LOADER","");
-    mi_add(MI_INFO,"DOC PCM UPLOAD STILL IN PROGRESS","");
+    mi_add(MI_INFO,"RUNTIME C TRACKER - 4CH PROTRACKER","");
+    mi_add(MI_INFO,"DOC PCM UPLOAD + EFFECTS ON MCU","");
     mi_add(MI_INFO,"NO OFFLINE SONG CONVERSION","");
 }
 static const menu_screen_t SCR_MOD_LIBRARY={"MOD LIBRARY",mod_library_build};
