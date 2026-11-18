@@ -36,6 +36,7 @@ target_sources(app PRIVATE
     w5100.c
     disk.c
     sensei_tracker.c
+    sensei_event_queue.c
     sensei_mod_player.c
     sensei_mod_decode.c
     sensei_runtime.c
