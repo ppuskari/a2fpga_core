@@ -32,7 +32,9 @@ bool sensei_mod_decode(const uint8_t *file, size_t length,
 {
     unsigned npat=0;
     size_t sample_offset, bank_size=0;
-    if (!file || !pcm || !out || length<1084 || !is_4ch(file+1080))
+    // pcm==NULL with cap==0 is a dry-run size/format audit.
+    if (!file || !out || length<1084 || !is_4ch(file+1080) ||
+        (!pcm && pcm_cap!=0))
         return false;
     memset(out,0,sizeof(*out));
     if (file[950]==0 || file[950]>128) return false;
@@ -68,16 +70,19 @@ bool sensei_mod_decode(const uint8_t *file, size_t length,
         size=ceil_wave(wanted);
         if(size<wanted)return false;
         aligned=(bank_size+(size-1u)) & ~((size_t)size-1u);
-        if (aligned+size>pcm_cap || aligned+size>49152u)return false;
-        memset(pcm+bank_size,0x80,aligned-bank_size);
-        memset(pcm+aligned,0x80,size);
-        tocopy=wanted;
-        if (!looping && tocopy==size)tocopy--; /* reserve DOC HALT byte */
-        for(unsigned i=0;i<tocopy;i++) {
-            uint8_t value=(uint8_t)(src[i]^0x80u);
-            pcm[aligned+i]=value?value:1u;
+        if ((pcm && aligned+size>pcm_cap) ||
+            aligned+size>49152u)return false;
+        if (pcm) {
+            memset(pcm+bank_size,0x80,aligned-bank_size);
+            memset(pcm+aligned,0x80,size);
+            tocopy=wanted;
+            if (!looping && tocopy==size)tocopy--; /* reserve DOC HALT byte */
+            for(unsigned i=0;i<tocopy;i++) {
+                uint8_t value=(uint8_t)(src[i]^0x80u);
+                pcm[aligned+i]=value?value:1u;
+            }
+            if (!looping)pcm[aligned+size-1u]=0u;
         }
-        if (!looping)pcm[aligned+size-1u]=0u;
         wts=0;
         for(unsigned x=size;x>256u;x>>=1)wts++;
         out->catalog[inst*4u]=(uint8_t)(aligned/256u);
