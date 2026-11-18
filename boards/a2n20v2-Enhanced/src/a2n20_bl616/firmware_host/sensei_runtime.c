@@ -101,8 +101,7 @@ bool sensei_runtime_load(const char *relative_path,sensei_runtime_module_t *m)
         goto finish;
     m->file_size=req.size;
     m->file=(uint8_t*)pvPortMalloc(req.size);
-    m->pcm=(uint8_t*)pvPortMalloc(SENSEI_RUNTIME_MAX_SAMPLE_BANK);
-    if(!m->file || !m->pcm)goto finish;
+    if(!m->file)goto finish;
     remaining=req.size;
     done=0;
     while(remaining) {
@@ -115,8 +114,15 @@ bool sensei_runtime_load(const char *relative_path,sensei_runtime_module_t *m)
         remaining-=req.out;
         done+=req.out;
     }
+    // First parse without PCM writes to calculate exact aligned DOC
+    // instrument memory. Do not reserve 48 KiB for every short song.
+    if(!sensei_mod_decode(m->file,m->file_size,NULL,0,&d) ||
+       !d.doc_pcm_bytes || d.doc_pcm_bytes>SENSEI_RUNTIME_MAX_SAMPLE_BANK)
+        goto finish;
+    m->pcm=(uint8_t*)pvPortMalloc(d.doc_pcm_bytes);
+    if(!m->pcm)goto finish;
     if(!sensei_mod_decode(m->file,m->file_size,
-                          m->pcm,SENSEI_RUNTIME_MAX_SAMPLE_BANK,&d))
+                          m->pcm,d.doc_pcm_bytes,&d))
         goto finish;
     memcpy(m->catalog,d.catalog,sizeof(m->catalog));
     memcpy(m->order_table,d.orders,sizeof(m->order_table));
