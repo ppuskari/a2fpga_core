@@ -90,6 +90,13 @@ module tb_sensei_tracker_bridge;
         read_check(8'h0A,8'h01);
         transfer(8'h16,8'h00);
         if(doc_owner) $fatal(1,"DOC ownership did not release");
+        // Old MCU/FreeRTOS stall: IIe emergency STOP revokes ownership
+        // even if the MCU never acknowledges the command.
+        transfer(8'h16,8'h01);
+        if (!doc_owner) $fatal(1,"Cannot reclaim DOC");
+        host_write(4'hF,8'hA5);
+        if (doc_owner) $fatal(1,"IIe panic failed to release owner");
+        host_read_check(4'hC,8'h04);
         host_write(4'hC,8'h02);
         read_check(8'h02,8'h02);
         native=0;
