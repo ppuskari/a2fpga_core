@@ -16,6 +16,7 @@
 #include "sensei_tracker.h"
 #include "sensei_mod_player.h"
 #include "sensei_runtime.h"
+#include "sensei_pcm_upload.h"
 #include "fpga_spi.h"
 #include "osd_console.h"
 #include "FreeRTOS.h"
@@ -172,6 +173,9 @@ static void tracker_stop(tracker_state *s, uint16_t now, uint8_t state)
     tracker_write(REG_STATE, state);
     s->active=0;
     s->finishing=0;
+    if (s->real_mod==2u)
+        sensei_runtime_set_status(state==STATE_DONE ?
+                                  SENSEI_RT_DONE : SENSEI_RT_IDLE);
 }
 
 static bool tracker_begin(tracker_state *s, uint16_t now, uint8_t song_id)
@@ -196,6 +200,28 @@ static bool tracker_begin(tracker_state *s, uint16_t now, uint8_t song_id)
     return true;
 }
 
+/* Runtime source: no per-song firmware compilation. PCM must have been
+ * written and ACKed to DOC sound RAM before any oscillator can start. */
+static bool tracker_begin_runtime(tracker_state *s,
+                                  sensei_runtime_module_t *module,
+                                  uint16_t now)
+{
+    if (!module || !module->file || !module->pcm || !module->order_count ||
+        !sensei_mod_init_runtime(&s->mod,module->song.rows,
+                                 module->order_table,module->order_count,
+                                 module->catalog,now))
+        return false;
+    s->real_mod=2u;
+    s->active=1;
+    s->finishing=0;
+    tracker_write(REG_FLUSH,0xA5);
+    tracker_write(REG_OWNER,1);
+    tracker_write(REG_STATE,STATE_PLAY);
+    sensei_runtime_set_status(SENSEI_RT_PLAYING);
+    osd_log("SENSEI P2: RUNTIME MOD - DOC PLAYING");
+    return true;
+}
+
 void sensei_tracker_task(void *unused)
 {
     uint8_t st[13];
@@ -210,18 +236,42 @@ void sensei_tracker_task(void *unused)
         uint16_t now;
         uint8_t seq,cmd,arg,level;
         bool just_started=false;
-        // Load original MOD bytes from USB/SD through the exclusive FAT
-        // service only while no DOC playback is active. Stage B must add
-        // a verified PCM transfer before enabling song playback.
+        tracker_read(st);
+        // The menu chooses a normal .MOD file from USB/SD; all parsing,
+        // sample conversion, upload and tick effects occur at runtime.
+        // First verify Native DOC + the new FPGA PCM-DMA capability.
         if (!s.active && sensei_runtime_pending(requested_mod,
                                                 sizeof requested_mod)) {
+            uint8_t capability=0;
+            fpga_spi_xfer_read(TRACK_SPACE,0x26,&capability,1);
             sensei_runtime_free(&user_mod);
-            if (sensei_runtime_load(requested_mod,&user_mod))
-                osd_log("SENSEI P2: MOD DECODED; PCM UPLOAD REQUIRED");
-            else
-                osd_log("SENSEI P2: MOD LOAD/FORMAT ERROR");
+            if (st[0]!=0x53 || st[1]!=0x1D || !(st[12]&1u) ||
+                capability!=0x42) {
+                sensei_runtime_set_status(SENSEI_RT_ERROR);
+                osd_log("SENSEI P2: NEED NATIVE DOC AND P2 FPGA");
+            } else if (!sensei_runtime_load(requested_mod,&user_mod)) {
+                osd_log("SENSEI P2: MOD INVALID OR TOO LARGE");
+            } else {
+                tracker_write(REG_STATE,5); /* LOADING SAMPLES */
+                if (!sensei_pcm_upload(user_mod.pcm,user_mod.pcm_length)) {
+                    tracker_write(REG_STATE,STATE_ERROR);
+                    sensei_runtime_set_status(SENSEI_RT_ERROR);
+                    osd_log("SENSEI P2: DOC PCM UPLOAD FAILED");
+                } else {
+                    // Re-read FPGA time because upload may take seconds.
+                    tracker_read(st);
+                    uint16_t start_time=(uint16_t)st[8] |
+                                         ((uint16_t)st[9]<<8);
+                    just_started=tracker_begin_runtime(&s,&user_mod,
+                                                        start_time);
+                    if (!just_started) {
+                        tracker_write(REG_STATE,STATE_ERROR);
+                        sensei_runtime_set_status(SENSEI_RT_ERROR);
+                    }
+                    tracker_read(st);
+                }
+            }
         }
-        tracker_read(st);
         if (st[0]!=0x53 || st[1]!=0x1D || !(st[12]&1u)) {
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;  /* old FPGA, disabled personality or not configured */
@@ -235,8 +285,15 @@ void sensei_tracker_task(void *unused)
             } else if (cmd==1 && !s.active) {
                 if (arg<=2) {
                     just_started=tracker_begin(&s,now,arg);
+                } else if (arg==3) {
+                    // Generic P2 ProDOS front-end arms the MOD picker.
+                    // Files and samples are never compiled into the SYS.
+                    tracker_write(REG_STATE,STATE_IDLE);
                 } else tracker_write(REG_STATE,STATE_ERROR);
             }
+        }
+        if (sensei_runtime_take_stop_request() && s.active) {
+            tracker_stop(&s,now,STATE_IDLE);
         }
         if (s.active && !just_started && !(st[12] & 0x02u)) {
             /* A2 reset, audio-mode change, or IIe C0CF panic revoked
@@ -244,6 +301,8 @@ void sensei_tracker_task(void *unused)
             s.active=0;
             s.finishing=0;
             tracker_write(REG_STATE, STATE_IDLE);
+            if(s.real_mod==2u)
+                sensei_runtime_set_status(SENSEI_RT_ERROR);
         }
         if (s.active) {
             /* Look ahead 80 ms, bounded by FIFO occupancy. This isolates
@@ -264,7 +323,8 @@ void sensei_tracker_task(void *unused)
             }
             if (s.finishing && (int16_t)(now-s.time_finish)>=0) {
                 tracker_stop(&s,now,STATE_DONE);
-                osd_log(s.real_mod ? "SENSEI P1E: REAL MOD DONE" :
+                osd_log(s.real_mod==2u ? "SENSEI P2: RUNTIME MOD DONE" :
+                        s.real_mod ? "SENSEI P1E: REAL MOD DONE" :
                         "SENSEI P1D: DONE 192 ROWS");
             }
         }
