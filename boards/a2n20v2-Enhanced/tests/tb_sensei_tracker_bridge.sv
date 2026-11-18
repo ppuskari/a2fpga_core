@@ -106,10 +106,27 @@ module tb_sensei_tracker_bridge;
         host_read_check(4'hC,8'h04);
         host_write(4'hC,8'h02);
         read_check(8'h02,8'h02);
+        // P2S diagnostics: force a full FIFO with owner released so
+        // no event can drain, verify overflow and per-song reset.
+        read_check(8'h27,8'h08); // parameterized 8-entry fixture
+        transfer(8'h15,8'hA5); // flush old pending work
+        transfer(8'h17,8'hA5); // reset diagnostic counters
+        read_check(8'h07,8'h00);
+        read_check(8'h28,8'h00);
+        read_check(8'h29,8'h00);
+        for(integer k=0;k<9;k=k+1)transfer(8'h14,8'hA5);
+        read_check(8'h06,8'h08);
+        read_check(8'h07,8'h01);
+        read_check(8'h28,8'h08);
+        transfer(8'h15,8'hA5);
+        transfer(8'h17,8'hA5);
+        read_check(8'h06,8'h00);
+        read_check(8'h07,8'h00);
+        read_check(8'h28,8'h00);
         native=0;
         repeat(2) @(negedge clk);
         if (slot_rd || doc_owner) $fatal(1,"native-mode isolation failed");
-        $display("PASS P1D: CPU mailbox, SPI6 status, FPGA deadline, DOC ownership and isolation");
+        $display("PASS P1D/P2S: mailbox, deadline, diagnostic reset, FIFO high-water and overflow accounting");
         $finish;
     end
 endmodule
