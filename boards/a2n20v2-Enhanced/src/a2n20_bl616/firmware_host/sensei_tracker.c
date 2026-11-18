@@ -189,6 +189,19 @@ static void tracker_emit_tick(tracker_state *s)
 static void tracker_stop(tracker_state *s, uint16_t now, uint8_t state)
 {
     unsigned ch;
+    if(s->real_mod==2u) {
+        uint8_t overflow=0, stats[3]={0};
+        fpga_spi_xfer_read(TRACK_SPACE,0x07,&overflow,1);
+        fpga_spi_xfer_read(TRACK_SPACE,0x28,stats,3);
+        const unsigned late_hw=(unsigned)stats[1]|((unsigned)stats[2]<<8);
+        osd_log("SENSEI P2S: FPGA OVR=%u HIGH=%u LATE=%u",
+                (unsigned)overflow,(unsigned)stats[0],late_hw);
+        osd_log("SENSEI P2S: MCU SENT=%lu HIGH=%u LATE=%lu MAXMS=%u",
+                (unsigned long)g_doc_pending.emitted,
+                (unsigned)g_doc_pending.high_water,
+                (unsigned long)g_doc_pending.late,
+                (unsigned)g_doc_pending.max_late_ms);
+    }
     /* Drop stale future events, mute the owned DOC at a near-future deadline,
      * then release owner only AFTER these writes have been executed. */
     tracker_write(REG_FLUSH, 0xA5);
