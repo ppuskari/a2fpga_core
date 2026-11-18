@@ -212,6 +212,13 @@ void sensei_tracker_task(void *unused)
                 else tracker_write(REG_STATE,STATE_ERROR);
             }
         }
+        if (s.active && !(st[12] & 0x02u)) {
+            /* A2 reset, audio-mode change, or IIe C0CF panic revoked
+             * FPGA ownership: immediately stop sending timed events. */
+            s.active=0;
+            s.finishing=0;
+            tracker_write(REG_STATE, STATE_IDLE);
+        }
         if (s.active) {
             /* Look ahead 80 ms, bounded by FIFO occupancy. This isolates
              * audio timing from USB/Disk/FreeRTOS scheduling jitter. */
