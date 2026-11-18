@@ -219,6 +219,13 @@ static bool tracker_begin_runtime(tracker_state *s,
     s->finishing=0;
     tracker_write(REG_FLUSH,0xA5);
     tracker_write(REG_OWNER,1);
+    // P0 uses E1=$3E (32 oscillators) for the established
+    // FC=69013/period conversion. Generic P2 ProDOS skips P0 InitDOC,
+    // so explicitly restore that timing and halt both sides of all
+    // four attack/sustain pairs before starting the first MOD row.
+    tracker_event((uint16_t)(now+4u),0xE1,0x3E);
+    for(unsigned ch=0;ch<8u;ch++)
+        tracker_halt((uint16_t)(now+4u),(uint8_t)ch);
     tracker_write(REG_STATE,STATE_PLAY);
     sensei_runtime_set_status(SENSEI_RT_PLAYING);
     osd_log("SENSEI P2: RUNTIME MOD - DOC PLAYING");
