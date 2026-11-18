@@ -82,6 +82,11 @@ typedef enum {
     FSOP_LIST_OPEN,   /* path                       */
     FSOP_LIST_NEXT,   /* -> name,size,attr,date,time; name[0]==0 at end */
     FSOP_LIST_CLOSE,
+    /* Dedicated seekable MOD file handle, independent of FTP's handle.
+     * All FatFS calls remain serialized in disk's service thread. */
+    FSOP_MOD_OPEN,
+    FSOP_MOD_READ,
+    FSOP_MOD_CLOSE,
 } fs_op_t;
 
 typedef struct {
