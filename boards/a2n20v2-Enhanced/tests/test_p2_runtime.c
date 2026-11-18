@@ -13,8 +13,14 @@ static uint8_t synthetic[1084+1024+256];
 static uint32_t cursor;
 static unsigned files_opened,files_closed,chunks_read;
 static int opened;
+static size_t max_alloc, total_alloc;
 
-void *pvPortMalloc(size_t n){return malloc(n);}
+void *pvPortMalloc(size_t n)
+{
+    if(n>max_alloc)max_alloc=n;
+    total_alloc+=n;
+    return malloc(n);
+}
 void vPortFree(void *p){free(p);}
 
 int disk_fs_request(fs_req_t *r)
@@ -68,6 +74,8 @@ int main(void)
          "runtime player must not silently treat raw patterns as flattened rows");
     must(song.order_count==1 && song.catalog[7]==48,
          "runtime sample catalog not decoded");
+    must(max_alloc==sizeof synthetic && total_alloc==sizeof synthetic+256u,
+         "runtime loader reserved more PCM memory than this MOD needs");
     must(files_opened==1 && files_closed==1 && chunks_read==1,
          "FAT broker open/read/close mismatch");
     must(sensei_runtime_status()==SENSEI_RT_READY_PCM,
