@@ -27,7 +27,7 @@ jobs:
           /tmp/test_p1d_mcu
       - name: Simulate P1E two-song real-time tracker effects
         run: |
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/tests/p1e_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p1e_mod_player.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p1e_mod
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -DSENSEI_ENABLE_LEGACY_TEST_SONGS -Iboards/a2n20v2-Enhanced/tests/p1e_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p1e_mod_player.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p1e_mod
           /tmp/test_p1e_mod
       - name: Validate runtime MOD decoder and FAT picker
         run: |
