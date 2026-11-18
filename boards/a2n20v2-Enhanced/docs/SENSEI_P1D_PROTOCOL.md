@@ -88,6 +88,62 @@ NTP decoding, MCU->DOC Sound-RAM DMA, and high-rate tick interpolation
 are future versions. Do not describe P1D as a fully offloaded MOD
 file player yet.
 
+
+## Before Gowin: regenerate all Mockingboard audio assets (PowerShell 5.1)
+
+Run each command individually in the NEW a2fpga P1D worktree, not the
+working P1B/P1C SenseiPlay8 repository:
+
+```powershell
+cd C:\AppleIIgsDev_02\a2fpga-sensei-p1d
+py -3 tools\extract_synthlab_piano.py --download
+py -3 tools\extract_synthlab_piano.py --check
+py -3 tools\generate_ssi263_voice.py
+py -3 tools\generate_ssi263_voice.py --check
+py -3 tools\generate_ssi263_p8_roms.py --check
+py -3 tools\generate_ssi263_p9_nas_rom.py --check
+py -3 tools\generate_ssi263_p9_output_fir.py --check
+(Get-Content .\boards\a2n20v2-Enhanced\hdl\piano_multisustain.mem | Measure-Object -Line).Lines
+(Get-Content .\boards\a2n20v2-Enhanced\hdl\ssi263_voice.mem | Measure-Object -Line).Lines
+```
+
+Expected line counts: 1408 piano words, 8192 legacy voice bytes.
+
+**SynthLab sustain bank:** The genuine System 6.0.4 SynthLab
+`synthLAB.po` disk is downloaded (or provided locally using
+`--disk 'C:path	osynthLAB.po'`). The extractor verifies disk MD5
+`fa4f143dd899d0cc4c8ed9c9e41b7d37`, all seven sampled
+sustain-zone hashes, and final packed FNV32 `170BB8B3`. Generated
+ROM `hdl/piano_multisustain.mem` is 5632 bytes (1408 32-bit
+words). The source Apple PCM cannot be checked into the repository.
+The existing Enhanced Gowin `prebuild.tcl` will also
+attempt this extraction if the file is missing and always checks the
+fingerprint, but explicit generation catches network problems early.
+
+**Legacy SSI263 PCM bank:** `generate_ssi263_voice.py` creates
+`hdl/ssi263_voice.mem`, an original *approximate* bank of
+64 x 128 8-bit phonemes, used only if the legacy FPGA renderer is
+selected. The current P10 hybrid voice is NOT that wavetable: it is
+synthesized live in C by the BL616, using
+`reference/ssi263/pico-v1.0.1/ssi263.c` plus
+`ssi263dsp.c` compiled in the host firmware. P8/P9 FPGA
+ROMs are checked in; the `--check` commands verify them.
+
+**FX percussion samples:** `tools/build_mb_doc_fx_bank.py` is
+an independent test bank generator in this branch. Its
+sample-preload/one-shot integration is NOT part of this P1D feature.
+The experimental M65/M66 sampled-FX development is on separate
+branches and must not be assumed included merely because
+`build_mb_doc_fx_bank.py` exists.
+
+These assets support **Enhanced Mockingboard mode**, whereas P1D's
+native-DOC test song uploads its own four P0P8 256-byte samples from
+`SENSEI8.SYSTEM` and does not require the Apple SynthLab bank
+for its original 192-row demonstration.
+
+Proceed with new Gowin synthesis/place-and-route only after these
+checks all pass. Do not build new gateware from stale/missing .mem files.
+
 ## Rollout and rollback
 
 1. Preserve the known-good physical FPGA/MCU binaries and flash images.
