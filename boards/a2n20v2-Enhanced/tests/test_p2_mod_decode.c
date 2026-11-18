@@ -31,8 +31,11 @@ int main(void)
     fixture[1085]=0xAC;
     fixture[1086]=0x10;
     for(unsigned i=0;i<256;i++)fixture[1084+1024+i]=(uint8_t)i;
-    require(sensei_mod_decode(fixture,sizeof fixture,pcm,sizeof pcm,&mod),
-            "rejects valid 4ch MOD");
+    require(sensei_mod_decode(fixture,sizeof fixture,NULL,0,&mod),
+            "dry-run MOD sizing rejected");
+    require(mod.doc_pcm_bytes==256,"dry-run DOC sample size wrong");
+    require(sensei_mod_decode(fixture,sizeof fixture,pcm,256,&mod),
+            "exact-sized DOC PCM buffer rejected");
     require(mod.order_count==1 && mod.pattern_count==1,"order metadata");
     require(mod.pattern_offset==1084 && mod.file_sample_bytes==256,"offsets");
     require(mod.doc_pcm_bytes==256 && mod.catalog[7]==48,"sample bank/catalog");
