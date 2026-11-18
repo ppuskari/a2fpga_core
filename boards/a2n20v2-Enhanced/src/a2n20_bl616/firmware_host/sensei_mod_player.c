@@ -10,9 +10,11 @@
 #include "sensei_mod_player.h"
 #include <string.h>
 
-#if defined(__has_include)
+/* Legacy P1E compiled-in songs are never enabled in the P2 product.
+ * Explicit opt-in exists solely for historical synthetic regressions. */
+#if defined(SENSEI_ENABLE_LEGACY_TEST_SONGS) && defined(__has_include)
 #if __has_include("sensei_p1e_local_data.h")
-#include "sensei_p1e_local_data.h" /* private, ignored by Git */
+#include "sensei_p1e_local_data.h"
 #endif
 #endif
 
