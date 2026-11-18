@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - petar/sensei8-p1d-mcu-fpga-20261118
+      - petar/sensei8-p1e-real-mods-20261118
   pull_request:
   workflow_dispatch:
 jobs:
@@ -18,10 +19,10 @@ jobs:
           vvp /tmp/tb_p1d
       - name: Compile BL616 tracker C in a portable SDK-free harness
         run: |
-          gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_tracker.c
+          gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_tracker.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c
       - name: Run MCU tick engine full-song and STOP integration simulation
         run: |
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/tests/test_p1d_mcu.c -o /tmp/test_p1d_mcu
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/tests/test_p1d_mcu.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p1d_mcu
           /tmp/test_p1d_mcu
       - name: Validate integrated top-level source wiring
         run: |
