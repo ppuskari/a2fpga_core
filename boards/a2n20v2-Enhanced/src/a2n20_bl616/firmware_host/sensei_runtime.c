@@ -112,7 +112,12 @@ bool sensei_runtime_load(const char *relative_path,sensei_runtime_module_t *m)
     memset(&req,0,sizeof(req));
     req.op=FSOP_MOD_OPEN;
     req.path=relative_path;
-    if(disk_fs_request(&req)!=0 || req.size<1084u ||
+    /* .NTP v0 can legitimately be shorter than a MOD's 1084-byte
+     * header. Both formats still pass their strict content parsers. */
+    size_t suffix=strlen(relative_path);
+    bool ntp_name=(tolower((unsigned char)relative_path[suffix-3u])=='n');
+    if(disk_fs_request(&req)!=0 ||
+       req.size<(ntp_name?13u:1084u) ||
        req.size>SENSEI_RUNTIME_MAX_FILE)
         goto finish;
     m->file_size=req.size;
@@ -130,8 +135,7 @@ bool sensei_runtime_load(const char *relative_path,sensei_runtime_module_t *m)
         remaining-=req.out;
         done+=req.out;
     }
-    const size_t path_len=strlen(relative_path);
-    m->source_ntp=(uint8_t)(tolower((unsigned char)relative_path[path_len-3u])=='n');
+    m->source_ntp=(uint8_t)ntp_name;
     if(m->source_ntp) {
         /* P2V: strict v0 format, no streaming. The ORIGINAL NTP file owns
          * DOC byte values and waveform placements; do not re-convert sound. */
