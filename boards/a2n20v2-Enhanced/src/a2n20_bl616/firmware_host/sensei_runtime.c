@@ -21,6 +21,7 @@ static char g_path[SENSEI_PATH_CAP];
 static uint32_t g_consumed_seq;
 static volatile sensei_runtime_status_t g_status=SENSEI_RT_IDLE;
 static volatile uint32_t g_stop_request;
+static volatile uint8_t g_audition_mode;
 
 
 static bool mod_path_ok(const char *path)
@@ -68,6 +69,15 @@ sensei_runtime_status_t sensei_runtime_status(void)
 void sensei_runtime_set_status(sensei_runtime_status_t value)
 {
     g_status=value;
+}
+void sensei_runtime_set_audition_mode(uint8_t mode)
+{
+    if(mode<=6u)
+        __atomic_store_n(&g_audition_mode,mode,__ATOMIC_RELEASE);
+}
+uint8_t sensei_runtime_audition_mode(void)
+{
+    return __atomic_load_n(&g_audition_mode,__ATOMIC_ACQUIRE);
 }
 void sensei_runtime_request_stop(void)
 {
