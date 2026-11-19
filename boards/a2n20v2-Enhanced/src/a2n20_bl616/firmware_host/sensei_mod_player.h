@@ -35,6 +35,8 @@ typedef struct {
     sensei_mod_song_t runtime_song;
     const uint8_t *order_table;
     uint8_t runtime_mode, order_count, order_pos;
+    uint8_t audition_mask; /* bits 0..3: enabled MOD channels, P2U */
+    uint32_t note_starts[4]; /* attempted note/retrigger starts per channel */
     uint8_t jump_pending, break_pending, loop_pending;
     uint8_t jump_to, break_row, loop_to;
     uint8_t loop_start[4], loop_count[4];
