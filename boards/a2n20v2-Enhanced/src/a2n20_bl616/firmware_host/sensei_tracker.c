@@ -305,9 +305,11 @@ static bool tracker_begin_runtime(tracker_state *s,
         tracker_halt((uint16_t)(now+4u),(uint8_t)ch);
     tracker_write(REG_STATE,STATE_PLAY);
     sensei_runtime_set_status(SENSEI_RT_PLAYING);
-    osd_log(module->source_ntp ?
-            "SENSEI P2V: NTP V0 DOC PCM DIRECT" :
-            "SENSEI P2V: ORIGINAL MOD DECODE");
+    if(module->source_ntp)
+        osd_log("SENSEI P2W: NTP V%u DOC PCM DIRECT",
+                (unsigned)module->ntp_version);
+    else
+        osd_log("SENSEI P2W: ORIGINAL MOD DECODE");
     osd_log("SENSEI P2V: PLAY MASK=%02X",
             (unsigned)s->mod.audition_mask);
     if(module->source_ntp && module->ntp_nonideal)
