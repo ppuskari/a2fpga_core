@@ -2635,7 +2635,12 @@ debug_acc_start_pending_r[
 endtask: osc_start_partner
 
 task automatic osc_ntp_retarget_wait();
-    // osc_reg_ram has a clocked read. Leave partner read address stable.
+    // Keep the B read addresses selected until the WRITE state samples
+    // them. osc_reg_ram currently has an asynchronous read, and the
+    // global per-cycle default otherwise switches immediately back to A.
+    // Holding B here also tolerates a future synchronous-read variant.
+    ram_wtp_osc_r <= partner_osc_w;
+    ram_rts_osc_r <= partner_osc_w;
     osc_state_r <= OSC_NTP_RETARGET_WRITE;
 endtask: osc_ntp_retarget_wait
 
