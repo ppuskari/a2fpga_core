@@ -52,6 +52,10 @@ bool sensei_mod_init(sensei_mod_player_t *s, uint8_t song_id, uint16_t now)
     if (!s->song->rows || !s->song->catalog || !s->song->count) return false;
     s->speed=6; s->bpm=125;
     s->audition_mask=0x0Fu;
+    s->channel_pan[0]=0x10u;
+    s->channel_pan[1]=0u;
+    s->channel_pan[2]=0u;
+    s->channel_pan[3]=0x10u;
     s->next_tick_fp = ((uint32_t)(uint16_t)(now + 100u)) << 16;
     return true;
 #else
@@ -80,6 +84,10 @@ bool sensei_mod_init_runtime(sensei_mod_player_t *s,
     s->speed=6u;
     s->bpm=125u;
     s->audition_mask=0x0Fu;
+    s->channel_pan[0]=0x10u;
+    s->channel_pan[1]=0u;
+    s->channel_pan[2]=0u;
+    s->channel_pan[3]=0x10u;
     s->next_tick_fp=((uint32_t)(uint16_t)(now+100u))<<16;
     return true;
 }
@@ -133,12 +141,12 @@ static void note_start(sensei_mod_player_t *s,sensei_doc_event_t out,
     if(ch<4u)++s->note_starts[ch];
     d=s->song->catalog+(unsigned)inst*(s->runtime_mode?8u:4u);
     wtp=d[0];rts=d[1];
-    ctrl=(uint8_t)(((ch==0 || ch==3)?0x10u:0u)|d[2]);
+    ctrl=(uint8_t)(s->channel_pan[ch]|d[2]);
 
     if(s->runtime_mode) {
         const uint8_t first=(uint8_t)(ch*2u);
         const uint8_t second=(uint8_t)(first+1u);
-        const uint8_t pan=(ch==0 || ch==3)?0x10u:0u;
+        const uint8_t pan=s->channel_pan[ch];
         /* Halt BOTH voices before touching waveform metadata or pitch.
          * No old sustain may survive note replacement or retrigger. */
         out(ms,(uint8_t)(0xA0u+first),(uint8_t)(pan|1u));
