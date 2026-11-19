@@ -78,6 +78,8 @@ module tb_p2y_ntp_retarget;
                    dut.control_ram.osc_reg_r[0]===8'h17)
                     disable wait_for_retarget;
             end
+            $display("DBG P2Y A ctl=%02x WTP=%02x RTS=%02x B ctl=%02x WTP=%02x RTS=%02x",dut.control_ram.osc_reg_r[0],dut.wtp_ram.osc_reg_r[0],dut.rts_ram.osc_reg_r[0],dut.control_ram.osc_reg_r[1],dut.wtp_ram.osc_reg_r[1],dut.rts_ram.osc_reg_r[1]);
+            $display("DBG P2Y currOsc=%d state=%d haltEvent=%02x fetchAddr=%04x enable=%02x",dut.curr_osc_r,dut.osc_state_r,dut.debug_halt_event_r,wave_addr,dut.osc_en_r);
             $display("FAIL P2Y HDL: no hardware first-end retarget");
             $fatal(1);
         end
