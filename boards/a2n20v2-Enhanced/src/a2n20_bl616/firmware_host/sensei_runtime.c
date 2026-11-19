@@ -10,6 +10,7 @@
  */
 #include "sensei_runtime.h"
 #include "sensei_mod_decode.h"
+#include "sensei_ntp_import.h"
 #include "disk.h"
 #include "FreeRTOS.h"
 #include <ctype.h>
@@ -33,10 +34,12 @@ static bool mod_path_ok(const char *path)
     if (n<5 || n>=SENSEI_PATH_CAP || strstr(path,"..") ||
         path[0]=='/' || strchr(path,':') || strchr(path,'\\'))
         return false;
-    return path[n-4]=='.' &&
-        tolower((unsigned char)path[n-3])=='m' &&
-        tolower((unsigned char)path[n-2])=='o' &&
-        tolower((unsigned char)path[n-1])=='d';
+    if(path[n-4]!='.')return false;
+    const int a=tolower((unsigned char)path[n-3]);
+    const int b=tolower((unsigned char)path[n-2]);
+    const int c=tolower((unsigned char)path[n-1]);
+    return (a=='m' && b=='o' && c=='d') ||
+           (a=='n' && b=='t' && c=='p');
 }
 
 bool sensei_runtime_choose(const char *relative_path)
@@ -93,12 +96,14 @@ void sensei_runtime_free(sensei_runtime_module_t *m)
     if(!m)return;
     if(m->file)vPortFree(m->file);
     if(m->pcm)vPortFree(m->pcm);
+    if(m->ntp_patterns)vPortFree(m->ntp_patterns);
     memset(m,0,sizeof(*m));
 }
 bool sensei_runtime_load(const char *relative_path,sensei_runtime_module_t *m)
 {
     fs_req_t req;
     sensei_mod_decoded_t d;
+    sensei_ntp_decoded_t ntp_d;
     uint32_t remaining,done;
     bool ok=false;
     if (!m || !mod_path_ok(relative_path))return false;
@@ -125,23 +130,46 @@ bool sensei_runtime_load(const char *relative_path,sensei_runtime_module_t *m)
         remaining-=req.out;
         done+=req.out;
     }
-    // First parse without PCM writes to calculate exact aligned DOC
-    // instrument memory. Do not reserve 48 KiB for every short song.
-    if(!sensei_mod_decode(m->file,m->file_size,NULL,0,&d) ||
-       !d.doc_pcm_bytes || d.doc_pcm_bytes>SENSEI_RUNTIME_MAX_SAMPLE_BANK)
-        goto finish;
-    m->pcm=(uint8_t*)pvPortMalloc(d.doc_pcm_bytes);
-    if(!m->pcm)goto finish;
-    if(!sensei_mod_decode(m->file,m->file_size,
-                          m->pcm,d.doc_pcm_bytes,&d))
-        goto finish;
-    memcpy(m->catalog,d.catalog,sizeof(m->catalog));
-    memcpy(m->order_table,d.orders,sizeof(m->order_table));
-    m->order_count=d.order_count;
-    m->pcm_length=d.doc_pcm_bytes;
-    m->song.rows=m->file+d.pattern_offset; /* raw patterns, not flattened */
+    const size_t path_len=strlen(relative_path);
+    m->source_ntp=(uint8_t)(tolower((unsigned char)relative_path[path_len-3u])=='n');
+    if(m->source_ntp) {
+        /* P2V: strict v0 format, no streaming. The ORIGINAL NTP file owns
+         * DOC byte values and waveform placements; do not re-convert sound. */
+        if(!sensei_ntp_import(m->file,m->file_size,NULL,0,NULL,0,&ntp_d) ||
+           !ntp_d.pcm_bytes || ntp_d.pcm_bytes>65536u ||
+           !ntp_d.pattern_bytes)goto finish;
+        m->pcm=(uint8_t*)pvPortMalloc(ntp_d.pcm_bytes);
+        if(!m->pcm)goto finish;
+        m->ntp_patterns=(uint8_t*)pvPortMalloc(ntp_d.pattern_bytes);
+        if(!m->ntp_patterns)goto finish;
+        if(!sensei_ntp_import(m->file,m->file_size,m->pcm,ntp_d.pcm_bytes,
+                             m->ntp_patterns,ntp_d.pattern_bytes,&ntp_d))
+            goto finish;
+        memcpy(m->catalog,ntp_d.catalog,sizeof(m->catalog));
+        memcpy(m->order_table,ntp_d.orders,sizeof(m->order_table));
+        memcpy(m->channel_pan,ntp_d.channel_pan,sizeof(m->channel_pan));
+        m->order_count=ntp_d.order_count;
+        m->pcm_length=ntp_d.pcm_bytes;
+        m->ntp_nonideal=ntp_d.nonideal_pairs;
+        m->song.rows=m->ntp_patterns;
+    } else {
+        // Ordinary MOD: preserve the tested P2U decoder path unchanged.
+        if(!sensei_mod_decode(m->file,m->file_size,NULL,0,&d) ||
+           !d.doc_pcm_bytes || d.doc_pcm_bytes>SENSEI_RUNTIME_MAX_SAMPLE_BANK)
+            goto finish;
+        m->pcm=(uint8_t*)pvPortMalloc(d.doc_pcm_bytes);
+        if(!m->pcm)goto finish;
+        if(!sensei_mod_decode(m->file,m->file_size,
+                              m->pcm,d.doc_pcm_bytes,&d))
+            goto finish;
+        memcpy(m->catalog,d.catalog,sizeof(m->catalog));
+        memcpy(m->order_table,d.orders,sizeof(m->order_table));
+        m->order_count=d.order_count;
+        m->pcm_length=d.doc_pcm_bytes;
+        m->song.rows=m->file+d.pattern_offset;
+    }
     m->song.catalog=m->catalog;
-    m->song.count=0; /* runtime mode does NOT use flattened row count */
+    m->song.count=0;
     ok=true;
 finish:
     memset(&req,0,sizeof(req));
