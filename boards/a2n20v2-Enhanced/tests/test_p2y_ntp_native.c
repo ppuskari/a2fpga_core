@@ -131,5 +131,20 @@ int main(void)
     tick(1); /* F00 */
     require(sensei_ntp_done(&s),"NTP F00 stops without hanging");
     printf("PASS P2Y: E9, EC, ED, Fxx, Dxx control and song completion\n");
+
+    /* Original NTP's single pattern-loop cursor is used in Dead Waltz.
+     * E60 marks the start; E61 returns once, then progresses to row 2. */
+    memset(patterns,0,sizeof patterns);
+    row(0,0,0,0,0,14,0x60u);
+    row(0,1,0,0,0,14,0x61u);
+    row(0,2,0,0,0,15,0x00u);
+    require(sensei_ntp_init(&s,patterns,1,orders,1,catalog,pan,map,irq,100),
+            "init Dead Waltz E6 loop score");
+    tick(6);require(s.row==1u,"E60 set loop start");
+    tick(6);require(s.row==0u,"E61 repeat once");
+    tick(6);require(s.row==1u,"E60 loop restart");
+    tick(6);require(s.row==2u,"E61 completion must advance");
+    tick(1);require(sensei_ntp_done(&s),"F00 after finite E6 loop");
+    printf("PASS P2Y: native NTP E60/E61 finite pattern loop and song stop\n");
     return 0;
 }
