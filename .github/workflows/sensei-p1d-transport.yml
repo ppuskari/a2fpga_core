@@ -13,6 +13,7 @@ on:
       - petar/sensei8-p2v-ntp-sample-bypass-20261119
       - petar/sensei8-p2w-ntp-v2-import-20261119
       - petar/sensei8-p2x-ntp-stereo-parity-20261119
+      - petar/sensei8-p2y-native-ntp-fpga-retarget-20261119
   pull_request:
   workflow_dispatch:
 jobs:
@@ -30,9 +31,13 @@ jobs:
         run: |
           iverilog -g2012 -s tb_sensei_p2_pcm -o /tmp/tb_pcm boards/a2n20v2-Enhanced/hdl/sensei_tracker_bridge.sv boards/a2n20v2-Enhanced/tests/tb_sensei_p2_pcm.sv
           vvp /tmp/tb_pcm
+      - name: Simulate native NTP DOC first-waveform-end assist and SWAP safety
+        run: |
+          iverilog -g2012 -s tb_p2y_ntp_retarget -o /tmp/tb_p2y boards/a2n20v2-Enhanced/hdl/sensei_tracker_bridge.sv boards/a2n20v2-Enhanced/tests/tb_p2y_ntp_retarget.sv hdl/sound/doc5503.sv
+          vvp /tmp/tb_p2y
       - name: Compile BL616 tracker C in a portable SDK-free harness
         run: |
-          gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_tracker.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_runtime.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_decode.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_ntp_import.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_pcm_upload.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_event_queue.c
+          gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_tracker.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_runtime.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_decode.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_ntp_import.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_ntp_native.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_pcm_upload.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_event_queue.c
       - name: Run MCU tick engine full-song and STOP integration simulation
         run: |
           gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/tests/test_p1d_mcu.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_event_queue.c -o /tmp/test_p1d_mcu
@@ -59,6 +64,10 @@ jobs:
         run: |
           gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2w_ntp_v2.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_ntp_import.c -o /tmp/test_p2w_ntp
           /tmp/test_p2w_ntp
+      - name: Verify native NinjaTrackerPlus BL616 raw-note and effect engine
+        run: |
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2y_ntp_native.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_ntp_native.c -o /tmp/test_p2y_native
+          /tmp/test_p2y_native
       - name: Execute ProTracker raw-order runtime tick regression
         run: |
           gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2_live_patterns.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p2_live
