@@ -1949,8 +1949,10 @@ end
 task automatic cycle_osc();
     automatic osc_state_e osc_state_w;
 
-    osc_state_w =
-        cycle_start_r ? OSC_IDLE : osc_state_r;
+    // Same mux, written as statements so Icarus does not demand an
+    // unsupported enum cast for the conditional expression.
+    if(cycle_start_r) osc_state_w = OSC_IDLE;
+    else osc_state_w = osc_state_r;
 
     case (osc_state_w)
         OSC_IDLE:
