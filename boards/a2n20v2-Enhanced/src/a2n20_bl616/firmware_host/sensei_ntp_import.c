@@ -1,5 +1,6 @@
 /*
- * NinjaTrackerPlus v0 reader, independently implemented from the documented
+ * NinjaTrackerPlus v0/v2 DOC-ready reader, independently implemented
+ * from the documented
  * format, the original Ninjaforce PHP converter and 65816 reference player.
  *
  * Source: https://github.com/antoinevignau/source/tree/master/ntpsources
@@ -14,11 +15,12 @@
 /* A classic 31-instrument MOD can become at most 63 NTP instrument
  * records (31 heads + 31 loops + optional silent timer). Keep scratch
  * under 1 KB; the BL616 sensei worker has a 3072-byte stack. */
-enum { NTP_HEADER=9, NTP_TRACKS=4, NTP_INST_SIZE=7, NTP_MAX_INST=63 };
+enum { NTP_HEADER=9, NTP_TRACKS=4, NTP_V0_INST_SIZE=7,
+       NTP_V2_INST_SIZE=15, NTP_MAX_INST=63 };
 enum { NTP_NOTE_ONESHOT=0, NTP_NOTE_LOOP=1, NTP_NOTE_HEADER=2,
        NTP_NOTE_SUSTAIN=3 };
 typedef struct {
-    uint16_t len;
+    uint32_t len; /* v2 stores 24-bit lengths; reject oversized data safely */
     uint8_t kind, volume, finetune, page, size;
 } ntp_inst_t;
 static const uint16_t period_by_note[72]={
@@ -55,39 +57,79 @@ bool sensei_ntp_import(const uint8_t *src,size_t len,
     ntp_inst_t inst[NTP_MAX_INST+1];
     uint8_t map[NTP_MAX_INST+1];
     uint8_t occupancy[256];
-    size_t pos=NTP_HEADER+NTP_TRACKS, patterns_start, samples_start;
+    size_t pos=NTP_HEADER, patterns_start, samples_start;
     unsigned ninst,npat,norder,logical=0,nonideal=0;
+    uint8_t version;
     size_t max_end=0;
     if(!src || !out || len<NTP_HEADER+NTP_TRACKS ||
-       memcmp(src,"nfc!",4)!=0 || src[4]!=0u ||
+       memcmp(src,"nfc!",4)!=0 ||
+       (src[4]!=0u && src[4]!=2u) ||
        src[5]!=NTP_TRACKS)return false;
+    version=src[4];
     ninst=src[6];npat=src[7];norder=src[8];
     if(!ninst || ninst>NTP_MAX_INST || !npat || !norder || norder>128u ||
        (pcm==NULL)!=(pat==NULL))return false;
-    /* A v0 NTP instrument header is seven bytes. It stores DOC RAM pages,
-     * actual DOC RTS register and byte length (low byte FIRST). */
-    if((size_t)ninst*NTP_INST_SIZE>len-pos)return false;
+    /* Both versions carry already converted DOC waveforms. The 2022 v2
+     * layout adds a title, track metadata, 24-bit lengths, repeat fields and
+     * length-prefixed instrument names. Streaming remains out of scope. */
     memset(inst,0,sizeof(inst));
     memset(map,0,sizeof(map));
     memset(occupancy,0,sizeof(occupancy));
     memset(out,0,sizeof(*out));
+    out->ntp_version=version;
     out->raw_instruments=(uint8_t)ninst;
     out->order_count=(uint8_t)norder;
     out->pattern_count=(uint8_t)npat;
+    if(version==2u) {
+        size_t name_len;
+        if(pos>=len)return false;
+        name_len=src[pos++];
+        if(name_len>len-pos)return false;
+        pos+=name_len; /* song name is metadata, not sound RAM */
+    }
+    if((size_t)NTP_TRACKS*(version==2u?3u:1u)>len-pos)return false;
     for(unsigned ch=0;ch<NTP_TRACKS;ch++) {
-        const uint8_t ntp_output=src[NTP_HEADER+ch];
+        const uint8_t ntp_output=src[pos];
         if(ntp_output>=8u)return false;
+        if(version==2u) {
+            /* v2: output channel, 512-byte stream-buffer DOC page,
+             * original oscillators (bit 7 denotes a two-oscillator track).
+             * We remap to four P2U voices, never reuse original osc IDs. */
+            if(src[pos+1u]!=0u || (src[pos+2u]&0x7fu)>=31u)
+                return false;
+            pos+=3u;
+        } else pos++;
         /* Original DOC mixer: channel assignment bit0=LEFT, clear=RIGHT;
          * NTP 0,2,4,6=left and 1,3,5,7=right. Honor actual NTP metadata. */
         out->channel_pan[ch]=(ntp_output&1u)?0u:0x10u;
     }
+    if((size_t)ninst*(version==2u?NTP_V2_INST_SIZE:NTP_V0_INST_SIZE)
+       >len-pos)return false;
     for(unsigned i=1;i<=ninst;i++) {
         ntp_inst_t *q=&inst[i];
+        size_t record_bytes=version==2u?NTP_V2_INST_SIZE:NTP_V0_INST_SIZE;
+        if(record_bytes>len-pos)return false;
         q->kind=src[pos];
-        q->len=(uint16_t)((unsigned)src[pos+1]|
-                          ((unsigned)src[pos+2]<<8));
-        q->volume=src[pos+3];q->finetune=src[pos+4];
-        q->page=src[pos+5];q->size=src[pos+6];
+        if(version==2u) {
+            size_t name_len=src[pos+14u];
+            q->len=(uint32_t)src[pos+1u]|
+                   ((uint32_t)src[pos+2u]<<8)|
+                   ((uint32_t)src[pos+3u]<<16);
+            /* repeat start/length at offsets 4..9 refer to the original
+             * sample; DOC-ready split headers already contain the correct
+             * attack and loop bytes in their own sample records. */
+            q->volume=src[pos+10u];q->finetune=src[pos+11u];
+            q->page=src[pos+12u];q->size=src[pos+13u];
+            pos+=record_bytes;
+            if(name_len>len-pos)return false;
+            pos+=name_len;
+        } else {
+            q->len=(uint32_t)src[pos+1u]|
+                   ((uint32_t)src[pos+2u]<<8);
+            q->volume=src[pos+3u];q->finetune=src[pos+4u];
+            q->page=src[pos+5u];q->size=src[pos+6u];
+            pos+=record_bytes;
+        }
         if(q->kind>7u || q->volume>64u ||
            q->finetune!=0u || !is_legal_rts(q->size) || !q->len)
             return false;
@@ -95,9 +137,9 @@ bool sensei_ntp_import(const uint8_t *src,size_t len,
            (i==1u || (inst[i-1].kind&3u)!=NTP_NOTE_HEADER))
             return false;
         if((q->kind&3u)==NTP_NOTE_HEADER &&
-           (i>=ninst || (src[pos+NTP_INST_SIZE]&3u)!=NTP_NOTE_SUSTAIN))
+           (i>=ninst || pos>=len ||
+            (src[pos]&3u)!=NTP_NOTE_SUSTAIN))
             return false;
-        pos+=NTP_INST_SIZE;
     }
     if((size_t)norder>len-pos)return false;
     memcpy(out->orders,src+pos,norder);
@@ -128,7 +170,7 @@ bool sensei_ntp_import(const uint8_t *src,size_t len,
         pos+=q->len;
         if(end>max_end)max_end=end;
     }
-    if(pos!=len)return false; /* v0 has no appended song/name/stream tables */
+    if(pos!=len)return false; /* reject unsupported trailers or stray PCM */
     out->pcm_bytes=(uint32_t)((max_end+3u)&~(size_t)3u);
     out->pattern_bytes=(uint32_t)pat_bytes;
     if(out->pcm_bytes>SENSEI_NTP_MAX_WAVE_BYTES ||
