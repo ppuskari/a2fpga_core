@@ -65,8 +65,8 @@ int main(void)
             decoded.pcm_bytes==1032 &&
             decoded.logical_instruments==2u &&
             decoded.nonideal_pairs==0u,"incorrect size and pair count");
-    require(decoded.channel_pan[0]==0u && decoded.channel_pan[1]==0x10u &&
-            decoded.channel_pan[2]==0x10u && decoded.channel_pan[3]==0u,
+    require(decoded.channel_pan[0]==0x10u && decoded.channel_pan[1]==0u &&
+            decoded.channel_pan[2]==0u && decoded.channel_pan[3]==0x10u,
             "explicit NTP stereo assignments");
     require(decoded.catalog[8+0]==0u &&
             decoded.catalog[8+1]==0u &&
@@ -109,7 +109,7 @@ int main(void)
             "could not initialize P2U tracker from NTP patterns");
     memcpy(player.channel_pan,decoded.channel_pan,4);
     require(sensei_mod_tick(&player,send_event),"real tick0 failed");
-    require(events==26u && starts==1u && first_ctrl==6u,
+    require(events==26u && starts==1u && first_ctrl==0x16u,
             "NTP two DOC note starts not executed with expected channel");
     puts("PASS P2V: original v0 DOC PCM is byte-exact, no wave recoding");
     puts("PASS P2V: NTP attack+ideal-sustain and one-shot metadata and panning");

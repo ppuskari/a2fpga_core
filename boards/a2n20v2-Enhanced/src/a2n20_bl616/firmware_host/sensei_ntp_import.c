@@ -99,9 +99,12 @@ bool sensei_ntp_import(const uint8_t *src,size_t len,
                 return false;
             pos+=3u;
         } else pos++;
-        /* Original DOC mixer: channel assignment bit0=LEFT, clear=RIGHT;
-         * NTP 0,2,4,6=left and 1,3,5,7=right. Honor actual NTP metadata. */
-        out->channel_pan[ch]=(ntp_output&1u)?0u:0x10u;
+        /* The original NinjaTrackerPlus 65816 copies output channel bits
+         * directly into DOC CTRL[6:4] (ntp_output << 4). Output 0 is
+         * left, output 1 is right. Our HDMI path is stereo only: retain
+         * that bit exactly while folding channels 2..7 by parity.
+         * P2W mistakenly INVERTED the bit, reversing the NTP stereo image. */
+        out->channel_pan[ch]=(uint8_t)((ntp_output&1u)<<4);
     }
     if((size_t)ninst*(version==2u?NTP_V2_INST_SIZE:NTP_V0_INST_SIZE)
        >len-pos)return false;

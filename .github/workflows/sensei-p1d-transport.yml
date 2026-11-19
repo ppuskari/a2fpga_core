@@ -12,6 +12,7 @@ on:
       - petar/sensei8-p2u-right-channel-audit-20261119
       - petar/sensei8-p2v-ntp-sample-bypass-20261119
       - petar/sensei8-p2w-ntp-v2-import-20261119
+      - petar/sensei8-p2x-ntp-stereo-parity-20261119
   pull_request:
   workflow_dispatch:
 jobs:

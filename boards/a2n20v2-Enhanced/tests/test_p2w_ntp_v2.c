@@ -57,10 +57,18 @@ int main(void)
             "NTP v2 header fields");
     require(decoded.pattern_bytes==1024u && decoded.pcm_bytes==256u,
             "NTP v2 offsets and lengths");
-    require(decoded.channel_pan[0]==0u &&
-            decoded.channel_pan[1]==0x10u &&
-            decoded.channel_pan[2]==0x10u &&
-            decoded.channel_pan[3]==0u, "v2 three-byte track pan");
+    require(decoded.channel_pan[0]==0x10u &&
+            decoded.channel_pan[1]==0u &&
+            decoded.channel_pan[2]==0u &&
+            decoded.channel_pan[3]==0x10u, "v2 original NTP stereo parity");
+    /* Non-front NTP outputs still downmix by documented parity. */
+    ntp[TRACK_OFF]=2u;ntp[TRACK_OFF+3u]=3u;
+    require(sensei_ntp_import(ntp,sizeof ntp,NULL,0,NULL,0,&decoded) &&
+            decoded.channel_pan[0]==0u && decoded.channel_pan[1]==0x10u,
+            "v2 surround left/right stereo parity");
+    ntp[TRACK_OFF]=1u;ntp[TRACK_OFF+3u]=0u;
+    require(sensei_ntp_import(ntp,sizeof ntp,NULL,0,NULL,0,&decoded),
+            "v2 restore original stereo fixture");
     require(decoded.catalog[8]==0u && decoded.catalog[9]==0u &&
             decoded.catalog[10]==2u && decoded.catalog[11]==64u,
             "original DOC page/RTS/mode/volume");
