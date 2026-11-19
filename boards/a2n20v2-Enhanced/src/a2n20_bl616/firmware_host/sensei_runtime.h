@@ -26,7 +26,8 @@ typedef struct {
     uint32_t pcm_length;
     uint8_t *ntp_patterns;   /* NTP score translated to P2U pattern encoding */
     uint8_t channel_pan[4];  /* NTP's 0..7 channels -> native DOC L/R */
-    uint8_t source_ntp;      /* 0=MOD, 1=real NTP v0 */
+    uint8_t source_ntp;      /* 0=MOD, 1=NTP v0/v2 DOC-ready samples */
+    uint8_t ntp_version;     /* actual imported NTP version */
     uint8_t ntp_nonideal;    /* loops needing NTP-native IRQ replay */
     uint8_t catalog[32*8];   /* P2R attack/sustain WTP/RTS/CTRL/VOL/flags */
     uint8_t order_table[128];

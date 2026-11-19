@@ -11,6 +11,7 @@ on:
       - petar/sensei8-p2t-panning-pitch-20261118
       - petar/sensei8-p2u-right-channel-audit-20261119
       - petar/sensei8-p2v-ntp-sample-bypass-20261119
+      - petar/sensei8-p2w-ntp-v2-import-20261119
   pull_request:
   workflow_dispatch:
 jobs:
@@ -53,6 +54,10 @@ jobs:
         run: |
           gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2v_ntp_import.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_ntp_import.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p2v_ntp
           /tmp/test_p2v_ntp
+      - name: Validate modern NinjaTrackerPlus v2 DOC-ready import
+        run: |
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2w_ntp_v2.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_ntp_import.c -o /tmp/test_p2w_ntp
+          /tmp/test_p2w_ntp
       - name: Execute ProTracker raw-order runtime tick regression
         run: |
           gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2_live_patterns.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p2_live

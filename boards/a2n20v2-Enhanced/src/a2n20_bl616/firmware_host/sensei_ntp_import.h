@@ -1,7 +1,7 @@
 #ifndef SENSEI_NTP_IMPORT_H
 #define SENSEI_NTP_IMPORT_H
 /*
- * P2V NinjaTrackerPlus v0 reader.
+ * P2W NinjaTrackerPlus v0 and v2 reader (v1 intentionally unsupported).
  *
  * Format from Jesse Blue/NinjaForce's original file_format.txt and
  * ntpconverter_lib.php; no upstream source is bundled. The original NTP
@@ -24,11 +24,12 @@ typedef struct {
     uint8_t logical_instruments;
     uint8_t nonideal_pairs;
     uint8_t raw_instruments;
+    uint8_t ntp_version;
 } sensei_ntp_decoded_t;
 /*
  * Two-pass API: first call with pcm==NULL,patterns==NULL for lengths.
  * Second call with both buffers provided. Audio bytes are not transformed.
- * Strictly version 0, four tracks, no streaming, max 31 source instruments;
+ * Versions 0 and 2, four tracks, no streaming, max 31 logical instruments;
  * reject unsupported variants before uploading sound RAM.
  */
 bool sensei_ntp_import(const uint8_t *ntp,size_t len,
