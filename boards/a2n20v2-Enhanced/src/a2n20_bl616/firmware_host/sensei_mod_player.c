@@ -130,12 +130,12 @@ static void note_start(const sensei_mod_player_t *s,sensei_doc_event_t out,
     if(!inst || inst>=32 || !period)return;
     d=s->song->catalog+(unsigned)inst*(s->runtime_mode?8u:4u);
     wtp=d[0];rts=d[1];
-    ctrl=(uint8_t)(((ch==1 || ch==2)?0x10u:0u)|d[2]);
+    ctrl=(uint8_t)(((ch==0 || ch==3)?0x10u:0u)|d[2]);
 
     if(s->runtime_mode) {
         const uint8_t first=(uint8_t)(ch*2u);
         const uint8_t second=(uint8_t)(first+1u);
-        const uint8_t pan=(ch==1 || ch==2)?0x10u:0u;
+        const uint8_t pan=(ch==0 || ch==3)?0x10u:0u;
         /* Halt BOTH voices before touching waveform metadata or pitch.
          * No old sustain may survive note replacement or retrigger. */
         out(ms,(uint8_t)(0xA0u+first),(uint8_t)(pan|1u));
@@ -215,6 +215,13 @@ static void process_tick0(sensei_mod_player_t *s,sensei_doc_event_t out,
         sensei_mod_chan_t *c=&s->ch[ch];
         bool delay=(fx==14 && (arg>>4)==13 && (arg&15)!=0);
         uint8_t sub=arg>>4;
+        /* Hardware DOC retains the last effective FC even after the MOD
+         * effect is gone. ProTracker restores base pitch on row tick zero.
+         * In particular 0xy tick 5 is often a raised semitone, which
+         * P2S previously sustained into the next row indefinitely. */
+        const bool previous_was_pitch_mod =
+            ((c->fx==0u && c->param!=0u) ||
+             c->fx==4u || c->fx==6u);
         c->fx=fx;c->param=arg;
         c->delayed_tick=0;
         if (inst) {
@@ -238,6 +245,9 @@ static void process_tick0(sensei_mod_player_t *s,sensei_doc_event_t out,
             c->delayed_period=period;
             c->delayed_inst=c->instrument;
         }
+        if(s->runtime_mode && previous_was_pitch_mod && c->period &&
+           (period==0u || fx==3u || fx==5u))
+            pitch_write(s,out,ms,(uint8_t)ch,fc_from_period(c->period));
         if (s->runtime_mode) {
             if (fx==11) { // Bxx: jump to order, end if beyond song
                 s->jump_pending=1u;
