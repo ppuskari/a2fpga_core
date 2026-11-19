@@ -47,6 +47,9 @@ For a type-2 (attack) followed by type-3 (sustain) with a nonideal sustain:
    The same two sustain waveforms can alternate indefinitely.
 5. Normal MOD/Mockingboard SWAP never uses this assist. It is gated on
    tracker ownership **AND** the special `IRQ|SWAP` request signature.
+6. The FPGA reports native-assist capability `0x59` at SPI6 register `0x2B`;
+   the MCU refuses NTP playback without it, while ordinary MOD playback
+   still accepts the preserved P2 PCM-DMA capability `0x42` at `0x26`.
 
 Important: this is native FPGA assistance, **not yet** full guest-visible
 DOC `$E0` interrupt-register emulation. An authentic IIgs 65816 interrupt
