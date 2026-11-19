@@ -25,6 +25,9 @@ typedef struct {
     uint8_t nonideal_pairs;
     uint8_t raw_instruments;
     uint8_t ntp_version;
+    uint32_t pattern_offset; /* raw original NTP records in input file */
+    uint8_t instrument_map[64]; /* original NTP record -> DOC catalog index */
+    uint8_t irq_instruments[32]; /* type-2/nonideal-sustain must retarget */
 } sensei_ntp_decoded_t;
 /*
  * Two-pass API: first call with pcm==NULL,patterns==NULL for lengths.
