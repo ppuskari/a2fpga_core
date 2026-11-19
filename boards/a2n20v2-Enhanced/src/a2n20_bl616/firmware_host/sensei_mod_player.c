@@ -51,6 +51,7 @@ bool sensei_mod_init(sensei_mod_player_t *s, uint8_t song_id, uint16_t now)
     s->song = &sensei_local_songs[song_id-1];
     if (!s->song->rows || !s->song->catalog || !s->song->count) return false;
     s->speed=6; s->bpm=125;
+    s->audition_mask=0x0Fu;
     s->next_tick_fp = ((uint32_t)(uint16_t)(now + 100u)) << 16;
     return true;
 #else
@@ -78,6 +79,7 @@ bool sensei_mod_init_runtime(sensei_mod_player_t *s,
     s->order_count=order_count;
     s->speed=6u;
     s->bpm=125u;
+    s->audition_mask=0x0Fu;
     s->next_tick_fp=((uint32_t)(uint16_t)(now+100u))<<16;
     return true;
 }
@@ -122,12 +124,13 @@ static void volume_write(const sensei_mod_player_t *s,sensei_doc_event_t out,
         out(ms,(uint8_t)(0x40u+ch),value);
     }
 }
-static void note_start(const sensei_mod_player_t *s,sensei_doc_event_t out,
+static void note_start(sensei_mod_player_t *s,sensei_doc_event_t out,
                        uint16_t ms,uint8_t ch,uint16_t period,uint8_t inst,uint8_t volume)
 {
     uint8_t ctrl,wtp,rts;
     const uint8_t *d;
     if(!inst || inst>=32 || !period)return;
+    if(ch<4u)++s->note_starts[ch];
     d=s->song->catalog+(unsigned)inst*(s->runtime_mode?8u:4u);
     wtp=d[0];rts=d[1];
     ctrl=(uint8_t)(((ch==0 || ch==3)?0x10u:0u)|d[2]);
@@ -190,12 +193,19 @@ static uint16_t vibrato_fc(sensei_mod_chan_t *c)
     int32_t wave=sinus[phase & 31];
     if (phase & 32u) wave=-wave;
     /* ProTracker vibrato depth is measured in small period steps. */
+    /* PT 2.x sine table is 0..255. Vibrato depth is 1/128 of
+     * that table, and speed advances the 64-step phase by 4*speed
+     * per tick. P2T accidentally used half depth and quarter speed. */
     int32_t altered=(int32_t)c->period +
-        ((wave * (int32_t)c->vib_depth + 128) >> 8);
+        ((wave * (int32_t)c->vib_depth) >> 7);
     if (altered < 1) altered=1;
     if (altered > 4095) altered=4095;
-    c->vib_phase=(uint8_t)((c->vib_phase+c->vib_speed)&63);
+    c->vib_phase=(uint8_t)((c->vib_phase+4u*c->vib_speed)&63);
     return fc_from_period((uint16_t)altered);
+}
+static void audition_silent(uint16_t when,uint8_t reg,uint8_t data)
+{
+    (void)when;(void)reg;(void)data;
 }
 static void process_tick0(sensei_mod_player_t *s,sensei_doc_event_t out,
                           uint16_t ms)
@@ -213,6 +223,12 @@ static void process_tick0(sensei_mod_player_t *s,sensei_doc_event_t out,
         uint16_t period=(uint16_t)(((ev[0]&0x0Fu)<<8)|ev[1]);
         uint8_t fx=ev[2]&15, arg=ev[3];
         sensei_mod_chan_t *c=&s->ch[ch];
+        /* A mute is applied to the emitted DOC register stream, not the
+         * ProTracker interpreter: all four channels still evolve exactly
+         * as in the original MOD, including shared Bxx/Fxx row control. */
+        sensei_doc_event_t channel_out =
+            (!s->runtime_mode || (s->audition_mask & (1u<<ch))) ?
+            out : audition_silent;
         bool delay=(fx==14 && (arg>>4)==13 && (arg&15)!=0);
         uint8_t sub=arg>>4;
         /* Hardware DOC retains the last effective FC even after the MOD
@@ -239,7 +255,7 @@ static void process_tick0(sensei_mod_player_t *s,sensei_doc_event_t out,
         } else if(period && !delay) {
             c->period=period;
             c->vib_phase=0;
-            note_start(s,out,ms,(uint8_t)ch,period,c->instrument,c->volume);
+            note_start(s,channel_out,ms,(uint8_t)ch,period,c->instrument,c->volume);
         } else if(period && delay) {
             c->delayed_tick=arg&15u;
             c->delayed_period=period;
@@ -247,7 +263,7 @@ static void process_tick0(sensei_mod_player_t *s,sensei_doc_event_t out,
         }
         if(s->runtime_mode && previous_was_pitch_mod && c->period &&
            (period==0u || fx==3u || fx==5u))
-            pitch_write(s,out,ms,(uint8_t)ch,fc_from_period(c->period));
+            pitch_write(s,channel_out,ms,(uint8_t)ch,fc_from_period(c->period));
         if (s->runtime_mode) {
             if (fx==11) { // Bxx: jump to order, end if beyond song
                 s->jump_pending=1u;
@@ -278,7 +294,7 @@ static void process_tick0(sensei_mod_player_t *s,sensei_doc_event_t out,
         }
         if (fx==12) {
             c->volume=clamp64(arg);
-            volume_write(s,out,ms,(uint8_t)ch,c->volume);
+            volume_write(s,channel_out,ms,(uint8_t)ch,c->volume);
         }
         if (fx==4) {
             if(arg>>4) c->vib_speed=arg>>4;
@@ -290,7 +306,7 @@ static void process_tick0(sensei_mod_player_t *s,sensei_doc_event_t out,
         }
         if (fx==14 && sub==12 && (arg&15)==0) {
             c->volume=0;
-            volume_write(s,out,ms,(uint8_t)ch,0);
+            volume_write(s,channel_out,ms,(uint8_t)ch,0);
         }
     }
 }
@@ -301,6 +317,9 @@ static void process_tick_nonzero(sensei_mod_player_t *s,sensei_doc_event_t out,
     unsigned ch;
     for(ch=0;ch<4;ch++) {
         sensei_mod_chan_t *c=&s->ch[ch];
+        sensei_doc_event_t channel_out =
+            (!s->runtime_mode || (s->audition_mask & (1u<<ch))) ?
+            out : audition_silent;
         uint8_t fx=c->fx,arg=c->param;
         uint16_t fc=0;
         bool update_pitch=false,update_volume=false;
@@ -334,17 +353,17 @@ static void process_tick_nonzero(sensei_mod_player_t *s,sensei_doc_event_t out,
         if (fx==14) {
             if ((arg>>4)==9 && (arg&15) && s->tick%(arg&15u)==0
                 && c->instrument && c->period) {
-                note_start(s,out,ms,(uint8_t)ch,c->period,c->instrument,c->volume);
+                note_start(s,channel_out,ms,(uint8_t)ch,c->period,c->instrument,c->volume);
             } else if ((arg>>4)==12 && (arg&15)==s->tick) {
                 c->volume=0; update_volume=true;
             } else if ((arg>>4)==13 && c->delayed_tick==s->tick) {
                 c->period=c->delayed_period;
-                note_start(s,out,ms,(uint8_t)ch,c->period,c->delayed_inst,c->volume);
+                note_start(s,channel_out,ms,(uint8_t)ch,c->period,c->delayed_inst,c->volume);
                 c->delayed_tick=0;
             }
         }
-        if (update_pitch) pitch_write(s,out,ms,(uint8_t)ch,fc);
-        if (update_volume) volume_write(s,out,ms,(uint8_t)ch,c->volume);
+        if (update_pitch) pitch_write(s,channel_out,ms,(uint8_t)ch,fc);
+        if (update_volume) volume_write(s,channel_out,ms,(uint8_t)ch,c->volume);
     }
 }
 
