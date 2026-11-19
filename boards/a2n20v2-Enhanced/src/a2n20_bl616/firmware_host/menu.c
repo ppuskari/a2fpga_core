@@ -1165,8 +1165,8 @@ static const char *const k_mod_exts[] = {"mod","ntp",NULL};
 /* Audible track isolation keeps the original MOD running in all 4 channels.
  * Only the DOC register writes for unselected channels are suppressed. */
 static const char *const k_mod_audition_names[7] = {
-    "ALL 4", "CH0 LEFT", "CH1 RIGHT", "CH2 RIGHT",
-    "CH3 LEFT", "RIGHT 1+2", "LEFT 0+3"
+    "ALL 4", "CH0 ONLY", "CH1 ONLY", "CH2 ONLY",
+    "CH3 ONLY", "PAIR 1+2", "PAIR 0+3"
 };
 static void mod_audition_change(int id,int dir)
 {
@@ -1225,7 +1225,7 @@ static void mod_library_build(void)
     mi_add(MI_INFO,"NTP V0: 4CH, NO STREAMING","");
     mi_add(MI_INFO,"DOC PCM UPLOAD + EFFECTS ON MCU","");
     mi_add(MI_INFO,"NTP: SOURCE DOC SAMPLES, NO RECODE","");
-    mi_add(MI_INFO,"LEFT/RIGHT CHOICE BEFORE SONG START","");
+    mi_add(MI_INFO,"NTP USES ITS STORED L/R ROUTING","");
 }
 static const menu_screen_t SCR_MOD_LIBRARY={"MOD LIBRARY",mod_library_build};
 
