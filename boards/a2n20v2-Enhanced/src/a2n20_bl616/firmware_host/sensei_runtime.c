@@ -21,7 +21,8 @@ static char g_path[SENSEI_PATH_CAP];
 static uint32_t g_consumed_seq;
 static volatile sensei_runtime_status_t g_status=SENSEI_RT_IDLE;
 static volatile uint32_t g_stop_request;
-static volatile uint8_t g_audition_mode;
+/* RV32 native atomic word; avoid 8-bit libatomic call from RISC-V GCC. */
+static volatile uint32_t g_audition_mode;
 
 
 static bool mod_path_ok(const char *path)
