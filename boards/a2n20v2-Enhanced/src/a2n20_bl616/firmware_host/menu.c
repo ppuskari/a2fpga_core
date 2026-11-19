@@ -1222,9 +1222,9 @@ static void mod_library_build(void)
     m=mi_add(MI_ACTION,"STOP PLAYBACK","");
     m->action=mod_library_stop;
     mi_add(MI_INFO,"","");
-    mi_add(MI_INFO,"NTP V0: 4CH, NO STREAMING","");
-    mi_add(MI_INFO,"DOC PCM UPLOAD + EFFECTS ON MCU","");
-    mi_add(MI_INFO,"NTP: SOURCE DOC SAMPLES, NO RECODE","");
+    mi_add(MI_INFO,"NTP V0/V2: 4CH, NO STREAMING","");
+    mi_add(MI_INFO,"NTP: NATIVE C SCORE/FX PLAYER","");
+    mi_add(MI_INFO,"NTP: ORIGINAL DOC PCM, NO RECODE","");
     mi_add(MI_INFO,"NTP USES ITS STORED L/R ROUTING","");
 }
 static const menu_screen_t SCR_MOD_LIBRARY={"MOD LIBRARY",mod_library_build};
