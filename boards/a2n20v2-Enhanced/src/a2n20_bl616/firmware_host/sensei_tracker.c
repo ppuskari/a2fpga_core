@@ -271,6 +271,11 @@ static bool tracker_begin_runtime(tracker_state *s,
                                  module->order_table,module->order_count,
                                  module->catalog,now))
         return false;
+    if(module->source_ntp) {
+        /* NTP already encoded the stereo DOC output assignment. */
+        memcpy(s->mod.channel_pan,module->channel_pan,
+               sizeof(s->mod.channel_pan));
+    }
     s->real_mod=2u;
     s->audition_mode=sensei_runtime_audition_mode();
     /* All four tracker channels continue to execute effect and global
@@ -300,8 +305,14 @@ static bool tracker_begin_runtime(tracker_state *s,
         tracker_halt((uint16_t)(now+4u),(uint8_t)ch);
     tracker_write(REG_STATE,STATE_PLAY);
     sensei_runtime_set_status(SENSEI_RT_PLAYING);
-    osd_log("SENSEI P2U: MOD PLAY MASK=%02X",
+    osd_log(module->source_ntp ?
+            "SENSEI P2V: NTP V0 DOC PCM DIRECT" :
+            "SENSEI P2V: ORIGINAL MOD DECODE");
+    osd_log("SENSEI P2V: PLAY MASK=%02X",
             (unsigned)s->mod.audition_mask);
+    if(module->source_ntp && module->ntp_nonideal)
+        osd_log("P2V NTP NONIDEAL LOOPS=%u",
+                (unsigned)module->ntp_nonideal);
     return true;
 }
 
@@ -333,7 +344,7 @@ void sensei_tracker_task(void *unused)
                 sensei_runtime_set_status(SENSEI_RT_ERROR);
                 osd_log("SENSEI P2: NEED NATIVE DOC AND P2 FPGA");
             } else if (!sensei_runtime_load(requested_mod,&user_mod)) {
-                osd_log("SENSEI P2: MOD INVALID OR TOO LARGE");
+                osd_log("SENSEI P2V: BAD MOD/NTP OR UNSUPPORTED");
             } else {
                 tracker_write(REG_STATE,5); /* LOADING SAMPLES */
                 sensei_runtime_set_status(SENSEI_RT_LOADING);
