@@ -24,7 +24,11 @@ typedef struct {
     uint32_t file_size;
     uint8_t *pcm;            /* MOD: adapted; NTP: exact DOC-ready samples */
     uint32_t pcm_length;
-    uint8_t *ntp_patterns;   /* NTP score translated to P2U pattern encoding */
+    uint8_t *ntp_patterns;   /* retained P2W regression/compatibility buffer */
+    const uint8_t *ntp_raw_patterns; /* view into owned .NTP file */
+    uint8_t ntp_pattern_count;
+    uint8_t ntp_instrument_map[64];
+    uint8_t ntp_irq_instruments[32];
     uint8_t channel_pan[4];  /* NTP's 0..7 channels -> native DOC L/R */
     uint8_t source_ntp;      /* 0=MOD, 1=NTP v0/v2 DOC-ready samples */
     uint8_t ntp_version;     /* actual imported NTP version */

@@ -334,6 +334,7 @@ module sensei_tracker_bridge #(
                     8'h22: spi_rd_data_o <= pcm_words_acked_r[15:8];
                     8'h23: spi_rd_data_o <= pcm_error_r;
                     8'h26: spi_rd_data_o <= 8'h42; // P2 PCM DMA capability
+                    8'h2B: spi_rd_data_o <= 8'h59; // P2Y native NTP DOC retarget assist
                     8'h27: spi_rd_data_o <= FIFO_DEPTH; // FIFO capacity
                     8'h28: spi_rd_data_o <= fifo_highwater_r;
                     8'h29: spi_rd_data_o <= fifo_late_r[7:0];

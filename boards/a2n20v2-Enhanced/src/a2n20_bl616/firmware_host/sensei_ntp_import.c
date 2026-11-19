@@ -153,6 +153,7 @@ bool sensei_ntp_import(const uint8_t *src,size_t len,
     if(pat_bytes>SENSEI_NTP_MAX_PATTERN_BYTES ||
        pat_bytes>len-pos)return false;
     patterns_start=pos;
+    out->pattern_offset=(uint32_t)patterns_start;
     pos+=pat_bytes;
     samples_start=pos;
     for(unsigned i=1;i<=ninst;i++) {
@@ -186,6 +187,7 @@ bool sensei_ntp_import(const uint8_t *src,size_t len,
         if(kind==NTP_NOTE_SUSTAIN)continue;
         if(++logical>31u)return false;
         map[i]=(uint8_t)logical;
+        out->instrument_map[i]=(uint8_t)logical;
         uint8_t *d=&out->catalog[logical*8u];
         d[0]=q->page;d[1]=q->size;d[3]=q->volume;
         if(kind==NTP_NOTE_ONESHOT)
@@ -203,7 +205,10 @@ bool sensei_ntp_import(const uint8_t *src,size_t len,
             d[2]=6u;  /* play head exactly once, then start loop partner */
             d[4]=loop->page;d[5]=loop->size;
             if(loop->kind&4u)d[6]=0u; /* ideal loop: free-running */
-            else {d[6]=6u;++nonideal;} /* NTP IRQ loop handling not yet ported */
+            else {d[6]=6u;++nonideal;
+                  out->irq_instruments[logical]=1u;}
+            /* The native P2Y engine requests FPGA retarget on the first
+             * head completion; P2W MOD-style import remains unchanged. */
             d[7]=1u;
         } else return false;
     }

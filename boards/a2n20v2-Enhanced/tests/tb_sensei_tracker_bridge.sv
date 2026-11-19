@@ -108,6 +108,8 @@ module tb_sensei_tracker_bridge;
         read_check(8'h02,8'h02);
         // P2S diagnostics: force a full FIFO with owner released so
         // no event can drain, verify overflow and per-song reset.
+        read_check(8'h26,8'h42); // existing P2 PCM DMA ABI unchanged
+        read_check(8'h2B,8'h59); // new P2Y NTP first-end retarget capability
         read_check(8'h27,8'h08); // parameterized 8-entry fixture
         transfer(8'h15,8'hA5); // flush old pending work
         transfer(8'h17,8'hA5); // reset diagnostic counters
