@@ -152,6 +152,12 @@ bool sensei_runtime_load(const char *relative_path,sensei_runtime_module_t *m)
         memcpy(m->catalog,ntp_d.catalog,sizeof(m->catalog));
         memcpy(m->order_table,ntp_d.orders,sizeof(m->order_table));
         memcpy(m->channel_pan,ntp_d.channel_pan,sizeof(m->channel_pan));
+        memcpy(m->ntp_instrument_map,ntp_d.instrument_map,
+               sizeof(m->ntp_instrument_map));
+        memcpy(m->ntp_irq_instruments,ntp_d.irq_instruments,
+               sizeof(m->ntp_irq_instruments));
+        m->ntp_raw_patterns=m->file+ntp_d.pattern_offset;
+        m->ntp_pattern_count=ntp_d.pattern_count;
         m->ntp_version=ntp_d.ntp_version;
         m->order_count=ntp_d.order_count;
         m->pcm_length=ntp_d.pcm_bytes;
