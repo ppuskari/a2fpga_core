@@ -112,7 +112,7 @@ bool sensei_runtime_load(const char *relative_path,sensei_runtime_module_t *m)
     memset(&req,0,sizeof(req));
     req.op=FSOP_MOD_OPEN;
     req.path=relative_path;
-    /* .NTP v0 can legitimately be shorter than a MOD's 1084-byte
+    /* .NTP files can legitimately be shorter than a MOD's 1084-byte
      * header. Both formats still pass their strict content parsers. */
     size_t suffix=strlen(relative_path);
     bool ntp_name=(tolower((unsigned char)relative_path[suffix-3u])=='n');
@@ -137,7 +137,7 @@ bool sensei_runtime_load(const char *relative_path,sensei_runtime_module_t *m)
     }
     m->source_ntp=(uint8_t)ntp_name;
     if(m->source_ntp) {
-        /* P2V: strict v0 format, no streaming. The ORIGINAL NTP file owns
+        /* P2W: strict v0/v2 without streaming. The ORIGINAL NTP file owns
          * DOC byte values and waveform placements; do not re-convert sound. */
         if(!sensei_ntp_import(m->file,m->file_size,NULL,0,NULL,0,&ntp_d) ||
            !ntp_d.pcm_bytes || ntp_d.pcm_bytes>65536u ||
@@ -152,6 +152,7 @@ bool sensei_runtime_load(const char *relative_path,sensei_runtime_module_t *m)
         memcpy(m->catalog,ntp_d.catalog,sizeof(m->catalog));
         memcpy(m->order_table,ntp_d.orders,sizeof(m->order_table));
         memcpy(m->channel_pan,ntp_d.channel_pan,sizeof(m->channel_pan));
+        m->ntp_version=ntp_d.ntp_version;
         m->order_count=ntp_d.order_count;
         m->pcm_length=ntp_d.pcm_bytes;
         m->ntp_nonideal=ntp_d.nonideal_pairs;
