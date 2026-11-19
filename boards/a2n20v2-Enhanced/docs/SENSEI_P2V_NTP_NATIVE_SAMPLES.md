@@ -35,7 +35,7 @@ original-converter \`15k.ntp\` isolates the **sample-preparation** variable
 without touching the known-good FPGA audio hardware.
 
 P2V accepts the documented \`nfc!\` **version 0** classic file layout:
-four tracks, <=31 logical instruments, up to 64KiB input file,
+four tracks, <=31 logical instruments (<=63 NTP records), up to 64KiB input file,
 <=64KiB DOC Sound RAM image, no NTP streaming or name extensions.
 NTP samples with extra 8 zero bytes preserve those bytes exactly.
 The importer maps NTP sample types 0/1/2/3 and optimal-size bit 2
@@ -59,8 +59,8 @@ PAIR 1+2 / PAIR 0+3, independent of which physical speaker is selected.
   This is particularly relevant to short non-power-of-two loops
   (such as 15k instrument 5).
 - P2U ProTracker effects still run, not original NinjaTrackerPlus
-  assembly. Nonzero NTP finetune is read/validated but not yet
-  applied to the mapped period; choose zero-finetune songs for this
+  assembly. Nonzero NTP finetune is not yet supported, so those files are
+  rejected before any DOC upload; choose zero-finetune songs for this
   pass (all populated instruments in 15k.mod are finetune=0).
 - NTP versions 1 and 2, streaming data, >4 channels, later appended
   metadata, and any unimplemented P2U effect are intentionally rejected.
