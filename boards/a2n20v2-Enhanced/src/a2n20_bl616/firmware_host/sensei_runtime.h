@@ -22,15 +22,19 @@ typedef enum {
 typedef struct {
     uint8_t *file;           /* Owned raw .MOD bytes, no precompiled rows */
     uint32_t file_size;
-    uint8_t *pcm;            /* Adapted PCM for DOC RAM; generated at load time */
+    uint8_t *pcm;            /* MOD: adapted; NTP: exact DOC-ready samples */
     uint32_t pcm_length;
+    uint8_t *ntp_patterns;   /* NTP score translated to P2U pattern encoding */
+    uint8_t channel_pan[4];  /* NTP's 0..7 channels -> native DOC L/R */
+    uint8_t source_ntp;      /* 0=MOD, 1=real NTP v0 */
+    uint8_t ntp_nonideal;    /* loops needing NTP-native IRQ replay */
     uint8_t catalog[32*8];   /* P2R attack/sustain WTP/RTS/CTRL/VOL/flags */
     uint8_t order_table[128];
     uint8_t order_count;
     sensei_mod_song_t song;
 } sensei_runtime_module_t;
 
-/* Menu thread selects a file by relative FAT path, not an instrument ID. */
+/* Menu thread selects a .MOD or .NTP by FAT path, not an instrument ID. */
 bool sensei_runtime_choose(const char *relative_path);
 bool sensei_runtime_pending(char *dst,size_t cap);
 sensei_runtime_status_t sensei_runtime_status(void);
