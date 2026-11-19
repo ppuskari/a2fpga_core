@@ -264,6 +264,7 @@ static bool tracker_begin(tracker_state *s, uint16_t now, uint8_t song_id)
     s->row=0;
     s->tick=0;
     s->real_mod=(song_id==1 || song_id==2) ? 1u : 0u;
+    s->native_ntp=0u; /* legacy/P1E demo never routes through NTP engine */
     if (s->real_mod && !sensei_mod_init(&s->mod,song_id,now)) {
         tracker_write(REG_STATE, STATE_ERROR);
         return false;
