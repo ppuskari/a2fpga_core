@@ -226,7 +226,7 @@ static void tick_effects(sensei_ntp_player_t *s,sensei_doc_event_t emit,
             pitch_changed=true;
         } else if(fx==1u && c->period) {
             c->period=(uint16_t)(c->period>c->slide?
-                                 c->period-c->slide:1u);
+                                 (unsigned)c->period-(unsigned)c->slide:1u);
             value=fc(c->period);pitch_changed=true;
         } else if(fx==2u && c->period) {
             unsigned period=(unsigned)c->period+c->slide;
@@ -240,7 +240,8 @@ static void tick_effects(sensei_ntp_player_t *s,sensei_doc_event_t emit,
             int target;
             if(phase&32u)wave=-wave;
             target=(int)c->period+((wave*(int)c->vib_depth)>>7);
-            if(target<1)target=1;if(target>4095)target=4095;
+            if(target<1)target=1;
+            if(target>4095)target=4095;
             value=fc((uint16_t)target);pitch_changed=true;
             c->vib_phase=(uint8_t)((c->vib_phase+4u*c->vib_speed)&63u);
         }
