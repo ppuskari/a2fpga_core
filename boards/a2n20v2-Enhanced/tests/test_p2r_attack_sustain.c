@@ -114,7 +114,7 @@ static void test_playback(void)
     require(count>=52u && count<=64u,"4 note-ons must fit 64-event FPGA FIFO");
     for(unsigned ch=0;ch<4;ch++) {
         uint8_t first=(uint8_t)(ch*2u),second=(uint8_t)(first+1u);
-        uint8_t pan=(ch==1u || ch==2u)?0x10u:0;
+        uint8_t pan=(ch==0u || ch==3u)?0x10u:0;
         check_ctrl((uint8_t)(0xA0u+first),(uint8_t)(pan|6u));
         check_ctrl((uint8_t)(0xA0u+second),(uint8_t)(pan|1u));
     }
