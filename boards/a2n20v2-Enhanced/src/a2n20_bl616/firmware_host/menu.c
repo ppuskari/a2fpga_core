@@ -420,9 +420,9 @@ static void picker_choose(int id)
         }
         if (s_pick_mod) {
             if (sensei_runtime_choose(full))
-                set_status("MOD SELECTED - MCU LOADING");
+                set_status("SONG SELECTED - MCU LOADING");
             else
-                set_status("INVALID .MOD FILE PATH");
+                set_status("INVALID .MOD/.NTP FILE PATH");
         } else if (s_pick_fpga)
             fpgaupdate_request(full);
         else
@@ -1161,7 +1161,7 @@ static void audio_enter(int id)
 }
 
 /* ======================= SCREEN: SENSEI MOD LIBRARY ======================== */
-static const char *const k_mod_exts[] = {"mod",NULL};
+static const char *const k_mod_exts[] = {"mod","ntp",NULL};
 /* Audible track isolation keeps the original MOD running in all 4 channels.
  * Only the DOC register writes for unselected channels are suppressed. */
 static const char *const k_mod_audition_names[7] = {
@@ -1211,20 +1211,20 @@ static void mod_library_build(void)
     case SENSEI_RT_DONE: status="DONE"; break;
     default:break;
     }
-    mi_add(MI_INFO,"RUNTIME PROTRACKER MOD PLAYER","");
+    mi_add(MI_INFO,"RUNTIME MOD / NTP V0 PLAYER","");
     mi_add(MI_INFO,"STORAGE: USB/SD FAT VOLUME","");
     mi_add(MI_INFO,"MOD FILE STATUS",status);
     menu_item_t *m=mi_add(MI_CHOICE,"AUDITION CHANNEL",
                           k_mod_audition_names[sensei_runtime_audition_mode()]);
     m->on_change=mod_audition_change;
-    m=mi_add(MI_SUBMENU,"BROWSE .MOD FILES","");
+    m=mi_add(MI_SUBMENU,"BROWSE .MOD / .NTP FILES","");
     m->action=mod_library_open;
     m=mi_add(MI_ACTION,"STOP PLAYBACK","");
     m->action=mod_library_stop;
     mi_add(MI_INFO,"","");
-    mi_add(MI_INFO,"RUNTIME C TRACKER - 4CH PROTRACKER","");
+    mi_add(MI_INFO,"NTP V0: 4CH, NO STREAMING","");
     mi_add(MI_INFO,"DOC PCM UPLOAD + EFFECTS ON MCU","");
-    mi_add(MI_INFO,"NO OFFLINE SONG CONVERSION","");
+    mi_add(MI_INFO,"NTP: SOURCE DOC SAMPLES, NO RECODE","");
     mi_add(MI_INFO,"LEFT/RIGHT CHOICE BEFORE SONG START","");
 }
 static const menu_screen_t SCR_MOD_LIBRARY={"MOD LIBRARY",mod_library_build};
