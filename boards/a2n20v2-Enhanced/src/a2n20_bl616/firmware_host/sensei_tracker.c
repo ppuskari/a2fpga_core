@@ -47,6 +47,7 @@ typedef struct {
     uint8_t last_seq;
     uint8_t finishing;
     uint8_t real_mod;
+    uint8_t audition_mode;
     sensei_mod_player_t mod;
     uint16_t time_next;
     uint16_t time_finish;
@@ -194,13 +195,25 @@ static void tracker_stop(tracker_state *s, uint16_t now, uint8_t state)
         fpga_spi_xfer_read(TRACK_SPACE,0x07,&overflow,1);
         fpga_spi_xfer_read(TRACK_SPACE,0x28,stats,3);
         const unsigned late_hw=(unsigned)stats[1]|((unsigned)stats[2]<<8);
-        osd_log("SENSEI P2S: FPGA OVR=%u HIGH=%u LATE=%u",
+        /* Console is 39 columns. Split diagnostics rather than
+         * silently truncating the evidence needed for audio analysis. */
+        osd_log("P2U FPGA OVR=%u HIGH=%u LATE=%u",
                 (unsigned)overflow,(unsigned)stats[0],late_hw);
-        osd_log("SENSEI P2S: MCU SENT=%lu HIGH=%u LATE=%lu MAXMS=%u",
+        osd_log("P2U MCU SENT=%lu HIGH=%u",
                 (unsigned long)g_doc_pending.emitted,
-                (unsigned)g_doc_pending.high_water,
+                (unsigned)g_doc_pending.high_water);
+        osd_log("P2U MCU LATE=%lu MAXMS=%u",
                 (unsigned long)g_doc_pending.late,
                 (unsigned)g_doc_pending.max_late_ms);
+        osd_log("P2U NOTES CH0=%lu CH1=%lu",
+                (unsigned long)s->mod.note_starts[0],
+                (unsigned long)s->mod.note_starts[1]);
+        osd_log("P2U NOTES CH2=%lu CH3=%lu",
+                (unsigned long)s->mod.note_starts[2],
+                (unsigned long)s->mod.note_starts[3]);
+        osd_log("P2U AUDITION=%u MASK=%02X",
+                (unsigned)s->audition_mode,
+                (unsigned)s->mod.audition_mask);
     }
     /* Drop stale future events, mute the owned DOC at a near-future deadline,
      * then release owner only AFTER these writes have been executed. */
@@ -259,6 +272,19 @@ static bool tracker_begin_runtime(tracker_state *s,
                                  module->catalog,now))
         return false;
     s->real_mod=2u;
+    s->audition_mode=sensei_runtime_audition_mode();
+    /* All four tracker channels continue to execute effect and global
+     * flow logic. Only their output register events are selectively
+     * disabled, for isolated speaker/instrument A/B tests. */
+    switch (s->audition_mode) {
+    case 1: s->mod.audition_mask=0x01u;break;
+    case 2: s->mod.audition_mask=0x02u;break;
+    case 3: s->mod.audition_mask=0x04u;break;
+    case 4: s->mod.audition_mask=0x08u;break;
+    case 5: s->mod.audition_mask=0x06u;break;
+    case 6: s->mod.audition_mask=0x09u;break;
+    default:s->mod.audition_mask=0x0Fu;break;
+    }
     s->active=1;
     s->finishing=0;
     sensei_queue_reset(&g_doc_pending);
@@ -274,7 +300,8 @@ static bool tracker_begin_runtime(tracker_state *s,
         tracker_halt((uint16_t)(now+4u),(uint8_t)ch);
     tracker_write(REG_STATE,STATE_PLAY);
     sensei_runtime_set_status(SENSEI_RT_PLAYING);
-    osd_log("SENSEI P2: RUNTIME MOD - DOC PLAYING");
+    osd_log("SENSEI P2U: MOD PLAY MASK=%02X",
+            (unsigned)s->mod.audition_mask);
     return true;
 }
 
