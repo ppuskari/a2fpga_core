@@ -11,7 +11,10 @@
 #include "sensei_ntp_import.h"
 #include <string.h>
 
-enum { NTP_HEADER=9, NTP_TRACKS=4, NTP_INST_SIZE=7, NTP_MAX_INST=255 };
+/* A classic 31-instrument MOD can become at most 63 NTP instrument
+ * records (31 heads + 31 loops + optional silent timer). Keep scratch
+ * under 1 KB; the BL616 sensei worker has a 3072-byte stack. */
+enum { NTP_HEADER=9, NTP_TRACKS=4, NTP_INST_SIZE=7, NTP_MAX_INST=63 };
 enum { NTP_NOTE_ONESHOT=0, NTP_NOTE_LOOP=1, NTP_NOTE_HEADER=2,
        NTP_NOTE_SUSTAIN=3 };
 typedef struct {
@@ -59,7 +62,7 @@ bool sensei_ntp_import(const uint8_t *src,size_t len,
        memcmp(src,"nfc!",4)!=0 || src[4]!=0u ||
        src[5]!=NTP_TRACKS)return false;
     ninst=src[6];npat=src[7];norder=src[8];
-    if(!ninst || !npat || !norder || norder>128u ||
+    if(!ninst || ninst>NTP_MAX_INST || !npat || !norder || norder>128u ||
        (pcm==NULL)!=(pat==NULL))return false;
     /* A v0 NTP instrument header is seven bytes. It stores DOC RAM pages,
      * actual DOC RTS register and byte length (low byte FIRST). */
@@ -86,7 +89,7 @@ bool sensei_ntp_import(const uint8_t *src,size_t len,
         q->volume=src[pos+3];q->finetune=src[pos+4];
         q->page=src[pos+5];q->size=src[pos+6];
         if(q->kind>7u || q->volume>64u ||
-           q->finetune>15u || !is_legal_rts(q->size) || !q->len)
+           q->finetune!=0u || !is_legal_rts(q->size) || !q->len)
             return false;
         if((q->kind&3u)==NTP_NOTE_SUSTAIN &&
            (i==1u || (inst[i-1].kind&3u)!=NTP_NOTE_HEADER))
