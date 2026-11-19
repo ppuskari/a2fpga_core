@@ -15,6 +15,7 @@
  */
 #include "sensei_tracker.h"
 #include "sensei_mod_player.h"
+#include "sensei_ntp_native.h"
 #include "sensei_runtime.h"
 #include "sensei_pcm_upload.h"
 #include "sensei_event_queue.h"
@@ -48,7 +49,9 @@ typedef struct {
     uint8_t finishing;
     uint8_t real_mod;
     uint8_t audition_mode;
+    uint8_t native_ntp;  /* raw NTP score, not P2U encoded MOD patterns */
     sensei_mod_player_t mod;
+    sensei_ntp_player_t ntp;
     uint16_t time_next;
     uint16_t time_finish;
     uint16_t row;
@@ -187,6 +190,24 @@ static void tracker_emit_tick(tracker_state *s)
     }
 }
 
+/* Both players share the proven FPGA-millisecond event transport. They do
+ * NOT share a score/effect interpreter or a DOC instrument state machine. */
+static bool song_done(const tracker_state *s)
+{
+    return s->native_ntp ? sensei_ntp_done(&s->ntp) :
+           sensei_mod_done(&s->mod);
+}
+static uint16_t song_next(const tracker_state *s)
+{
+    return s->native_ntp ? sensei_ntp_next_ms(&s->ntp) :
+           sensei_mod_next_ms(&s->mod);
+}
+static void song_tick(tracker_state *s)
+{
+    if(s->native_ntp) (void)sensei_ntp_tick(&s->ntp,tracker_event);
+    else (void)sensei_mod_tick(&s->mod,tracker_event);
+}
+
 static void tracker_stop(tracker_state *s, uint16_t now, uint8_t state)
 {
     unsigned ch;
@@ -206,14 +227,14 @@ static void tracker_stop(tracker_state *s, uint16_t now, uint8_t state)
                 (unsigned long)g_doc_pending.late,
                 (unsigned)g_doc_pending.max_late_ms);
         osd_log("P2U NOTES CH0=%lu CH1=%lu",
-                (unsigned long)s->mod.note_starts[0],
-                (unsigned long)s->mod.note_starts[1]);
+                (unsigned long)(s->native_ntp?s->ntp.note_starts[0]:s->mod.note_starts[0]),
+                (unsigned long)(s->native_ntp?s->ntp.note_starts[1]:s->mod.note_starts[1]));
         osd_log("P2U NOTES CH2=%lu CH3=%lu",
-                (unsigned long)s->mod.note_starts[2],
-                (unsigned long)s->mod.note_starts[3]);
+                (unsigned long)(s->native_ntp?s->ntp.note_starts[2]:s->mod.note_starts[2]),
+                (unsigned long)(s->native_ntp?s->ntp.note_starts[3]:s->mod.note_starts[3]));
         osd_log("P2U AUDITION=%u MASK=%02X",
                 (unsigned)s->audition_mode,
-                (unsigned)s->mod.audition_mask);
+                (unsigned)(s->native_ntp?s->ntp.audition_mask:s->mod.audition_mask));
     }
     /* Drop stale future events, mute the owned DOC at a near-future deadline,
      * then release owner only AFTER these writes have been executed. */
@@ -266,16 +287,23 @@ static bool tracker_begin_runtime(tracker_state *s,
                                   sensei_runtime_module_t *module,
                                   uint16_t now)
 {
-    if (!module || !module->file || !module->pcm || !module->order_count ||
-        !sensei_mod_init_runtime(&s->mod,module->song.rows,
-                                 module->order_table,module->order_count,
-                                 module->catalog,now))
+    if (!module || !module->file || !module->pcm || !module->order_count)
         return false;
-    if(module->source_ntp) {
-        /* NTP already encoded the stereo DOC output assignment. */
-        memcpy(s->mod.channel_pan,module->channel_pan,
-               sizeof(s->mod.channel_pan));
-    }
+    s->native_ntp=module->source_ntp;
+    if(s->native_ntp) {
+        /* Raw NTP pattern bytes, original per-track DOC routing and
+         * waveform-end IRQ pairing: NO ProTracker interpreter call. */
+        if(!sensei_ntp_init(&s->ntp,module->ntp_raw_patterns,
+                            module->ntp_pattern_count,module->order_table,
+                            module->order_count,module->catalog,
+                            module->channel_pan,module->ntp_instrument_map,
+                            module->ntp_irq_instruments,now))
+            return false;
+    } else if(!sensei_mod_init_runtime(&s->mod,module->song.rows,
+                                      module->order_table,module->order_count,
+                                      module->catalog,now))
+        return false;
+    s->mod.audition_mask=0x0fu;
     s->real_mod=2u;
     s->audition_mode=sensei_runtime_audition_mode();
     /* All four tracker channels continue to execute effect and global
@@ -290,6 +318,8 @@ static bool tracker_begin_runtime(tracker_state *s,
     case 6: s->mod.audition_mask=0x09u;break;
     default:s->mod.audition_mask=0x0Fu;break;
     }
+    if(s->native_ntp)
+        s->ntp.audition_mask=s->mod.audition_mask;
     s->active=1;
     s->finishing=0;
     sensei_queue_reset(&g_doc_pending);
@@ -306,12 +336,12 @@ static bool tracker_begin_runtime(tracker_state *s,
     tracker_write(REG_STATE,STATE_PLAY);
     sensei_runtime_set_status(SENSEI_RT_PLAYING);
     if(module->source_ntp)
-        osd_log("SENSEI P2W: NTP V%u DOC PCM DIRECT",
+        osd_log("SENSEI P2Y: NTP V%u NATIVE C/FPGA",
                 (unsigned)module->ntp_version);
     else
-        osd_log("SENSEI P2W: ORIGINAL MOD DECODE");
-    osd_log("SENSEI P2V: PLAY MASK=%02X",
-            (unsigned)s->mod.audition_mask);
+        osd_log("SENSEI P2Y: ORIGINAL MOD P2U");
+    osd_log("SENSEI P2Y: PLAY MASK=%02X",
+            (unsigned)(s->native_ntp?s->ntp.audition_mask:s->mod.audition_mask));
     if(module->source_ntp && module->ntp_nonideal)
         osd_log("P2V NTP NONIDEAL LOOPS=%u",
                 (unsigned)module->ntp_nonideal);
@@ -409,12 +439,12 @@ void sensei_tracker_task(void *unused)
              * Never generate a tick unless its worst-case 64 DOC writes
              * fit in the MCU's 256-event staging queue. We do not
              * advance the ProTracker tick until it is safely staged. */
-            if ((s.real_mod ? !sensei_mod_done(&s.mod) : s.row<SONG_ROWS) &&
+            if ((s.real_mod ? !song_done(&s) : s.row<SONG_ROWS) &&
                 g_doc_pending.count<=SENSEI_EVENT_CAP-SENSEI_MAX_TICK_EVENTS &&
                 (int16_t)((uint16_t)(now+160u)-
-                           (s.real_mod ? sensei_mod_next_ms(&s.mod) :
+                           (s.real_mod ? song_next(&s) :
                                          s.time_next))>=0) {
-                if (s.real_mod) sensei_mod_tick(&s.mod,tracker_event);
+                if (s.real_mod) song_tick(&s);
                 else tracker_emit_tick(&s);
                 tracker_pump(now);
             }
@@ -423,11 +453,11 @@ void sensei_tracker_task(void *unused)
                 tracker_stop(&s,now,STATE_ERROR);
                 sensei_runtime_set_status(SENSEI_RT_ERROR);
             } else {
-                if ((s.real_mod ? sensei_mod_done(&s.mod) : s.row==SONG_ROWS) &&
+                if ((s.real_mod ? song_done(&s) : s.row==SONG_ROWS) &&
                     !s.finishing) {
                     s.finishing=1;
                     s.time_finish=(uint16_t)((s.real_mod ?
-                            sensei_mod_next_ms(&s.mod) : s.time_next)+25u);
+                            song_next(&s) : s.time_next)+25u);
                 }
                 if (s.finishing && !g_doc_pending.count &&
                     tracker_fpga_level()==0u &&
@@ -440,7 +470,9 @@ void sensei_tracker_task(void *unused)
                     osd_log("SENSEI P2S: EVENTS=%lu HIGH=%u LATE=%lu MAXMS=%u",
                         (unsigned long)sent,(unsigned)high,
                         (unsigned long)late,(unsigned)maxlate);
-                    osd_log(s.real_mod==2u ? "SENSEI P2S: RUNTIME MOD DONE" :
+                    osd_log(s.real_mod==2u ? (s.native_ntp ?
+                            "SENSEI P2Y: NATIVE NTP DONE" :
+                            "SENSEI P2S: RUNTIME MOD DONE") :
                             s.real_mod ? "SENSEI P1E: REAL MOD DONE" :
                             "SENSEI P1D: DONE 192 ROWS");
                 }
