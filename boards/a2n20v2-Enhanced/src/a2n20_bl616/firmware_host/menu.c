@@ -1162,6 +1162,22 @@ static void audio_enter(int id)
 
 /* ======================= SCREEN: SENSEI MOD LIBRARY ======================== */
 static const char *const k_mod_exts[] = {"mod",NULL};
+/* Audible track isolation keeps the original MOD running in all 4 channels.
+ * Only the DOC register writes for unselected channels are suppressed. */
+static const char *const k_mod_audition_names[7] = {
+    "ALL 4", "CH0 LEFT", "CH1 RIGHT", "CH2 RIGHT",
+    "CH3 LEFT", "RIGHT 1+2", "LEFT 0+3"
+};
+static void mod_audition_change(int id,int dir)
+{
+    (void)id;
+    unsigned mode=sensei_runtime_audition_mode();
+    mode=(mode+(dir<0?6u:1u))%7u;
+    sensei_runtime_set_audition_mode((uint8_t)mode);
+    set_status("AUDITION APPLIES TO NEXT PLAYBACK");
+    screen_refresh();
+}
+
 
 static void mod_library_open(int id)
 {
@@ -1198,7 +1214,10 @@ static void mod_library_build(void)
     mi_add(MI_INFO,"RUNTIME PROTRACKER MOD PLAYER","");
     mi_add(MI_INFO,"STORAGE: USB/SD FAT VOLUME","");
     mi_add(MI_INFO,"MOD FILE STATUS",status);
-    menu_item_t *m=mi_add(MI_SUBMENU,"BROWSE .MOD FILES","");
+    menu_item_t *m=mi_add(MI_CHOICE,"AUDITION CHANNEL",
+                          k_mod_audition_names[sensei_runtime_audition_mode()]);
+    m->on_change=mod_audition_change;
+    m=mi_add(MI_SUBMENU,"BROWSE .MOD FILES","");
     m->action=mod_library_open;
     m=mi_add(MI_ACTION,"STOP PLAYBACK","");
     m->action=mod_library_stop;
@@ -1206,6 +1225,7 @@ static void mod_library_build(void)
     mi_add(MI_INFO,"RUNTIME C TRACKER - 4CH PROTRACKER","");
     mi_add(MI_INFO,"DOC PCM UPLOAD + EFFECTS ON MCU","");
     mi_add(MI_INFO,"NO OFFLINE SONG CONVERSION","");
+    mi_add(MI_INFO,"LEFT/RIGHT CHOICE BEFORE SONG START","");
 }
 static const menu_screen_t SCR_MOD_LIBRARY={"MOD LIBRARY",mod_library_build};
 
