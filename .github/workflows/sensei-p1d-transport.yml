@@ -8,6 +8,7 @@ on:
       - petar/sensei8-p2-playable-20261118
       - petar/sensei8-p2-attack-sustain-20261118
       - petar/sensei8-p2s-lossless-fifo-20261118
+      - petar/sensei8-p2t-panning-pitch-20261118
   pull_request:
   workflow_dispatch:
 jobs:
@@ -61,6 +62,10 @@ jobs:
         run: |
           gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2s_backpressure.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_event_queue.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p2s_fifo
           /tmp/test_p2s_fifo
+      - name: Validate P2T actual DOC stereo and ProTracker pitch release
+        run: |
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2t_pitch_pan.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p2t
+          /tmp/test_p2t
       - name: Validate integrated top-level source wiring
         run: |
           python -c "from pathlib import Path; t=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text(); g=Path('hdl/sound/sound_glu.sv').read_text(); c=Path('boards/a2n20v2-Enhanced/hdl/bl616/bl616_spi_connector.sv').read_text(); assert all(s in t for s in ('sensei_tracker_bridge','tracker_doc_wr_i','trk_spi_wr_o','trk_slot_rd_w')); assert 'tracker_owner_w' in g and 'tracker_doc_wr_i' in g; assert 'mem_space == 3\x27d6' in c; print('PASS: top, Sound GLU and SPI6 connections present')"
