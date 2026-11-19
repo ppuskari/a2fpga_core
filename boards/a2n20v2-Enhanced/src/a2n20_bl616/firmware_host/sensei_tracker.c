@@ -379,6 +379,17 @@ void sensei_tracker_task(void *unused)
             } else if (!sensei_runtime_load(requested_mod,&user_mod)) {
                 osd_log("SENSEI P2V: BAD MOD/NTP OR UNSUPPORTED");
             } else {
+                uint8_t ntp_assist_cap=0u;
+                if(user_mod.source_ntp)
+                    fpga_spi_xfer_read(TRACK_SPACE,0x2Bu,&ntp_assist_cap,1);
+                if(user_mod.source_ntp && ntp_assist_cap!=0x59u) {
+                    /* Do not run native NTP IRQ|SWAP on a P2S/P2W FPGA.
+                     * The original head would restart instead of being
+                     * retargeted to its sustain wave after first end. */
+                    tracker_write(REG_STATE,STATE_ERROR);
+                    sensei_runtime_set_status(SENSEI_RT_ERROR);
+                    osd_log("SENSEI P2Y: REQUIRES P2Y FPGA");
+                } else {
                 tracker_write(REG_STATE,5); /* LOADING SAMPLES */
                 sensei_runtime_set_status(SENSEI_RT_LOADING);
                 if (!sensei_pcm_upload(user_mod.pcm,user_mod.pcm_length)) {
@@ -397,6 +408,7 @@ void sensei_tracker_task(void *unused)
                         sensei_runtime_set_status(SENSEI_RT_ERROR);
                     }
                     tracker_read(st);
+                }
                 }
             }
         }
