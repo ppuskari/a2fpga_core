@@ -35,6 +35,10 @@ bool sensei_runtime_choose(const char *relative_path);
 bool sensei_runtime_pending(char *dst,size_t cap);
 sensei_runtime_status_t sensei_runtime_status(void);
 void sensei_runtime_set_status(sensei_runtime_status_t value);
+/* P2U audition mode: 0=all, 1..4=one channel, 5=right pair,
+ * 6=left pair. Selection applies on next song start, not mid-note. */
+void sensei_runtime_set_audition_mode(uint8_t mode);
+uint8_t sensei_runtime_audition_mode(void);
 void sensei_runtime_request_stop(void);
 bool sensei_runtime_take_stop_request(void);
 /* Must run from BL616 tracker worker, through serialized disk_fs_request. */
