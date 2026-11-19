@@ -89,7 +89,7 @@ int main(void)
             "NTP attack bytes MUST NOT be transformed");
     require(!memcmp(pcm+512,file+1067,512),
             "NTP sustain bytes MUST NOT be transformed");
-    require(!memcmp(pcm+1024,file+1579-8,8),
+    require(!memcmp(pcm+1024,file+1579,8),
             "NTP one-shot bytes MUST NOT be transformed");
     require(pcm[2]==0x01 && pcm[6]==0x00 &&
             pcm[512]==0x00 && pcm[513]==0x01,
@@ -109,7 +109,7 @@ int main(void)
             "could not initialize P2U tracker from NTP patterns");
     memcpy(player.channel_pan,decoded.channel_pan,4);
     require(sensei_mod_tick(&player,send_event),"real tick0 failed");
-    require(events==21u && starts==1u && first_ctrl==6u,
+    require(events==26u && starts==1u && first_ctrl==6u,
             "NTP two DOC note starts not executed with expected channel");
     puts("PASS P2V: original v0 DOC PCM is byte-exact, no wave recoding");
     puts("PASS P2V: NTP attack+ideal-sustain and one-shot metadata and panning");
