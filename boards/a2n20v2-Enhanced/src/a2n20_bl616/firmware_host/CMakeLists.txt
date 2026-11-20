@@ -37,8 +37,6 @@ target_sources(app PRIVATE
     disk.c
     sensei_tracker.c
     sensei_event_queue.c
-    sensei_mod_player.c
-    sensei_mod_decode.c
     sensei_ntp_import.c
     sensei_ntp_native.c
     sensei_runtime.c
