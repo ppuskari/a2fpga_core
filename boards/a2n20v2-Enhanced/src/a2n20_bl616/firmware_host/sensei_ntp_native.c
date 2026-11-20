@@ -26,10 +26,6 @@ static const uint16_t note_period[72] = {
     107,101,95,90,85,80,76,71,67,64,60,57,
     53,50,47,45,42,40,37,35,33,31,30,28
 };
-static const uint16_t semi_q12[16] = {
-    4096,4339,4597,4870,5160,5467,5793,6137,
-    6502,6889,7299,7733,8192,8678,9195,9741
-};
 static const uint8_t sine[32] = {
     0,25,49,74,98,120,141,161,180,197,212,225,236,244,250,253,
     255,253,250,244,236,225,212,197,180,161,141,120,98,74,49,25
@@ -227,19 +223,18 @@ static void tick_effects(sensei_ntp_player_t *s,sensei_doc_event_t emit,
         if(fx==0u && arg && c->period) {
             const uint8_t shift=(s->tick%3u==1u)?arg>>4:
                                 (s->tick%3u==2u)?arg&15u:0u;
-            /* NinjaTrackerPlus handle_arpeggio invokes check_play_note
-             * every effect tick. It resets the sample/oscillator, not
-             * merely the DOC frequency register as P2AA did.
-             * Preserve the untransposed root note in c->note for the
-             * next tick and the following score row. */
-            if(c->note && c->instrument) {
+            /* P2AC recovery: P2AB retriggered both full DOC waveforms
+             * at every arpeggio tick. On real 15k audio that repeatedly
+             * replays the attack, shreds the sustain and saturates the
+             * 64-entry SPI6 FIFO. Keep the P2AB note-less tick-zero
+             * root recovery but adjust ONLY the two FC registers on
+             * subsequent ticks: 4 rather than ~14 events per channel.
+             * Native NTP note values directly index the reference
+             * 65816 pitch table; do not approximate semi Q12 ratios. */
+            if(c->note) {
                 unsigned index=(unsigned)c->note+(unsigned)shift;
                 if(index>72u)index=72u;
-                start_if(s,emit,at,ch,note_period[index-1u],
-                         c->instrument,c->volume);
-            } else {
-                value=(uint16_t)(((uint32_t)fc(c->period)*
-                                  semi_q12[shift]+2048u)>>12);
+                value=fc(note_period[index-1u]);
                 pitch_changed=true;
             }
         } else if(fx==1u && c->period) {
