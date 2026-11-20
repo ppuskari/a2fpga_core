@@ -98,8 +98,9 @@ int main(void)
     require(last(0)==161 && last(1)==161,
             "arpeggio root restores on both DOC oscillators");
     tick(5);
+    unsigned before_instrument_only=s.note_starts[0];
     n=0;tick(1); /* row2: instrument without note */
-    require(s.note_starts[0]==2u &&
+    require(s.note_starts[0]==before_instrument_only+1u &&
             seen(0xA0,0x1Eu)==1u,
             "NTP instrument-only row must repeat previous note");
     printf("PASS P2Y: raw-score instrument-only retrigger and pitch release\n");
