@@ -151,6 +151,12 @@ static void tick_zero(sensei_ntp_player_t *s,sensei_doc_event_t emit,
             c->volume=s->catalog[(unsigned)mapped*8u+3u];
             if(!note)note=c->note; /* NinjaTrackerPlus re-triggers old note */
         }
+        /* Original 65816 setup_arpeggio replays the saved root note
+         * when 0xy begins on a row with no explicit note/instrument.
+         * P2AA stayed silent here until the next score note arrived.
+         * Keep the saved root in c->note (do not accumulate intervals). */
+        if(fx==0u && arg && !note && c->note && c->instrument)
+            note=c->note;
         delay=(fx==14u && sub==13u && (arg&15u)!=0u);
         if(fx==3u || fx==5u) {
             if(note) {
@@ -219,11 +225,23 @@ static void tick_effects(sensei_ntp_player_t *s,sensei_doc_event_t emit,
         bool pitch_changed=false,volume_changed=false;
         uint16_t value=0;
         if(fx==0u && arg && c->period) {
-            uint8_t shift=(s->tick%3u==1u)?arg>>4:
-                          (s->tick%3u==2u)?arg&15u:0u;
-            value=(uint16_t)(((uint32_t)fc(c->period)*
-                              semi_q12[shift]+2048u)>>12);
-            pitch_changed=true;
+            const uint8_t shift=(s->tick%3u==1u)?arg>>4:
+                                (s->tick%3u==2u)?arg&15u:0u;
+            /* NinjaTrackerPlus handle_arpeggio invokes check_play_note
+             * every effect tick. It resets the sample/oscillator, not
+             * merely the DOC frequency register as P2AA did.
+             * Preserve the untransposed root note in c->note for the
+             * next tick and the following score row. */
+            if(c->note && c->instrument) {
+                unsigned index=(unsigned)c->note+(unsigned)shift;
+                if(index>72u)index=72u;
+                start_if(s,emit,at,ch,note_period[index-1u],
+                         c->instrument,c->volume);
+            } else {
+                value=(uint16_t)(((uint32_t)fc(c->period)*
+                                  semi_q12[shift]+2048u)>>12);
+                pitch_changed=true;
+            }
         } else if(fx==1u && c->period) {
             c->period=(uint16_t)(c->period>c->slide?
                                  (unsigned)c->period-(unsigned)c->slide:1u);

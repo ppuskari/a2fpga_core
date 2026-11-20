@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - petar/sensei8-p2aa-native-ntp-only-20261120
+      - petar/sensei8-p2ab-ntp-arp-sustain-audit-20261120
   pull_request:
   workflow_dispatch:
 jobs:
@@ -22,6 +23,10 @@ jobs:
         run: |
           iverilog -g2012 -s tb_p2y_ntp_retarget -o /tmp/tb_ntp boards/a2n20v2-Enhanced/hdl/sensei_tracker_bridge.sv boards/a2n20v2-Enhanced/tests/tb_p2y_ntp_retarget.sv hdl/sound/doc5503.sv
           vvp /tmp/tb_ntp
+      - name: Simulate 15k optimized attack-to-FREE-sustain DOC handoff
+        run: |
+          iverilog -g2012 -s tb_p2ab_ideal_sustain -o /tmp/tb_ideal boards/a2n20v2-Enhanced/tests/tb_p2ab_ideal_sustain.sv hdl/sound/doc5503.sv
+          vvp /tmp/tb_ideal
       - name: SDK-free BL616 NTP runtime and DOC transport compile
         run: |
           MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host

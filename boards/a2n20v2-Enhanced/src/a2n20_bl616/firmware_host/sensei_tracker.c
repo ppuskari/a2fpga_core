@@ -145,7 +145,7 @@ static bool tracker_begin(uint16_t now)
     tracker_write(REG_STATE,STATE_PLAY);
     s.active=1u;s.finishing=0u;
     sensei_runtime_set_status(SENSEI_RT_PLAYING);
-    osd_log("SENSEI P2AA: NTP V%u NATIVE ONLY",
+    osd_log("SENSEI P2AB: NTP V%u ARP/LOOP AUDIT",
             (unsigned)user_ntp.ntp_version);
     osd_log("SENSEI P2AA: MASK=%02X NONIDEAL=%u",
             (unsigned)s.ntp.audition_mask,
