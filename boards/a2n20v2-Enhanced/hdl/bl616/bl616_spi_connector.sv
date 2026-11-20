@@ -98,21 +98,21 @@ module bl616_spi_connector #(
     output wire [23:0] ssi_spi_rd_addr_o,
     input wire ssi_spi_rd_valid_i,
     input wire [7:0] ssi_spi_rd_data_i,
-    // P1D dedicated tracker transport, XFER SPACE 6.
-    output wire trk_spi_wr_o,
-    output wire [23:0] trk_spi_wr_addr_o,
-    output wire [7:0] trk_spi_wr_data_o,
-    output wire trk_spi_rd_o,
-    output wire [23:0] trk_spi_rd_addr_o,
-    input wire trk_spi_rd_valid_i,
-    input wire [7:0] trk_spi_rd_data_i
+    // Direct MCU-to-HDMI stereo PCM stream on XFER SPACE 6; no DOC mux.
+    output wire pcm_spi_wr_o,
+    output wire [23:0] pcm_spi_wr_addr_o,
+    output wire [7:0] pcm_spi_wr_data_o,
+    output wire pcm_spi_rd_o,
+    output wire [23:0] pcm_spi_rd_addr_o,
+    input wire pcm_spi_rd_valid_i,
+    input wire [7:0] pcm_spi_rd_data_i
 );
 
-    assign trk_spi_wr_o = mem_wr_en && mem_space == 3'd6;
-    assign trk_spi_wr_addr_o = mem_wr_addr;
-    assign trk_spi_wr_data_o = mem_wr_data;
-    assign trk_spi_rd_o = mem_rd_req && mem_rd_space == 3'd6;
-    assign trk_spi_rd_addr_o = mem_rd_addr;
+    assign pcm_spi_wr_o = mem_wr_en && mem_space == 3'd6;
+    assign pcm_spi_wr_addr_o = mem_wr_addr;
+    assign pcm_spi_wr_data_o = mem_wr_data;
+    assign pcm_spi_rd_o = mem_rd_req && mem_rd_space == 3'd6;
+    assign pcm_spi_rd_addr_o = mem_rd_addr;
 
     assign ssi_spi_wr_o=mem_wr_en && (mem_space==3'd4);
     assign ssi_spi_wr_space_o=mem_space;
@@ -722,9 +722,9 @@ module bl616_spi_connector #(
             mem_rd_valid = 1'b1;
             mem_rd_data  = ssi_spi_rd_data_i;
         end
-        else if (trk_spi_rd_valid_i) begin
+        else if (pcm_spi_rd_valid_i) begin
             mem_rd_valid = 1'b1;
-            mem_rd_data  = trk_spi_rd_data_i;
+            mem_rd_data  = pcm_spi_rd_data_i;
         end
     end
 
