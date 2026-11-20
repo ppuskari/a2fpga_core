@@ -54,9 +54,14 @@ bool sensei_ntp_import(const uint8_t *src,size_t len,
                        uint8_t *pat,size_t pat_cap,
                        sensei_ntp_decoded_t *out)
 {
-    ntp_inst_t inst[NTP_MAX_INST+1];
-    uint8_t map[NTP_MAX_INST+1];
-    uint8_t occupancy[256];
+    /* P2Z: this importer is invoked twice per file, serially by the
+     * single Sensei worker. P2Y's 3072-byte FreeRTOS stack cannot hold
+     * these >1 KiB scratch arrays plus the caller's decoder structures.
+     * Store scratch in BSS; memset below reinitializes every pass.
+     * Not reentrant: callers MUST serialize NTP import (as today). */
+    static ntp_inst_t inst[NTP_MAX_INST+1];
+    static uint8_t map[NTP_MAX_INST+1];
+    static uint8_t occupancy[256];
     size_t pos=NTP_HEADER, patterns_start, samples_start;
     unsigned ninst,npat,norder,logical=0,nonideal=0;
     uint8_t version;
