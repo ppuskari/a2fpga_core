@@ -20,6 +20,7 @@
 #define FPGA_SPACE_SDRAM  1  /* SDRAM (byte addressed) */
 #define FPGA_SPACE_FIFO   2  /* Bus event FIFO */
 #define FPGA_SPACE_W5100  3  /* Uthernet2 (W5100) backing store, W5100 addresses */
+#define FPGA_SPACE_PCM    6  /* Direct BL616 signed PCM16LE stereo -> HDMI only */
 
 /* Uthernet2 command-pending doorbell register (bits[3:0] = sockets 0-3).
  * Read to see which sockets have a pending Sn_CR; write 1s to clear. */

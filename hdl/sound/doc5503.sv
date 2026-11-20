@@ -207,11 +207,6 @@ module doc5503 #(
     input reset_n_i,
     input clk_en_i,
 
-    // P2Y-only: native NTP attack-to-sustain first-end retarget.
-    // Enabled exclusively while the MCU tracker owns the Native DOC.
-    // No change to ordinary DOC / MOD / Mockingboard SWAP semantics.
-    input ntp_loop_assist_i,
-
     input cs_n_i,
     input we_n_i,
 
@@ -1025,9 +1020,7 @@ typedef enum logic [$clog2(OSC_STATE_COUNT)-1:0] {
     OSC_HALT,
     OSC_HALT_ONE_SHOT_OR_ZERO_BYTE,
     OSC_START_PARTNER,
-    OSC_RETRIGGER,
-    OSC_NTP_RETARGET_WAIT,
-    OSC_NTP_RETARGET_WRITE
+    OSC_RETRIGGER
 } osc_state_e;
 
 osc_state_e osc_state_r;
@@ -1994,12 +1987,6 @@ task automatic cycle_osc();
         OSC_START_PARTNER:
             osc_start_partner();
 
-        OSC_NTP_RETARGET_WAIT:
-            osc_ntp_retarget_wait();
-
-        OSC_NTP_RETARGET_WRITE:
-            osc_ntp_retarget_write();
-
         OSC_RETRIGGER:
             osc_retrigger();
 
@@ -2615,54 +2602,10 @@ debug_acc_start_pending_r[
     partner_osc_w
 ] <= 1'b1;
 
-    // The historical NinjaTrackerPlus IRQ handler retargeted oscillator
-    // A to the sustain wave after the *first* A completion. It wrote
-    // B's WTP/RTS to A and changed A's IRQ|SWAP into HALT|SWAP.
-    //
-    // Native mode requests this through A CTRL = 0x0E (+ stereo bits).
-    // Gate it on the tracker owner; regular SWAP=0x06 is unchanged.
-    // The partner starts NOW; copying its metadata into the halted
-    // first oscillator takes two additional FSM states, independently
-    // of MCU polling or SPI6 event-queue latency.
-    if(ntp_loop_assist_i && !curr_osc_r[0] &&
-       (curr_control_r[3:1] == 3'b111) &&
-       (partner_control_r[2:1] == 2'b11)) begin
-        ram_wtp_osc_r <= partner_osc_w;
-        ram_rts_osc_r <= partner_osc_w;
-        osc_state_r <= OSC_NTP_RETARGET_WAIT;
-    end else
-        osc_state_r <= OSC_IDLE;
-endtask: osc_start_partner
-
-task automatic osc_ntp_retarget_wait();
-    // Keep the B read addresses selected until the WRITE state samples
-    // them. osc_reg_ram currently has an asynchronous read, and the
-    // global per-cycle default otherwise switches immediately back to A.
-    // Holding B here also tolerates a future synchronous-read variant.
-    ram_wtp_osc_r <= partner_osc_w;
-    ram_rts_osc_r <= partner_osc_w;
-    osc_state_r <= OSC_NTP_RETARGET_WRITE;
-endtask: osc_ntp_retarget_wait
-
-task automatic osc_ntp_retarget_write();
-    // Copy the partner's DOC waveform page and RTS into the halted
-    // first oscillator. Two oscillator metadata RAMs are independent.
-    ram_wtp_osc_r <= curr_osc_r;
-    ram_wtp_din_r <= ram_wtp_dout_w;
-    ram_wtp_we_r <= 1'b1;
-
-    ram_rts_osc_r <= curr_osc_r;
-    ram_rts_din_r <= ram_rts_dout_w;
-    ram_rts_we_r <= 1'b1;
-
-    // Preserve stereo and SWAP, disable IRQ, keep A halted until B ends.
-    ram_control_osc_r <= curr_osc_r;
-    ram_control_din_r <= (curr_control_r & 8'hF7) | 8'h01;
-    ram_control_we_r <= 1'b1;
-    osc_halt_shadow_r[curr_osc_r] <= 1'b1;
-
+    // Always finish the ordinary DOC SWAP partner-start sequence.
+    // Retains the August separately staged HALT and partner-RUN writes.
     osc_state_r <= OSC_IDLE;
-endtask: osc_ntp_retarget_write
+endtask: osc_start_partner
 
 
 

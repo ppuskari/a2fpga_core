@@ -1,85 +1,57 @@
-name: SenseiPlay8 native NTP C/FPGA regression
+name: BL616 MCU MOD direct HDMI PCM (no NTP/DOC tracker)
 on:
   push:
     branches:
-      - petar/sensei8-p2aa-native-ntp-only-20261120
-      - petar/sensei8-p2ab-ntp-arp-sustain-audit-20261120
-      - petar/sensei8-p2ac-arpeggio-pitch-fifo-20261120
+      - petar/mcupcm-hdmi-direct-mod-clean-20261120
   pull_request:
   workflow_dispatch:
 jobs:
-  ntp-native:
+  mcupcm-hdmi:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install SystemVerilog simulator
+      - name: Install Icarus Verilog
         run: sudo apt-get update -qq && sudo apt-get install -y iverilog
-      - name: Native slot mailbox, FIFO and ACK PCM transport
+      - name: Test FPGA stereo PCM bridge only (NO DOC instance)
         run: |
-          iverilog -g2012 -s tb_sensei_tracker_bridge -o /tmp/tb_bridge boards/a2n20v2-Enhanced/hdl/sensei_tracker_bridge.sv boards/a2n20v2-Enhanced/tests/tb_sensei_tracker_bridge.sv
-          vvp /tmp/tb_bridge
-          iverilog -g2012 -s tb_sensei_p2_pcm -o /tmp/tb_pcm boards/a2n20v2-Enhanced/hdl/sensei_tracker_bridge.sv boards/a2n20v2-Enhanced/tests/tb_sensei_p2_pcm.sv
-          vvp /tmp/tb_pcm
-      - name: FPGA first-waveform-end retarget versus unaffected DOC SWAP
+          iverilog -g2012 -s tb_mcu_stereo_pcm_bridge -o /tmp/pcm_sim boards/a2n20v2-Enhanced/hdl/mcu_stereo_pcm_bridge.sv boards/a2n20v2-Enhanced/tests/tb_mcu_stereo_pcm_bridge.sv
+          vvp /tmp/pcm_sim
+      - name: Preserve original IIgs native DOC SWAP with no NTP FSM
         run: |
-          iverilog -g2012 -s tb_p2y_ntp_retarget -o /tmp/tb_ntp boards/a2n20v2-Enhanced/hdl/sensei_tracker_bridge.sv boards/a2n20v2-Enhanced/tests/tb_p2y_ntp_retarget.sv hdl/sound/doc5503.sv
-          vvp /tmp/tb_ntp
-      - name: Simulate 15k optimized attack-to-FREE-sustain DOC handoff
+          iverilog -g2012 -s tb_native_doc_swap_no_ntp -o /tmp/tb_native_doc hdl/sound/doc5503.sv boards/a2n20v2-Enhanced/tests/tb_native_doc_swap_no_ntp.sv
+          vvp /tmp/tb_native_doc
+      - name: Test public-domain HxCMOD pure C stereo module renderer
         run: |
-          iverilog -g2012 -s tb_p2ab_ideal_sustain -o /tmp/tb_ideal boards/a2n20v2-Enhanced/tests/tb_p2ab_ideal_sustain.sv hdl/sound/doc5503.sv
-          vvp /tmp/tb_ideal
-      - name: SDK-free BL616 NTP runtime and DOC transport compile
+          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
+          gcc -std=gnu11 -O2 -I"$MCU/third_party/hxcmod" boards/a2n20v2-Enhanced/tests/test_mcu_hxcmod_pcm.c "$MCU/third_party/hxcmod/hxcmod.c" -o /tmp/hxcmod_test
+          /tmp/hxcmod_test
+      - name: Validate MCU MOD task compiles with SDK-free FreeRTOS mock
         run: |
           MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
           MOCK=boards/a2n20v2-Enhanced/tests/p1d_mock
-          gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only -I"$MOCK" -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware "$MCU/sensei_tracker.c" "$MCU/sensei_ntp_native.c" "$MCU/sensei_runtime.c" "$MCU/sensei_ntp_import.c" "$MCU/sensei_pcm_upload.c" "$MCU/sensei_event_queue.c"
-      - name: Keep NTP import and BL616 worker frames small
-        run: |
-          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
-          MOCK=boards/a2n20v2-Enhanced/tests/p1d_mock
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -fstack-usage -c -I"$MOCK" -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware "$MCU/sensei_tracker.c" -o /tmp/p2aa_tracker.o
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -fstack-usage -c -I"$MOCK" -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware "$MCU/sensei_runtime.c" -o /tmp/p2aa_runtime.o
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -fstack-usage -c -I"$MCU" "$MCU/sensei_ntp_import.c" -o /tmp/p2aa_import.o
-          python3 boards/a2n20v2-Enhanced/tests/check_p2z_stack.py /tmp/p2aa_tracker.su /tmp/p2aa_runtime.su /tmp/p2aa_import.su
-      - name: Native original NTP v2 parsing and byte-exact DOC sample import
-        run: |
-          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -I"$MCU" boards/a2n20v2-Enhanced/tests/test_p2aa_ntp_import.c "$MCU/sensei_ntp_import.c" -o /tmp/test_ntp_import
-          /tmp/test_ntp_import
-      - name: Native FAT selector to DOC bank, no shadow MOD allocation
-        run: |
-          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" boards/a2n20v2-Enhanced/tests/test_p2aa_runtime.c "$MCU/sensei_runtime.c" "$MCU/sensei_ntp_import.c" -o /tmp/test_ntp_runtime
-          /tmp/test_ntp_runtime
-      - name: Native NinjaTrackerPlus note, loop, effects and order flow
-        run: |
-          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -I"$MCU" boards/a2n20v2-Enhanced/tests/test_p2y_ntp_native.c "$MCU/sensei_ntp_native.c" -o /tmp/test_native
-          /tmp/test_native
-      - name: DOC PCM uploader success/error path
-        run: |
-          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/tests/test_p2_pcm_upload.c "$MCU/sensei_pcm_upload.c" -o /tmp/test_pcm
-          /tmp/test_pcm
-      - name: Reject production MOD dependencies and verify FPGA transport
+          gcc -std=gnu11 -Wall -Wextra -Werror -fsyntax-only -I"$MOCK" -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware -DHXCMOD_MAXCHANNELS=4 "$MCU/mcu_mod_audio.c"
+      - name: Refuse any active NTP/MCU-to-DOC integration
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          h=Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host")
-          cm=(h/"CMakeLists.txt").read_text()
-          rt=(h/"sensei_runtime.c").read_text()
-          tr=(h/"sensei_tracker.c").read_text()
-          im=(h/"sensei_ntp_import.c").read_text()
-          menu=(h/"menu.c").read_text()
-          assert "sensei_mod_player.c" not in cm and "sensei_mod_decode.c" not in cm
-          assert "sensei_mod_" not in tr and "sensei_mod_" not in rt
-          assert "ntp_patterns" not in rt and "pat[k]" not in im
-          assert 'k_mod_exts[] = {"ntp",NULL}' in menu
-          top=Path("boards/a2n20v2-Enhanced/hdl/top.sv").read_text()
+          root=Path("boards/a2n20v2-Enhanced")
+          m=root/"src/a2n20_bl616/firmware_host"
+          top=(root/"hdl/top.sv").read_text()
           glu=Path("hdl/sound/sound_glu.sv").read_text()
-          assert "pcm_ram_owner_o(trk_pcm_owner_w)" in top
-          assert "tracker_ram_ready_o(trk_pcm_ready_w)" in top
-          assert "tracker_owner_w" in glu and "ntp_loop_assist_i(tracker_owner_w)" in glu
-          print("PASS P2AA: native-only MCU, no old MOD or score-conversion dependencies")
-          print("PASS P2AA: unchanged FPGA PCM DMA, FIFO and NTP sustain assist")
+          spi=(root/"hdl/bl616/bl616_spi_connector.sv").read_text()
+          cm=(m/"CMakeLists.txt").read_text()
+          gowin=(root/"a2n20v2_enhanced.gprj").read_text()
+          assert "sensei_" not in cm and "sensei_tracker" not in top
+          assert not any(x in glu for x in ("tracker_owner_i","tracker_doc_wr_i","tracker_ram_owner_i","tracker_pcm_owner_w"))
+          assert 'ntp_loop_assist' not in glu
+          assert 'OSC_NTP_' not in Path('hdl/sound/doc5503.sv').read_text()
+          assert "mcu_stereo_pcm_bridge" in top and "hdl/mcu_stereo_pcm_bridge.sv" in gowin
+          assert "hdl/sensei_tracker_bridge.sv" not in gowin
+          assert "pcm_spi_wr_o" in spi and "trk_spi_wr_o" not in spi
+          assert 'k_mod_exts[] = {"mod",NULL}' in (m/"menu.c").read_text()
+          assert "third_party/hxcmod/hxcmod.c" in cm
+          assert "mod_audio_task" in (m/"main.c").read_text()
+          assert ".tracker_" not in top
+          print("PASS: no NTP C player, no FPGA NTP mailbox, no native DOC ownership")
+          print("PASS: independent MCU stereo PCM->HDMI and native IIgs GLU still enabled")
           PY

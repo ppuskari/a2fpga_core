@@ -475,15 +475,13 @@ module top #(
     wire [1:0] mcu_audio_mode_w;
     wire [1:0] audio_active_route_w;
 
-    // P1D tracker SPI SPACE 6, native-slot mailbox, and DOC owner.
-    wire trk_spi_wr_w, trk_spi_rd_w, trk_spi_rd_valid_w;
-    wire [23:0] trk_spi_wr_addr_w, trk_spi_rd_addr_w;
-    wire [7:0] trk_spi_wr_data_w, trk_spi_rd_data_w;
-    wire trk_slot_rd_w, trk_doc_owner_w, trk_doc_wr_w;
-    wire [7:0] trk_slot_data_w, trk_doc_addr_w, trk_doc_data_w;
-    wire trk_pcm_owner_w, trk_pcm_wr_w, trk_pcm_ready_w;
-    wire [20:0] trk_pcm_addr_w;
-    wire [31:0] trk_pcm_data_w;
+    // MCU software MOD renderer: stereo PCM, SPI SPACE 6 -> HDMI ONLY.
+    // Native IIgs and MB Ensoniq DOC paths are untouched by this stream.
+    wire pcm_spi_wr_w, pcm_spi_rd_w, pcm_spi_rd_valid_w;
+    wire [23:0] pcm_spi_wr_addr_w, pcm_spi_rd_addr_w;
+    wire [7:0] pcm_spi_wr_data_w, pcm_spi_rd_data_w;
+    wire signed [15:0] pcm_audio_l_w, pcm_audio_r_w;
+    wire [15:0] pcm_audio_l_pixel_w, pcm_audio_r_pixel_w;
 
     slotmaker slotmaker (
         .a2bus_if(a2bus_if),
@@ -689,13 +687,13 @@ module top #(
         .ssi_spi_rd_addr_o(hybrid_spi_rd_addr_w),
         .ssi_spi_rd_valid_i(hybrid_spi_rd_valid_w),
         .ssi_spi_rd_data_i(hybrid_spi_rd_data_w),
-        .trk_spi_wr_o(trk_spi_wr_w),
-        .trk_spi_wr_addr_o(trk_spi_wr_addr_w),
-        .trk_spi_wr_data_o(trk_spi_wr_data_w),
-        .trk_spi_rd_o(trk_spi_rd_w),
-        .trk_spi_rd_addr_o(trk_spi_rd_addr_w),
-        .trk_spi_rd_valid_i(trk_spi_rd_valid_w),
-        .trk_spi_rd_data_i(trk_spi_rd_data_w)
+        .pcm_spi_wr_o(pcm_spi_wr_w),
+        .pcm_spi_wr_addr_o(pcm_spi_wr_addr_w),
+        .pcm_spi_wr_data_o(pcm_spi_wr_data_w),
+        .pcm_spi_rd_o(pcm_spi_rd_w),
+        .pcm_spi_rd_addr_o(pcm_spi_rd_addr_w),
+        .pcm_spi_rd_valid_i(pcm_spi_rd_valid_w),
+        .pcm_spi_rd_data_i(pcm_spi_rd_data_w)
     );
 
     assign ws2812 = mcu_ws2812_w;
@@ -710,11 +708,11 @@ module top #(
     assign slotmaker_config_if.reconfig = 1'b0;
 
     assign mcu_audio_mode_w = 2'd0; // legacy Enhanced personality without MCU
-    assign trk_spi_wr_w = 1'b0;
-    assign trk_spi_rd_w = 1'b0;
-    assign trk_spi_wr_addr_w = 24'b0;
-    assign trk_spi_rd_addr_w = 24'b0;
-    assign trk_spi_wr_data_w = 8'b0;
+    assign pcm_spi_wr_w = 1'b0;
+    assign pcm_spi_rd_w = 1'b0;
+    assign pcm_spi_wr_addr_w = 24'b0;
+    assign pcm_spi_rd_addr_w = 24'b0;
+    assign pcm_spi_wr_data_w = 8'b0;
 
     // No BL616: Uthernet2 backing store has no host -- tie the link idle
     assign u2_host_wr_w    = 1'b0;
@@ -1157,38 +1155,32 @@ wire [7:0] doc_128k_status_w;
         !a2bus_if.sw_gs && !slot_if.dev_select_n &&
         (slot_if.card_id == MOCKINGBOARD_ID) && a2bus_if.phi0;
 
-    // Native IIe C0nA-C0nF tracker mailbox. SPI XFER SPACE 6 is
-    // independent of the existing 4/5 SSI263 transport.
-    sensei_tracker_bridge #(
-        .CLOCK_HZ(CLOCK_SPEED_HZ),
-        .FIFO_AW(6)
-    ) sensei_tracker (
+    // Direct 44.1 kHz stereo PCM bridge (full replacement for tracker).
+    // It does NOT use the DOC, native slot mailbox, or DOC SDRAM ports.
+    mcu_stereo_pcm_bridge #(.PCM_AW(11)) mcu_stereo_pcm (
         .clk(clk_logic_w),
-        .rst_n(device_reset_n_w && a2bus_if.system_reset_n),
-        .native_enabled_i(audio_native_doc_w),
-        .slot_selected_i(native_doc_slot_w),
-        .slot_addr_i(a2bus_if.addr[3:0]),
-        .slot_data_i(a2bus_if.data),
-        .slot_rw_n_i(a2bus_if.rw_n),
-        .slot_write_strobe_i(a2bus_if.data_in_strobe),
-        .slot_read_o(trk_slot_rd_w),
-        .slot_rdata_o(trk_slot_data_w),
-        .spi_wr_i(trk_spi_wr_w),
-        .spi_wr_addr_i(trk_spi_wr_addr_w),
-        .spi_wr_data_i(trk_spi_wr_data_w),
-        .spi_rd_i(trk_spi_rd_w),
-        .spi_rd_addr_i(trk_spi_rd_addr_w),
-        .spi_rd_valid_o(trk_spi_rd_valid_w),
-        .spi_rd_data_o(trk_spi_rd_data_w),
-        .doc_owner_o(trk_doc_owner_w),
-        .doc_wr_o(trk_doc_wr_w),
-        .doc_addr_o(trk_doc_addr_w),
-        .doc_data_o(trk_doc_data_w),
-        .pcm_ram_owner_o(trk_pcm_owner_w),
-        .pcm_ram_wr_o(trk_pcm_wr_w),
-        .pcm_ram_addr_o(trk_pcm_addr_w),
-        .pcm_ram_data_o(trk_pcm_data_w),
-        .pcm_ram_ready_i(trk_pcm_ready_w)
+        .rst_n(device_reset_n_w),
+        .audio_tick_pixel_i(clk_audio_w),
+        .spi_wr_i(pcm_spi_wr_w),
+        .spi_wr_addr_i(pcm_spi_wr_addr_w),
+        .spi_wr_data_i(pcm_spi_wr_data_w),
+        .spi_rd_i(pcm_spi_rd_w),
+        .spi_rd_addr_i(pcm_spi_rd_addr_w),
+        .spi_rd_valid_o(pcm_spi_rd_valid_w),
+        .spi_rd_data_o(pcm_spi_rd_data_w),
+        .pcm_left_o(pcm_audio_l_w),
+        .pcm_right_o(pcm_audio_r_w)
+    );
+
+    cdc_sampling #(.WIDTH(16)) pcm_to_hdmi_l (
+        .rst_n(device_reset_n_w), .clk_fast(clk_logic_w),
+        .clk_slow(clk_pixel_w), .data_in(pcm_audio_l_w),
+        .data_out(pcm_audio_l_pixel_w)
+    );
+    cdc_sampling #(.WIDTH(16)) pcm_to_hdmi_r (
+        .rst_n(device_reset_n_w), .clk_fast(clk_logic_w),
+        .clk_slow(clk_pixel_w), .data_in(pcm_audio_r_w),
+        .data_out(pcm_audio_r_pixel_w)
     );
 
     sound_glu #(
@@ -1208,16 +1200,6 @@ wire [7:0] doc_128k_status_w;
         .mb_doc_wr_i(mb_doc_wr_w),
         .mb_doc_addr_i(mb_doc_addr_w),
         .mb_doc_data_i(mb_doc_data_w),
-        .tracker_owner_i(trk_doc_owner_w),
-        .tracker_doc_wr_i(trk_doc_wr_w),
-        .tracker_doc_addr_i(trk_doc_addr_w),
-        .tracker_doc_data_i(trk_doc_data_w),
-        .tracker_ram_owner_i(trk_pcm_owner_w),
-        .tracker_ram_wr_i(trk_pcm_wr_w),
-        .tracker_ram_addr_i(trk_pcm_addr_w),
-        .tracker_ram_data_i(trk_pcm_data_w),
-        .tracker_ram_ready_o(trk_pcm_ready_w),
-
         .mb_ram_wr_i(mb_ram_wr_w),
         .mb_ram_addr_i(mb_ram_addr_w),
         .mb_ram_data_i(mb_ram_data_w),
@@ -1618,11 +1600,10 @@ wire [7:0] doc_128k_status_w;
     // Data output
 
     wire mb_bus_rd_w = mb_rd && audio_mb_enabled_w;
-    assign data_out_en_w = trk_slot_rd_w || ssp_rd || mb_bus_rd_w ||
+    assign data_out_en_w = ssp_rd || mb_bus_rd_w ||
         sg_rd_w || ssc_rd || u2_rd || diskii_rd || hdd_rd || cardrom_rd;
 
-    assign data_out_w = trk_slot_rd_w ? trk_slot_data_w :
-        ssc_rd ? ssc_d_w :
+    assign data_out_w = ssc_rd ? ssc_d_w :
         ssp_rd ? ssp_d_w :
         sg_rd_w ? sg_d_w :
         mb_bus_rd_w ? mb_d_w :
@@ -2017,18 +1998,44 @@ wire [15:0] audio_sample_word[1:0];
         end
     end
 
-    assign audio_sample_word[0] = audio_enhanced_w ?
+    // Existing calibrated DOC/MB/SSI path. Remains bit-for-bit identical
+    // when the new MOD stream is stopped (PCM zeros).
+    wire signed [15:0] audio_core_gained_l_w, audio_core_gained_r_w;
+    assign audio_core_gained_l_w = audio_enhanced_w ?
         mb_doc_gain_minus_2db($signed(audio_sample_word_raw[0])) :
         audio_original_w ?
         mb_original_final_minus_2db($signed(audio_sample_word_raw[0])) :
         hdmi_gain_plus_3db($signed(audio_sample_word_raw[0]));
 
-    assign audio_sample_word[1] = audio_enhanced_w ?
+    assign audio_core_gained_r_w = audio_enhanced_w ?
         mb_doc_gain_minus_2db($signed(audio_sample_word_raw[1])) :
         audio_original_w ?
         mb_original_final_minus_2db($signed(audio_sample_word_raw[1])) :
         hdmi_gain_plus_3db($signed(audio_sample_word_raw[1]));
 
+
+    // Mix MCU-rendered stereo PCM AFTER the pre-existing hardware gain,
+    // never through the DOC or 8x Enhanced-MB gain. Half-level reduces
+    // clipping when both the IIgs and MCU synth are producing music.
+    function automatic signed [15:0] pcm_hdmi_sat_mix;
+        input signed [15:0] native_sample;
+        input signed [15:0] mcu_sample;
+        logic signed [17:0] summed;
+    begin
+        summed = $signed({{2{native_sample[15]}},native_sample}) +
+                 ($signed({{2{mcu_sample[15]}},mcu_sample}) >>> 1);
+        if(summed > 18'sd32767)
+            pcm_hdmi_sat_mix=16'sh7fff;
+        else if(summed < -18'sd32768)
+            pcm_hdmi_sat_mix=16'sh8000;
+        else
+            pcm_hdmi_sat_mix=summed[15:0];
+    end
+    endfunction
+    assign audio_sample_word[0] = pcm_hdmi_sat_mix(
+        audio_core_gained_l_w,$signed(pcm_audio_l_pixel_w));
+    assign audio_sample_word[1] = pcm_hdmi_sat_mix(
+        audio_core_gained_r_w,$signed(pcm_audio_r_pixel_w));
 
 
     // HDMI

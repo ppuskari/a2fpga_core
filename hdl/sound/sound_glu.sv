@@ -46,21 +46,6 @@ module sound_glu #(
     input  logic [7:0] mb_doc_addr_i,
     input  logic [7:0] mb_doc_data_i,
 
-    // P1D: exclusive MCU/FPGA tracker register owner. Active only for the
-    // native IIe DOC personality and only AFTER 6502 sample preload.
-    input  logic       tracker_owner_i,
-    input  logic       tracker_doc_wr_i,
-    input  logic [7:0] tracker_doc_addr_i,
-    input  logic [7:0] tracker_doc_data_i,
-
-    // P2 MCU DMA: 32-bit word-addressed direct DOC SDRAM upload.
-    // This port is exclusively enabled in Enhanced Native/Shared audio.
-    input  logic        tracker_ram_owner_i,
-    input  logic        tracker_ram_wr_i,
-    input  logic [20:0] tracker_ram_addr_i,
-    input  logic [31:0] tracker_ram_data_i,
-    output logic        tracker_ram_ready_o,
-
     // Exclusive MB-DOC waveform preload uses the existing GLU
     // SDRAM write port; DOC oscillator fetch stays on DOC_MEM_PORT.
     input  logic        mb_ram_wr_i,
@@ -303,10 +288,6 @@ assign debug_128k_status_o =
 
     assign mb_ram_ready_o =
         mb_owner_w && !USE_BSRAM && glu_mem_if.ready;
-    wire tracker_pcm_owner_w = ENABLE && MB_DOC_MODE && native_owner_w &&
-        tracker_ram_owner_i;
-    assign tracker_ram_ready_o = tracker_pcm_owner_w &&
-        !USE_BSRAM && glu_mem_if.ready;
 
     // GLU mem_if driven to DDR3 when USE_BSRAM=0, idle when USE_BSRAM=1
     generate
@@ -319,22 +300,15 @@ assign debug_128k_status_o =
             assign glu_mem_if.burst = 1'b0;
         end else begin : gen_glu_ddr3
             assign glu_mem_if.rd = '0;
-            // GS and MB sample loader never own RAM together.
-            // Preserve the exact original GS path in mode 0.
-            // The active tracker PCM upload wins over native CPU
-            // writes until DMA END; Mockingboard is a different mode.
-            assign glu_mem_if.addr = mb_owner_w ?
-                mb_ram_addr_i : tracker_pcm_owner_w ?
-                tracker_ram_addr_i : glu_mem_addr_r;
-            assign glu_mem_if.wr = mb_owner_w ?
-                mb_ram_wr_i : tracker_pcm_owner_w ?
-                tracker_ram_wr_i : glu_mem_wr_r;
+            // The IIgs-native GLU and the Mockingboard sample loader
+            // remain exactly as their original exclusive personalities.
+            // The MCU MOD player NEVER owns DOC SDRAM or registers.
+            assign glu_mem_if.addr = mb_owner_w ? mb_ram_addr_i : glu_mem_addr_r;
+            assign glu_mem_if.wr = mb_owner_w ? mb_ram_wr_i : glu_mem_wr_r;
             assign glu_mem_if.byte_en = mb_owner_w ?
-                mb_ram_byte_en_i : tracker_pcm_owner_w ?
-                4'hF : glu_mem_byte_en_r;
+                mb_ram_byte_en_i : glu_mem_byte_en_r;
             assign glu_mem_if.data = mb_owner_w ?
-                mb_ram_data_i : tracker_pcm_owner_w ?
-                tracker_ram_data_i :
+                mb_ram_data_i :
                 {a2bus_if.data, a2bus_if.data,
                  a2bus_if.data, a2bus_if.data};
             assign glu_mem_if.burst = 1'b0;
@@ -782,29 +756,18 @@ assign debug_internal_ctrl_data_o =
     debug_internal_ctrl_data_w;
 
     
-    // Both personalities own this single DOC5503 exclusively.
-    // Preserve the original GS data path exactly for MODE=0:
-    // a2bus_if.data is intentionally used in the golden design.
-    // The bridge must present a synchronous one-shot write with
-    // its own stable address and data; it will be wired in P2.
-    wire tracker_owner_w = MB_DOC_MODE && native_owner_w &&
-        tracker_owner_i;
-    wire doc_host_wr_w = mb_owner_w ? mb_doc_wr_i :
-        tracker_owner_w ? tracker_doc_wr_i : doc_wr_r;
-    wire doc_host_rd_w = !mb_owner_w && !tracker_owner_w && doc_rd_r;
-    wire [7:0] doc_host_addr_w =
-        mb_owner_w ? mb_doc_addr_i :
-        tracker_owner_w ? tracker_doc_addr_i : doc_addr_r;
-    wire [7:0] doc_host_data_w =
-        mb_owner_w ? mb_doc_data_i :
-        tracker_owner_w ? tracker_doc_data_i : a2bus_if.data;
+    // Native IIgs GLU or enhanced Mockingboard owns DOC exclusively.
+    // The MCU's stereo MOD stream is mixed downstream into HDMI only.
+    wire doc_host_wr_w = mb_owner_w ? mb_doc_wr_i : doc_wr_r;
+    wire doc_host_rd_w = !mb_owner_w && doc_rd_r;
+    wire [7:0] doc_host_addr_w = mb_owner_w ? mb_doc_addr_i : doc_addr_r;
+    wire [7:0] doc_host_data_w = mb_owner_w ? mb_doc_data_i : a2bus_if.data;
 
     doc5503 #(
     ) doc5503 (
         .clk_i(a2bus_if.clk_logic),
         .reset_n_i(a2bus_if.system_reset_n),
         .clk_en_i(a2bus_if.clk_7M_posedge),
-        .ntp_loop_assist_i(tracker_owner_w),
         .cs_n_i(~(doc_host_wr_w || doc_host_rd_w)),
         .we_n_i(~doc_host_wr_w),
         .addr_i(doc_host_addr_w),

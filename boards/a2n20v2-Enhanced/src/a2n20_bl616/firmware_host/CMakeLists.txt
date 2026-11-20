@@ -26,6 +26,8 @@ sdk_add_link_options(-Wl,--wrap=exception_entry)
 # sdmm.c must export its SD logic as mmc_disk_* instead of owning disk_*.
 sdk_add_compile_definitions(-DFATFS_EXTERNAL_DISKIO)
 
+sdk_add_compile_definitions(-DHXCMOD_MAXCHANNELS=4)
+
 target_sources(app PRIVATE
     usbh_xinput.c
     usbh_hidinput.c
@@ -35,12 +37,9 @@ target_sources(app PRIVATE
     ../../../../../reference/ssi263/pico-v1.0.1/ssi263dsp.c
     w5100.c
     disk.c
-    sensei_tracker.c
-    sensei_event_queue.c
-    sensei_ntp_import.c
-    sensei_ntp_native.c
-    sensei_runtime.c
-    sensei_pcm_upload.c
+    # Software ProTracker playback -> independent HDMI PCM (no DOC ownership).
+    mcu_mod_audio.c
+    third_party/hxcmod/hxcmod.c
     diskio_host.c
     osd_console.c
     settings.c
