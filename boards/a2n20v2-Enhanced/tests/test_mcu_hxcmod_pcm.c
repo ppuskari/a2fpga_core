@@ -23,6 +23,8 @@ int main(void)
     // 4ch, first row CH0 C-3 period 428 with sample #1
     mod[1084]=0x01;mod[1085]=0xAC;
     mod[1086]=0x10;mod[1087]=0x00;
+    mod[1088]=0x01;mod[1089]=0xAC; // CH1 routes opposite stereo
+    mod[1090]=0x10;mod[1091]=0x00;
     for(unsigned i=0;i<128u;i++)
         mod[1084+1024+i]=(uint8_t)(i<64?i*2u:255u-(i-64u)*2u);
     check(hxcmod_init(&ctx),"initialization");
