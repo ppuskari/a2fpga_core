@@ -96,6 +96,7 @@ Stage2 application is at 0x40000.
 ## Hardware acceptance order
 
 1. Native DOC mode, P2Y FPGA in SRAM, select 15k.ntp.
+   Expect OSD `SENSEI P2AB: NTP V2 ARP/LOOP AUDIT`.
 2. Compare melody runs in the later half, especially channel 2's
    empty-note `0xy` blocks (around orders 3–5).
 3. Compare original first-attack and later sustain, separately; P2AB
