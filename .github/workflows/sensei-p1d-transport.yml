@@ -39,7 +39,8 @@ jobs:
           gowin=(root/"a2n20v2_enhanced.gprj").read_text()
           assert "sensei_" not in cm and "sensei_tracker" not in top
           assert not any(x in glu for x in ("tracker_owner_i","tracker_doc_wr_i","tracker_ram_owner_i","tracker_pcm_owner_w"))
-          assert ".ntp_loop_assist_i(1'b0)" in glu
+          assert 'ntp_loop_assist' not in glu
+          assert 'OSC_NTP_' not in Path('hdl/sound/doc5503.sv').read_text()
           assert "mcu_stereo_pcm_bridge" in top and "hdl/mcu_stereo_pcm_bridge.sv" in gowin
           assert "hdl/sensei_tracker_bridge.sv" not in gowin
           assert "pcm_spi_wr_o" in spi and "trk_spi_wr_o" not in spi
