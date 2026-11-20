@@ -149,9 +149,9 @@ int main(void)
     printf("PASS P2Y: native NTP E60/E61 finite pattern loop and song stop\n");
 
     /* Actual 15k.ntp has eight CH2 arpeggio rows with no explicit
-     * note or instrument. Reference 65816 setup_arpeggio takes the
-     * saved root and restarts the oscillator on tick zero; subsequent
-     * arpeggio effect ticks restart at transposed semitones. */
+     * note or instrument. Keep the P2AB root recovery at tick zero.
+     * P2AC emits only four pitch register writes on effect ticks,
+     * never restarting the DOC sample/attack or clogging the FIFO. */
     memset(patterns,0,sizeof patterns);
     row(0,0,0,25,1,0,0);
     row(0,1,0,0,0,0,0x37);
@@ -165,16 +165,22 @@ int main(void)
             last(0xA0)==0x1Eu && last(0)==161,
             "0xy empty-note row restarts the saved root");
     n=0;tick(1);
-    require(s.note_starts[0]==starts+2u && last(0)==192,
-            "arpeggio first semitone effect restarts the DOC oscillator");
+    require(s.note_starts[0]==starts+1u && n==4u &&
+            last(0)==192 && last(1)==192 &&
+            last(0xA0)==-1 && last(0x80)==-1,
+            "arpeggio +3 must set FC only, no 16-write sample retrigger");
     n=0;tick(1);
-    require(s.note_starts[0]==starts+3u && last(0)==242,
-            "arpeggio second semitone effect restarts the DOC oscillator");
+    require(s.note_starts[0]==starts+1u && n==4u &&
+            last(0)==242 && last(1)==242 &&
+            last(0xA0)==-1,
+            "arpeggio +7 must preserve DOC attack/sustain state");
     n=0;tick(1);
-    require(s.note_starts[0]==starts+4u && last(0)==161,
-            "third effect tick restarts root instead of detuning note");
+    require(s.note_starts[0]==starts+1u && n==4u &&
+            last(0)==161 && last(1)==161 &&
+            last(0xA0)==-1,
+            "third arpeggio tick must return to exact root FC");
     tick(2);tick(1);
     require(sensei_ntp_done(&s),"arpeggio fixture stops at F00");
-    printf("PASS P2AB: 15k note-less 0xy and per-tick NTP arpeggio retrigger\n");
+    printf("PASS P2AC: note-less 0xy root start + 4-event pitch-only ticks\n");
     return 0;
 }
