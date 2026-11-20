@@ -768,7 +768,6 @@ assign debug_internal_ctrl_data_o =
         .clk_i(a2bus_if.clk_logic),
         .reset_n_i(a2bus_if.system_reset_n),
         .clk_en_i(a2bus_if.clk_7M_posedge),
-        .ntp_loop_assist_i(1'b0),
         .cs_n_i(~(doc_host_wr_w || doc_host_rd_w)),
         .we_n_i(~doc_host_wr_w),
         .addr_i(doc_host_addr_w),
