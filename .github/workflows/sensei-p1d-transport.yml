@@ -16,6 +16,10 @@ jobs:
         run: |
           iverilog -g2012 -s tb_mcu_stereo_pcm_bridge -o /tmp/pcm_sim boards/a2n20v2-Enhanced/hdl/mcu_stereo_pcm_bridge.sv boards/a2n20v2-Enhanced/tests/tb_mcu_stereo_pcm_bridge.sv
           vvp /tmp/pcm_sim
+      - name: Preserve original IIgs native DOC SWAP with no NTP FSM
+        run: |
+          iverilog -g2012 -s tb_native_doc_swap_no_ntp -o /tmp/tb_native_doc hdl/sound/doc5503.sv boards/a2n20v2-Enhanced/tests/tb_native_doc_swap_no_ntp.sv
+          vvp /tmp/tb_native_doc
       - name: Test public-domain HxCMOD pure C stereo module renderer
         run: |
           MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
