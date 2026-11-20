@@ -1294,7 +1294,9 @@ int main(void)
 
     /* SenseiPlay8 tracker is dormant until an IIe command arrives.
      * Uses dedicated SPI SPACE 6, never alters legacy audio personalities. */
-    usb_osal_thread_create("sensei", 3072, CONFIG_USBHOST_PSC_PRIO + 1,
+    /* P2Z: protect the FAT importer -> parser -> PCM DMA nested call
+     * stack. Player/decoder scratch is moved to BSS separately. */
+    usb_osal_thread_create("sensei", 4096, CONFIG_USBHOST_PSC_PRIO + 1,
                            sensei_tracker_task, NULL);
 
     /* R8: keep speech below BOTH the USB PSC host-service task (28)

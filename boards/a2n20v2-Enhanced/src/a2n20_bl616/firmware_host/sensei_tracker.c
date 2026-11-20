@@ -352,12 +352,17 @@ static bool tracker_begin_runtime(tracker_state *s,
 void sensei_tracker_task(void *unused)
 {
     uint8_t st[13];
-    tracker_state s;
+    /* P2Z: BL616 Sensei task has only 3072 bytes of stack. P2Y added
+     * the native NTP state alongside the existing MOD state; allocating
+     * both in this task frame leaves too little room for the nested
+     * FAT load -> format parser call chain. Single Sensei worker owns it. */
+    static tracker_state s;
     static sensei_runtime_module_t user_mod;
     char requested_mod[SENSEI_PATH_CAP];
     (void)unused;
     memset(&s,0,sizeof s);
     s.last_seq=0xFF;
+    osd_log("SENSEI P2Z: STATIC TRACKER STATE");
 
     for (;;) {
         uint16_t now;
@@ -376,9 +381,11 @@ void sensei_tracker_task(void *unused)
                 capability!=0x42) {
                 sensei_runtime_set_status(SENSEI_RT_ERROR);
                 osd_log("SENSEI P2: NEED NATIVE DOC AND P2 FPGA");
-            } else if (!sensei_runtime_load(requested_mod,&user_mod)) {
-                osd_log("SENSEI P2V: BAD MOD/NTP OR UNSUPPORTED");
             } else {
+                osd_log("SENSEI P2Z: FAT FILE LOAD");
+                if (!sensei_runtime_load(requested_mod,&user_mod)) {
+                    osd_log("SENSEI P2Z: BAD MOD/NTP OR UNSUPPORTED");
+                } else {
                 uint8_t ntp_assist_cap=0u;
                 if(user_mod.source_ntp)
                     fpga_spi_xfer_read(TRACK_SPACE,0x2Bu,&ntp_assist_cap,1);
@@ -390,6 +397,8 @@ void sensei_tracker_task(void *unused)
                     sensei_runtime_set_status(SENSEI_RT_ERROR);
                     osd_log("SENSEI P2Y: REQUIRES P2Y FPGA");
                 } else {
+                osd_log("SENSEI P2Z: PCM SIZE=%lu",
+                        (unsigned long)user_mod.pcm_length);
                 tracker_write(REG_STATE,5); /* LOADING SAMPLES */
                 sensei_runtime_set_status(SENSEI_RT_LOADING);
                 if (!sensei_pcm_upload(user_mod.pcm,user_mod.pcm_length)) {
@@ -397,6 +406,7 @@ void sensei_tracker_task(void *unused)
                     sensei_runtime_set_status(SENSEI_RT_ERROR);
                     osd_log("SENSEI P2: DOC PCM UPLOAD FAILED");
                 } else {
+                    osd_log("SENSEI P2Z: DOC PCM DMA VERIFIED");
                     // Re-read FPGA time because upload may take seconds.
                     tracker_read(st);
                     uint16_t start_time=(uint16_t)st[8] |
@@ -408,6 +418,7 @@ void sensei_tracker_task(void *unused)
                         sensei_runtime_set_status(SENSEI_RT_ERROR);
                     }
                     tracker_read(st);
+                }
                 }
                 }
             }
