@@ -72,7 +72,7 @@ jobs:
           top=Path("boards/a2n20v2-Enhanced/hdl/top.sv").read_text()
           glu=Path("hdl/sound/sound_glu.sv").read_text()
           assert "pcm_ram_owner_o(trk_pcm_owner_w)" in top
-          assert "tracker_ram_ready_o(trk_pcm_ready_w)" in glu
+          assert "tracker_ram_ready_o(trk_pcm_ready_w)" in top
           assert "tracker_owner_w" in glu and "ntp_loop_assist_i(tracker_owner_w)" in glu
           print("PASS P2AA: native-only MCU, no old MOD or score-conversion dependencies")
           print("PASS P2AA: unchanged FPGA PCM DMA, FIFO and NTP sustain assist")
