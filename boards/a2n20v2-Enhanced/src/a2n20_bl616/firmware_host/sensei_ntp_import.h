@@ -8,8 +8,8 @@
  * contains DOC-offset 8-bit PCM. We copy those bytes without any conversion,
  * including NTP's chosen zero sentinels and its loop optimizations.
  *
- * This first pass reuses the P2U ProTracker effect scheduler after mapping
- * NTP notes to periods; it is NOT a port of the NTP 65816 replay engine.
+ * The raw pattern byte stream is consumed exclusively by sensei_ntp_native.c.
+ * No ProTracker conversion or synthetic pattern allocation exists.
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -30,13 +30,12 @@ typedef struct {
     uint8_t irq_instruments[32]; /* type-2/nonideal-sustain must retarget */
 } sensei_ntp_decoded_t;
 /*
- * Two-pass API: first call with pcm==NULL,patterns==NULL for lengths.
- * Second call with both buffers provided. Audio bytes are not transformed.
+ * Two-pass API: first call with pcm==NULL for lengths/metadata.
+ * Second call copies only DOC PCM. Audio bytes are not transformed.
  * Versions 0 and 2, four tracks, no streaming, max 31 logical instruments;
  * reject unsupported variants before uploading sound RAM.
  */
 bool sensei_ntp_import(const uint8_t *ntp,size_t len,
                        uint8_t *pcm,size_t pcm_cap,
-                       uint8_t *patterns,size_t patterns_cap,
                        sensei_ntp_decoded_t *out);
 #endif

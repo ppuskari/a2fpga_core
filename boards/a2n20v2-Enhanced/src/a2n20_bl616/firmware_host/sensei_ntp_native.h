@@ -10,7 +10,7 @@
  */
 #include <stdbool.h>
 #include <stdint.h>
-#include "sensei_mod_player.h" /* sensei_doc_event_t callback ABI */
+#include "sensei_doc_event.h" /* standalone timestamped DOC write callback */
 
 typedef struct {
     uint8_t note, instrument, raw_instrument, volume, effect, arg;

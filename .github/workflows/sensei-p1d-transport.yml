@@ -1,105 +1,79 @@
-name: SenseiPlay8 P1D tracker transport validation
+name: SenseiPlay8 native NTP C/FPGA regression
 on:
   push:
     branches:
-      - petar/sensei8-p1d-mcu-fpga-20261118
-      - petar/sensei8-p1e-real-mods-20261118
-      - petar/sensei8-p2-runtime-mod-picker-20261118
-      - petar/sensei8-p2-playable-20261118
-      - petar/sensei8-p2-attack-sustain-20261118
-      - petar/sensei8-p2s-lossless-fifo-20261118
-      - petar/sensei8-p2t-panning-pitch-20261118
-      - petar/sensei8-p2u-right-channel-audit-20261119
-      - petar/sensei8-p2v-ntp-sample-bypass-20261119
-      - petar/sensei8-p2w-ntp-v2-import-20261119
-      - petar/sensei8-p2x-ntp-stereo-parity-20261119
-      - petar/sensei8-p2y-native-ntp-fpga-retarget-20261119
-      - petar/sensei8-p2z-ntp-stack-safety-20261120
+      - petar/sensei8-p2aa-native-ntp-only-20261120
   pull_request:
   workflow_dispatch:
 jobs:
-  p1d-protocol-and-mcu-c:
+  ntp-native:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install SystemVerilog simulator
         run: sudo apt-get update -qq && sudo apt-get install -y iverilog
-      - name: Validate FPGA native-slot mailbox and SPI6 scheduler
+      - name: Native slot mailbox, FIFO and ACK PCM transport
         run: |
-          iverilog -g2012 -s tb_sensei_tracker_bridge -o /tmp/tb_p1d boards/a2n20v2-Enhanced/hdl/sensei_tracker_bridge.sv boards/a2n20v2-Enhanced/tests/tb_sensei_tracker_bridge.sv
-          vvp /tmp/tb_p1d
-      - name: Validate P2 acknowledged DOC Sound-RAM DMA
-        run: |
+          iverilog -g2012 -s tb_sensei_tracker_bridge -o /tmp/tb_bridge boards/a2n20v2-Enhanced/hdl/sensei_tracker_bridge.sv boards/a2n20v2-Enhanced/tests/tb_sensei_tracker_bridge.sv
+          vvp /tmp/tb_bridge
           iverilog -g2012 -s tb_sensei_p2_pcm -o /tmp/tb_pcm boards/a2n20v2-Enhanced/hdl/sensei_tracker_bridge.sv boards/a2n20v2-Enhanced/tests/tb_sensei_p2_pcm.sv
           vvp /tmp/tb_pcm
-      - name: Simulate native NTP DOC first-waveform-end assist and SWAP safety
+      - name: FPGA first-waveform-end retarget versus unaffected DOC SWAP
         run: |
-          iverilog -g2012 -s tb_p2y_ntp_retarget -o /tmp/tb_p2y boards/a2n20v2-Enhanced/hdl/sensei_tracker_bridge.sv boards/a2n20v2-Enhanced/tests/tb_p2y_ntp_retarget.sv hdl/sound/doc5503.sv
-          vvp /tmp/tb_p2y
-      - name: Compile BL616 tracker C in a portable SDK-free harness
-        run: |
-          gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_tracker.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_runtime.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_decode.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_ntp_import.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_ntp_native.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_pcm_upload.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_event_queue.c
-      - name: P2Z enforce small BL616 Sensei parser/worker stack frames
+          iverilog -g2012 -s tb_p2y_ntp_retarget -o /tmp/tb_ntp boards/a2n20v2-Enhanced/hdl/sensei_tracker_bridge.sv boards/a2n20v2-Enhanced/tests/tb_p2y_ntp_retarget.sv hdl/sound/doc5503.sv
+          vvp /tmp/tb_ntp
+      - name: SDK-free BL616 NTP runtime and DOC transport compile
         run: |
           MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
           MOCK=boards/a2n20v2-Enhanced/tests/p1d_mock
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -fstack-usage -c -I"$MOCK" -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware "$MCU/sensei_tracker.c" -o /tmp/p2z_tracker.o
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -fstack-usage -c -I"$MOCK" -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware "$MCU/sensei_runtime.c" -o /tmp/p2z_runtime.o
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -fstack-usage -c -I"$MCU" "$MCU/sensei_ntp_import.c" -o /tmp/p2z_import.o
-          python3 boards/a2n20v2-Enhanced/tests/check_p2z_stack.py /tmp/p2z_tracker.su /tmp/p2z_runtime.su /tmp/p2z_import.su
-      - name: Run MCU tick engine full-song and STOP integration simulation
+          gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only -I"$MOCK" -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware "$MCU/sensei_tracker.c" "$MCU/sensei_ntp_native.c" "$MCU/sensei_runtime.c" "$MCU/sensei_ntp_import.c" "$MCU/sensei_pcm_upload.c" "$MCU/sensei_event_queue.c"
+      - name: Keep NTP import and BL616 worker frames small
         run: |
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/tests/test_p1d_mcu.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_ntp_native.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_event_queue.c -o /tmp/test_p1d_mcu
-          /tmp/test_p1d_mcu
-      - name: Simulate P1E two-song real-time tracker effects
+          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
+          MOCK=boards/a2n20v2-Enhanced/tests/p1d_mock
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -fstack-usage -c -I"$MOCK" -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware "$MCU/sensei_tracker.c" -o /tmp/p2aa_tracker.o
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -fstack-usage -c -I"$MOCK" -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware "$MCU/sensei_runtime.c" -o /tmp/p2aa_runtime.o
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -fstack-usage -c -I"$MCU" "$MCU/sensei_ntp_import.c" -o /tmp/p2aa_import.o
+          python3 boards/a2n20v2-Enhanced/tests/check_p2z_stack.py /tmp/p2aa_tracker.su /tmp/p2aa_runtime.su /tmp/p2aa_import.su
+      - name: Native original NTP v2 parsing and byte-exact DOC sample import
         run: |
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -DSENSEI_ENABLE_LEGACY_TEST_SONGS -Iboards/a2n20v2-Enhanced/tests/p1e_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p1e_mod_player.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p1e_mod
-          /tmp/test_p1e_mod
-      - name: Exercise P2 BL616 PCM uploader with success/error simulated FPGA
+          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -I"$MCU" boards/a2n20v2-Enhanced/tests/test_p2aa_ntp_import.c "$MCU/sensei_ntp_import.c" -o /tmp/test_ntp_import
+          /tmp/test_ntp_import
+      - name: Native FAT selector to DOC bank, no shadow MOD allocation
         run: |
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/tests/test_p2_pcm_upload.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_pcm_upload.c -o /tmp/test_p2_pcm_upload
-          /tmp/test_p2_pcm_upload
-      - name: Validate runtime MOD decoder and FAT picker
+          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" boards/a2n20v2-Enhanced/tests/test_p2aa_runtime.c "$MCU/sensei_runtime.c" "$MCU/sensei_ntp_import.c" -o /tmp/test_ntp_runtime
+          /tmp/test_ntp_runtime
+      - name: Native NinjaTrackerPlus note, loop, effects and order flow
         run: |
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2_mod_decode.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_decode.c -o /tmp/test_p2_decode
-          /tmp/test_p2_decode
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/tests/p1d_mock -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2_runtime.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_runtime.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_decode.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_ntp_import.c -o /tmp/test_p2_runtime
-          /tmp/test_p2_runtime
-      - name: Validate original NinjaTrackerPlus v0 DOC-ready import
+          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -I"$MCU" boards/a2n20v2-Enhanced/tests/test_p2y_ntp_native.c "$MCU/sensei_ntp_native.c" -o /tmp/test_native
+          /tmp/test_native
+      - name: DOC PCM uploader success/error path
         run: |
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2v_ntp_import.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_ntp_import.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p2v_ntp
-          /tmp/test_p2v_ntp
-      - name: Validate modern NinjaTrackerPlus v2 DOC-ready import
+          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware boards/a2n20v2-Enhanced/tests/test_p2_pcm_upload.c "$MCU/sensei_pcm_upload.c" -o /tmp/test_pcm
+          /tmp/test_pcm
+      - name: Reject production MOD dependencies and verify FPGA transport
         run: |
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2w_ntp_v2.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_ntp_import.c -o /tmp/test_p2w_ntp
-          /tmp/test_p2w_ntp
-      - name: Verify native NinjaTrackerPlus BL616 raw-note and effect engine
-        run: |
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2y_ntp_native.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_ntp_native.c -o /tmp/test_p2y_native
-          /tmp/test_p2y_native
-      - name: Execute ProTracker raw-order runtime tick regression
-        run: |
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2_live_patterns.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p2_live
-          /tmp/test_p2_live
-      - name: Verify exclusive P2 PCM DMA is connected to native DOC SDRAM
-        run: |
-          python -c "from pathlib import Path; t=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text(); g=Path('hdl/sound/sound_glu.sv').read_text(); b=Path('boards/a2n20v2-Enhanced/hdl/sensei_tracker_bridge.sv').read_text(); assert all(x in t for x in ('pcm_ram_owner_o(trk_pcm_owner_w)','pcm_ram_ready_i(trk_pcm_ready_w)','tracker_ram_owner_i(trk_pcm_owner_w)','tracker_ram_ready_o(trk_pcm_ready_w)')); assert all(x in g for x in ('tracker_pcm_owner_w','tracker_ram_data_i','tracker_ram_wr_i','glu_mem_if.ready')); assert all(x in b for x in ('pcm_write_addr_r','pcm_words_acked_r','pcm_ram_ready_i')); print('PASS: P2 dedicated PCM SDRAM writer is wired to Sound GLU and ACK')"
-      - name: Validate DOC attack-sustain SWAP against real 15k instrument layouts
-        run: |
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2r_attack_sustain.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_decode.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p2r
-          /tmp/test_p2r
-      - name: Reproduce and eliminate P2R four-channel FIFO overflow
-        run: |
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2s_backpressure.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_event_queue.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p2s_fifo
-          /tmp/test_p2s_fifo
-      - name: Validate P2T actual DOC stereo and ProTracker pitch release
-        run: |
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2t_pitch_pan.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p2t
-          /tmp/test_p2t
-      - name: Verify P2U channel audition and ProTracker vibrato against DOC registers
-        run: |
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host boards/a2n20v2-Enhanced/tests/test_p2u_vibrato_audition.c boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/sensei_mod_player.c -o /tmp/test_p2u
-          /tmp/test_p2u
-      - name: Validate integrated top-level source wiring
-        run: |
-          python -c "from pathlib import Path; t=Path('boards/a2n20v2-Enhanced/hdl/top.sv').read_text(); g=Path('hdl/sound/sound_glu.sv').read_text(); c=Path('boards/a2n20v2-Enhanced/hdl/bl616/bl616_spi_connector.sv').read_text(); assert all(s in t for s in ('sensei_tracker_bridge','tracker_doc_wr_i','trk_spi_wr_o','trk_slot_rd_w')); assert 'tracker_owner_w' in g and 'tracker_doc_wr_i' in g; assert 'mem_space == 3\x27d6' in c; print('PASS: top, Sound GLU and SPI6 connections present')"
+          python3 - <<'PY'
+          from pathlib import Path
+          h=Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host")
+          cm=(h/"CMakeLists.txt").read_text()
+          rt=(h/"sensei_runtime.c").read_text()
+          tr=(h/"sensei_tracker.c").read_text()
+          im=(h/"sensei_ntp_import.c").read_text()
+          menu=(h/"menu.c").read_text()
+          assert "sensei_mod_player.c" not in cm and "sensei_mod_decode.c" not in cm
+          assert "sensei_mod_" not in tr and "sensei_mod_" not in rt
+          assert "ntp_patterns" not in rt and "pat[k]" not in im
+          assert 'k_mod_exts[] = {"ntp",NULL}' in menu
+          top=Path("boards/a2n20v2-Enhanced/hdl/top.sv").read_text()
+          glu=Path("hdl/sound/sound_glu.sv").read_text()
+          assert "pcm_ram_owner_o(trk_pcm_owner_w)" in top
+          assert "tracker_ram_ready_o(trk_pcm_ready_w)" in top
+          assert "tracker_owner_w" in glu and "ntp_loop_assist_i(tracker_owner_w)" in glu
+          print("PASS P2AA: native-only MCU, no old MOD or score-conversion dependencies")
+          print("PASS P2AA: unchanged FPGA PCM DMA, FIFO and NTP sustain assist")
+          PY

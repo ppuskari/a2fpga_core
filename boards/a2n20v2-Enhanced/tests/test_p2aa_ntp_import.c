@@ -1,4 +1,4 @@
-/* P2W: synthetic NTP v2 fixture with modern metadata, no copyrighted PCM.
+/* P2AA: native-only v2 source and DOC PCM fixture, no copyrighted PCM.
  * The two online NinjaForce converter files are not distributed in the repo.
  * Format cross-checked against v2 ntpconverter.c and converter output. */
 #include "sensei_ntp_import.h"
@@ -11,13 +11,13 @@ enum {
     FILE_BYTES=1326, TRACK_OFF=14, INST_OFF=26,
     ORDER_OFF=45, PAT_OFF=46, PCM_OFF=1070
 };
-static uint8_t ntp[FILE_BYTES],pcm[2048],pattern[1024];
+static uint8_t ntp[FILE_BYTES],pcm[2048];
 static sensei_ntp_decoded_t decoded;
 
 static void require(int yes, const char *what)
 {
     if(!yes) {
-        fprintf(stderr,"FAIL P2W: %s\n",what);
+        fprintf(stderr,"FAIL P2AA: %s\n",what);
         exit(1);
     }
 }
@@ -50,7 +50,7 @@ static void fixture(void)
 int main(void)
 {
     fixture();
-    require(sensei_ntp_import(ntp,sizeof ntp,NULL,0,NULL,0,&decoded),
+    require(sensei_ntp_import(ntp,sizeof ntp,NULL,0,&decoded),
             "v2 metadata dry run");
     require(decoded.ntp_version==2u && decoded.order_count==1u &&
             decoded.raw_instruments==1u && decoded.logical_instruments==1u,
@@ -63,52 +63,53 @@ int main(void)
             decoded.channel_pan[3]==0x10u, "v2 original NTP stereo parity");
     /* Non-front NTP outputs still downmix by documented parity. */
     ntp[TRACK_OFF]=2u;ntp[TRACK_OFF+3u]=3u;
-    require(sensei_ntp_import(ntp,sizeof ntp,NULL,0,NULL,0,&decoded) &&
+    require(sensei_ntp_import(ntp,sizeof ntp,NULL,0,&decoded) &&
             decoded.channel_pan[0]==0u && decoded.channel_pan[1]==0x10u,
             "v2 surround left/right stereo parity");
     ntp[TRACK_OFF]=1u;ntp[TRACK_OFF+3u]=0u;
-    require(sensei_ntp_import(ntp,sizeof ntp,NULL,0,NULL,0,&decoded),
+    require(sensei_ntp_import(ntp,sizeof ntp,NULL,0,&decoded),
             "v2 restore original stereo fixture");
     require(decoded.catalog[8]==0u && decoded.catalog[9]==0u &&
             decoded.catalog[10]==2u && decoded.catalog[11]==64u,
             "original DOC page/RTS/mode/volume");
     memset(pcm,0xCE,sizeof pcm);
-    memset(pattern,0xCE,sizeof pattern);
-    require(sensei_ntp_import(ntp,sizeof ntp,pcm,sizeof pcm,
-                              pattern,sizeof pattern,&decoded),
+    require(sensei_ntp_import(ntp,sizeof ntp,pcm,sizeof pcm,&decoded),
             "v2 copy stage");
     require(!memcmp(pcm,ntp+PCM_OFF,256),
             "keep modern converter DOC samples byte-for-byte");
-    require(pattern[0]==0x01u && pattern[1]==0xACu &&
-            pattern[2]==0x14u && pattern[3]==0x47u,
-            "translate v2 pattern to original ProTracker period/effect");
-    puts("PASS P2W: NinjaTrackerPlus v2 metadata and DOC PCM are byte exact");
+    require(decoded.pattern_offset==PAT_OFF &&
+            !memcmp(ntp+decoded.pattern_offset,ntp+PAT_OFF,16),
+            "native NTP points directly at original score bytes");
+    require(ntp[PAT_OFF]==25u && ntp[PAT_OFF+1u]==1u &&
+            ntp[PAT_OFF+2u]==4u && ntp[PAT_OFF+3u]==0x47u,
+            "original NTP note/instrument/effect bytes unchanged");
+    puts("PASS P2AA: NinjaTrackerPlus v2 metadata and DOC PCM are byte exact");
 
     ntp[TRACK_OFF+1]=4;
-    require(!sensei_ntp_import(ntp,sizeof ntp,NULL,0,NULL,0,&decoded),
+    require(!sensei_ntp_import(ntp,sizeof ntp,NULL,0,&decoded),
             "must reject streamed track allocation");
     ntp[TRACK_OFF+1]=0;
     ntp[INST_OFF]=8;
-    require(!sensei_ntp_import(ntp,sizeof ntp,NULL,0,NULL,0,&decoded),
+    require(!sensei_ntp_import(ntp,sizeof ntp,NULL,0,&decoded),
             "must reject streamed sample kind");
     ntp[INST_OFF]=4;
     ntp[INST_OFF+11]=0xF8;
-    require(!sensei_ntp_import(ntp,sizeof ntp,NULL,0,NULL,0,&decoded),
+    require(!sensei_ntp_import(ntp,sizeof ntp,NULL,0,&decoded),
             "must reject nonzero finetune");
     ntp[INST_OFF+11]=0;
     ntp[PAT_OFF+2]=7;
-    require(!sensei_ntp_import(ntp,sizeof ntp,NULL,0,NULL,0,&decoded),
+    require(!sensei_ntp_import(ntp,sizeof ntp,NULL,0,&decoded),
             "must reject unsupported tracker effect");
     ntp[PAT_OFF+2]=4;
     ntp[TRACK_OFF]=8;
-    require(!sensei_ntp_import(ntp,sizeof ntp,NULL,0,NULL,0,&decoded),
+    require(!sensei_ntp_import(ntp,sizeof ntp,NULL,0,&decoded),
             "must reject invalid output channel");
     ntp[TRACK_OFF]=1;
-    require(!sensei_ntp_import(ntp,sizeof ntp-1,NULL,0,NULL,0,&decoded),
+    require(!sensei_ntp_import(ntp,sizeof ntp-1,NULL,0,&decoded),
             "must reject truncated DOC waveform");
     ntp[4]=1;
-    require(!sensei_ntp_import(ntp,sizeof ntp,NULL,0,NULL,0,&decoded),
+    require(!sensei_ntp_import(ntp,sizeof ntp,NULL,0,&decoded),
             "must not misparse v1 as v0 or v2");
-    puts("PASS P2W: streamed, finetune, effect, channel, truncated and v1 rejections");
+    puts("PASS P2AA: streamed, finetune, effect, channel, truncated and v1 rejections");
     return 0;
 }

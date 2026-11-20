@@ -6,8 +6,8 @@
  * Source: https://github.com/antoinevignau/source/tree/master/ntpsources
  * Upstream author Jesse Blue / Ninjaforce. Source is not vendored.
  *
- * Important: this is the DOC-ready NTP SAMPLE/PATTERN IMPORT stage. P2U still
- * executes ProTracker tick effects, not the original 65816 NTP replay engine.
+ * P2AA: source validation and DOC-ready PCM extraction ONLY.
+ * NTP patterns are played directly by native C code, not MOD/P2U translation.
  */
 #include "sensei_ntp_import.h"
 #include <string.h>
@@ -23,14 +23,6 @@ typedef struct {
     uint32_t len; /* v2 stores 24-bit lengths; reject oversized data safely */
     uint8_t kind, volume, finetune, page, size;
 } ntp_inst_t;
-static const uint16_t period_by_note[72]={
-    1712,1616,1525,1440,1357,1281,1209,1141,1077,1017,961,907,
-    856,808,762,720,678,640,604,570,538,508,480,453,
-    428,404,381,360,339,320,302,285,269,254,240,226,
-    214,202,190,180,170,160,151,143,135,127,120,113,
-    107,101,95,90,85,80,76,71,67,64,60,57,
-    53,50,47,45,42,40,37,35,33,31,30,28
-};
 static uint8_t is_legal_rts(uint8_t v)
 {
     for(unsigned i=0;i<8;i++)
@@ -51,7 +43,6 @@ static uint8_t allowed_fx(uint8_t fx,uint8_t arg)
 }
 bool sensei_ntp_import(const uint8_t *src,size_t len,
                        uint8_t *pcm,size_t pcm_cap,
-                       uint8_t *pat,size_t pat_cap,
                        sensei_ntp_decoded_t *out)
 {
     /* P2Z: this importer is invoked twice per file, serially by the
@@ -72,8 +63,7 @@ bool sensei_ntp_import(const uint8_t *src,size_t len,
        src[5]!=NTP_TRACKS)return false;
     version=src[4];
     ninst=src[6];npat=src[7];norder=src[8];
-    if(!ninst || ninst>NTP_MAX_INST || !npat || !norder || norder>128u ||
-       (pcm==NULL)!=(pat==NULL))return false;
+    if(!ninst || ninst>NTP_MAX_INST || !npat || !norder || norder>128u)return false;
     /* Both versions carry already converted DOC waveforms. The 2022 v2
      * layout adds a title, track metadata, 24-bit lengths, repeat fields and
      * length-prefixed instrument names. Streaming remains out of scope. */
@@ -183,8 +173,7 @@ bool sensei_ntp_import(const uint8_t *src,size_t len,
     out->pcm_bytes=(uint32_t)((max_end+3u)&~(size_t)3u);
     out->pattern_bytes=(uint32_t)pat_bytes;
     if(out->pcm_bytes>SENSEI_NTP_MAX_WAVE_BYTES ||
-       (pcm && out->pcm_bytes>pcm_cap) ||
-       (pat && pat_bytes>pat_cap))return false;
+       (pcm && out->pcm_bytes>pcm_cap))return false;
 
     for(unsigned i=1;i<=ninst;i++) {
         const ntp_inst_t *q=&inst[i];
@@ -220,8 +209,8 @@ bool sensei_ntp_import(const uint8_t *src,size_t len,
     out->logical_instruments=(uint8_t)logical;
     out->nonideal_pairs=(uint8_t)nonideal;
 
-    /* Validate ALL note/effect records before touching a caller's output
-     * buffers. Convert only score encoding, NOT waveform samples. */
+    /* Validate ALL original NTP note/effect bytes before PCM copy.
+     * The native C engine reads source records without translation. */
     for(size_t k=0;k<pat_bytes;k+=4u) {
         const uint8_t *e=src+patterns_start+k;
         const unsigned note=e[0],instrument=e[1],fx=e[2],arg=e[3];
@@ -237,15 +226,6 @@ bool sensei_ntp_import(const uint8_t *src,size_t len,
         const ntp_inst_t *q=&inst[i];
         memcpy(pcm+((size_t)q->page<<8),src+pos,q->len);
         pos+=q->len;
-    }
-    for(size_t k=0;k<pat_bytes;k+=4u) {
-        const uint8_t *e=src+patterns_start+k;
-        const uint16_t period=e[0]?period_by_note[e[0]-1u]:0u;
-        const uint8_t instrument=e[1]?map[e[1]]:0u;
-        pat[k]=(uint8_t)((instrument&0xF0u)|((period>>8)&15u));
-        pat[k+1u]=(uint8_t)period;
-        pat[k+2u]=(uint8_t)((instrument<<4)|(e[2]&15u));
-        pat[k+3u]=e[3];
     }
     return true;
 }
