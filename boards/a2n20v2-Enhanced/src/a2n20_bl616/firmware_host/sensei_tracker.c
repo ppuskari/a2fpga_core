@@ -381,10 +381,11 @@ void sensei_tracker_task(void *unused)
                 capability!=0x42) {
                 sensei_runtime_set_status(SENSEI_RT_ERROR);
                 osd_log("SENSEI P2: NEED NATIVE DOC AND P2 FPGA");
-            } else if ((osd_log("SENSEI P2Z: FAT FILE LOAD"),
-                        !sensei_runtime_load(requested_mod,&user_mod))) {
-                osd_log("SENSEI P2V: BAD MOD/NTP OR UNSUPPORTED");
             } else {
+                osd_log("SENSEI P2Z: FAT FILE LOAD");
+                if (!sensei_runtime_load(requested_mod,&user_mod)) {
+                    osd_log("SENSEI P2Z: BAD MOD/NTP OR UNSUPPORTED");
+                } else {
                 uint8_t ntp_assist_cap=0u;
                 if(user_mod.source_ntp)
                     fpga_spi_xfer_read(TRACK_SPACE,0x2Bu,&ntp_assist_cap,1);
@@ -417,6 +418,7 @@ void sensei_tracker_task(void *unused)
                         sensei_runtime_set_status(SENSEI_RT_ERROR);
                     }
                     tracker_read(st);
+                }
                 }
                 }
             }
