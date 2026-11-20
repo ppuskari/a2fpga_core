@@ -422,7 +422,7 @@ static void picker_choose(int id)
             if (sensei_runtime_choose(full))
                 set_status("SONG SELECTED - MCU LOADING");
             else
-                set_status("INVALID .MOD/.NTP FILE PATH");
+                set_status("INVALID .NTP FILE PATH");
         } else if (s_pick_fpga)
             fpgaupdate_request(full);
         else
@@ -1161,8 +1161,8 @@ static void audio_enter(int id)
 }
 
 /* ======================= SCREEN: SENSEI MOD LIBRARY ======================== */
-static const char *const k_mod_exts[] = {"mod","ntp",NULL};
-/* Audible track isolation keeps the original MOD running in all 4 channels.
+static const char *const k_mod_exts[] = {"ntp",NULL};
+/* Native NTP track isolation keeps all four score channels running.
  * Only the DOC register writes for unselected channels are suppressed. */
 static const char *const k_mod_audition_names[7] = {
     "ALL 4", "CH0 ONLY", "CH1 ONLY", "CH2 ONLY",
@@ -1197,7 +1197,7 @@ static void mod_library_stop(int id)
 {
     (void)id;
     sensei_runtime_request_stop();
-    set_status("MOD STOP REQUESTED");
+    set_status("NTP STOP REQUESTED");
 }
 static void mod_library_build(void)
 {
@@ -1211,13 +1211,13 @@ static void mod_library_build(void)
     case SENSEI_RT_DONE: status="DONE"; break;
     default:break;
     }
-    mi_add(MI_INFO,"RUNTIME MOD / NTP V0 PLAYER","");
+    mi_add(MI_INFO,"NATIVE NTP C + FPGA PLAYER","");
     mi_add(MI_INFO,"STORAGE: USB/SD FAT VOLUME","");
-    mi_add(MI_INFO,"MOD FILE STATUS",status);
+    mi_add(MI_INFO,"NTP FILE STATUS",status);
     menu_item_t *m=mi_add(MI_CHOICE,"AUDITION CHANNEL",
                           k_mod_audition_names[sensei_runtime_audition_mode()]);
     m->on_change=mod_audition_change;
-    m=mi_add(MI_SUBMENU,"BROWSE .MOD / .NTP FILES","");
+    m=mi_add(MI_SUBMENU,"BROWSE .NTP FILES","");
     m->action=mod_library_open;
     m=mi_add(MI_ACTION,"STOP PLAYBACK","");
     m->action=mod_library_stop;
@@ -1227,7 +1227,7 @@ static void mod_library_build(void)
     mi_add(MI_INFO,"NTP: ORIGINAL DOC PCM, NO RECODE","");
     mi_add(MI_INFO,"NTP USES ITS STORED L/R ROUTING","");
 }
-static const menu_screen_t SCR_MOD_LIBRARY={"MOD LIBRARY",mod_library_build};
+static const menu_screen_t SCR_MOD_LIBRARY={"NTP LIBRARY",mod_library_build};
 
 /* ======================= SCREEN: ROOT ===================================== */
 static void root_enter(int id)
@@ -1273,7 +1273,7 @@ static void root_build(void)
     static const char *const entries[] = {
         "SLOT ASSIGNMENTS", "AUDIO CONFIG", "DISK IMAGES", "STORAGE",
         "NETWORK", "USB DEVICES", "FIRMWARE UPDATE", "FPGA UPDATE",
-        "MOD LIBRARY"
+        "NTP LIBRARY"
     };
     for (int i = 0; i < 9; i++) {
         menu_item_t *m = mi_add(MI_SUBMENU, entries[i], "");
