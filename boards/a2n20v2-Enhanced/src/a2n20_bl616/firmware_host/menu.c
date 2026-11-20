@@ -16,7 +16,7 @@
 #include "osd_console.h"
 #include "settings.h"
 #include "disk.h"
-#include "sensei_runtime.h"
+#include "mcu_mod_audio.h"
 #include "fwupdate.h"
 #include "fpgaupdate.h"
 #include "menu.h"
@@ -419,10 +419,10 @@ static void picker_choose(int id)
             return;
         }
         if (s_pick_mod) {
-            if (sensei_runtime_choose(full))
+            if (mod_audio_choose(full))
                 set_status("SONG SELECTED - MCU LOADING");
             else
-                set_status("INVALID .NTP FILE PATH");
+                set_status("INVALID .MOD FILE PATH");
         } else if (s_pick_fpga)
             fpgaupdate_request(full);
         else
@@ -1160,25 +1160,10 @@ static void audio_enter(int id)
     screen_push(&SCR_AUDIO);
 }
 
-/* ======================= SCREEN: SENSEI MOD LIBRARY ======================== */
-static const char *const k_mod_exts[] = {"ntp",NULL};
-/* Native NTP track isolation keeps all four score channels running.
- * Only the DOC register writes for unselected channels are suppressed. */
-static const char *const k_mod_audition_names[7] = {
-    "ALL 4", "CH0 ONLY", "CH1 ONLY", "CH2 ONLY",
-    "CH3 ONLY", "PAIR 1+2", "PAIR 0+3"
-};
-static void mod_audition_change(int id,int dir)
-{
-    (void)id;
-    unsigned mode=sensei_runtime_audition_mode();
-    mode=(mode+(dir<0?6u:1u))%7u;
-    sensei_runtime_set_audition_mode((uint8_t)mode);
-    set_status("AUDITION APPLIES TO NEXT PLAYBACK");
-    screen_refresh();
-}
-
-
+/* ======================= SCREEN: DIRECT MCU MOD PLAYER ===================== */
+// HxCMOD renders standard ProTracker .MOD to stereo signed PCM in the BL616;
+// the FPGA only clocks HDMI. No DOC register programming or tracker mailbox.
+static const char *const k_mod_exts[] = {"mod",NULL};
 static void mod_library_open(int id)
 {
     (void)id;
@@ -1192,42 +1177,36 @@ static void mod_library_open(int id)
     picker_load();
     screen_push(&SCR_PICKER);
 }
-
 static void mod_library_stop(int id)
 {
     (void)id;
-    sensei_runtime_request_stop();
-    set_status("NTP STOP REQUESTED");
+    mod_audio_request_stop();
+    set_status("STOP DIRECT HDMI PCM REQUESTED");
 }
 static void mod_library_build(void)
 {
     const char *status="IDLE";
-    switch (sensei_runtime_status()) {
-    case SENSEI_RT_SELECTED: status="SELECTED"; break;
-    case SENSEI_RT_LOADING: status="LOADING"; break;
-    case SENSEI_RT_READY_PCM: status="PCM READY"; break;
-    case SENSEI_RT_PLAYING: status="PLAYING"; break;
-    case SENSEI_RT_ERROR: status="ERROR"; break;
-    case SENSEI_RT_DONE: status="DONE"; break;
+    switch(mod_audio_status()) {
+    case MOD_PCM_SELECTED: status="SELECTED";break;
+    case MOD_PCM_LOADING: status="LOADING";break;
+    case MOD_PCM_PLAYING: status="PLAYING";break;
+    case MOD_PCM_STOPPED: status="STOPPED";break;
+    case MOD_PCM_ERROR: status="ERROR";break;
     default:break;
     }
-    mi_add(MI_INFO,"NATIVE NTP C + FPGA PLAYER","");
-    mi_add(MI_INFO,"STORAGE: USB/SD FAT VOLUME","");
-    mi_add(MI_INFO,"NTP FILE STATUS",status);
-    menu_item_t *m=mi_add(MI_CHOICE,"AUDITION CHANNEL",
-                          k_mod_audition_names[sensei_runtime_audition_mode()]);
-    m->on_change=mod_audition_change;
-    m=mi_add(MI_SUBMENU,"BROWSE .NTP FILES","");
+    mi_add(MI_INFO,"MCU HxCMOD -> HDMI STEREO", "");
+    mi_add(MI_INFO,"INDEPENDENT OF ENSONIQ DOC", "");
+    mi_add(MI_INFO,"44100 HZ, 16-BIT STEREO", "");
+    mi_add(MI_INFO,"MOD PLAYBACK",status);
+    menu_item_t *m=mi_add(MI_SUBMENU,"BROWSE .MOD FILES","");
     m->action=mod_library_open;
     m=mi_add(MI_ACTION,"STOP PLAYBACK","");
     m->action=mod_library_stop;
-    mi_add(MI_INFO,"","");
-    mi_add(MI_INFO,"NTP V0/V2: 4CH, NO STREAMING","");
-    mi_add(MI_INFO,"NTP: NATIVE C SCORE/FX PLAYER","");
-    mi_add(MI_INFO,"NTP: ORIGINAL DOC PCM, NO RECODE","");
-    mi_add(MI_INFO,"NTP USES ITS STORED L/R ROUTING","");
+    mi_add(MI_INFO,"", "");
+    mi_add(MI_INFO,"NATIVE IIGS DOC PRESERVED", "");
+    mi_add(MI_INFO,"MOCKINGBOARD+SSI PRESERVED", "");
 }
-static const menu_screen_t SCR_MOD_LIBRARY={"NTP LIBRARY",mod_library_build};
+static const menu_screen_t SCR_MOD_LIBRARY={"MCU MOD PLAYER",mod_library_build};
 
 /* ======================= SCREEN: ROOT ===================================== */
 static void root_enter(int id)
@@ -1273,7 +1252,7 @@ static void root_build(void)
     static const char *const entries[] = {
         "SLOT ASSIGNMENTS", "AUDIO CONFIG", "DISK IMAGES", "STORAGE",
         "NETWORK", "USB DEVICES", "FIRMWARE UPDATE", "FPGA UPDATE",
-        "NTP LIBRARY"
+        "MCU MOD PLAYER"
     };
     for (int i = 0; i < 9; i++) {
         menu_item_t *m = mi_add(MI_SUBMENU, entries[i], "");
