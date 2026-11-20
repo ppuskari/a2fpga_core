@@ -102,8 +102,12 @@ void sensei_runtime_free(sensei_runtime_module_t *m)
 bool sensei_runtime_load(const char *relative_path,sensei_runtime_module_t *m)
 {
     fs_req_t req;
-    sensei_mod_decoded_t d;
-    sensei_ntp_decoded_t ntp_d;
+    /* Both decoders are large (orders + 32 DOC catalog records). Keep
+     * them in BSS, not on the 3072-byte Sensei worker stack. This
+     * synchronous loader is called only by the Sensei worker task.
+     * Separate static objects preserve both original parse APIs. */
+    static sensei_mod_decoded_t d;
+    static sensei_ntp_decoded_t ntp_d;
     uint32_t remaining,done;
     bool ok=false;
     if (!m || !mod_path_ok(relative_path))return false;
