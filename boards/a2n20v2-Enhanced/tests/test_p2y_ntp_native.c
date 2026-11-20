@@ -146,5 +146,34 @@ int main(void)
     tick(6);require(s.row==2u,"E61 completion must advance");
     tick(1);require(sensei_ntp_done(&s),"F00 after finite E6 loop");
     printf("PASS P2Y: native NTP E60/E61 finite pattern loop and song stop\n");
+
+    /* Actual 15k.ntp has eight CH2 arpeggio rows with no explicit
+     * note or instrument. Reference 65816 setup_arpeggio takes the
+     * saved root and restarts the oscillator on tick zero; subsequent
+     * arpeggio effect ticks restart at transposed semitones. */
+    memset(patterns,0,sizeof patterns);
+    row(0,0,0,25,1,0,0);
+    row(0,1,0,0,0,0,0x37);
+    row(0,2,0,0,0,15,0);
+    require(sensei_ntp_init(&s,patterns,1,orders,1,catalog,pan,map,irq,100),
+            "init note-less arpeggio fixture");
+    tick(6);
+    unsigned starts=s.note_starts[0];
+    n=0;tick(1);
+    require(s.note_starts[0]==starts+1u &&
+            last(0xA0)==0x1Eu && last(0)==161,
+            "0xy empty-note row restarts the saved root");
+    n=0;tick(1);
+    require(s.note_starts[0]==starts+2u && last(0)==192,
+            "arpeggio first semitone effect restarts the DOC oscillator");
+    n=0;tick(1);
+    require(s.note_starts[0]==starts+3u && last(0)==242,
+            "arpeggio second semitone effect restarts the DOC oscillator");
+    n=0;tick(1);
+    require(s.note_starts[0]==starts+4u && last(0)==161,
+            "third effect tick restarts root instead of detuning note");
+    tick(2);tick(1);
+    require(sensei_ntp_done(&s),"arpeggio fixture stops at F00");
+    printf("PASS P2AB: 15k note-less 0xy and per-tick NTP arpeggio retrigger\n");
     return 0;
 }
