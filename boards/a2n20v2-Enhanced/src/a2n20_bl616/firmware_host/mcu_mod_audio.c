@@ -9,6 +9,8 @@
  */
 #include "mcu_mod_audio.h"
 #include "mcu_mod_jukebox.h"
+#include "mcu_mod_format.h"
+#include "mcu_mod_sample_store.h"
 #include "third_party/hxcmod/hxcmod.h"
 #include "fpga_spi.h"
 #include "disk.h"
@@ -25,14 +27,16 @@
 #define PCM_STATUS 0x800000u
 #define PCM_BLOCK_FRAMES 256u
 #define PCM_BLOCK_BYTES (PCM_BLOCK_FRAMES*4u)
-#define MOD_FILE_LIMIT 196608u
+#define MOD_FILE_LIMIT MOD_TOTAL_FILE_MAX
 #define PCM_HZ 44100u
 #define MOD_PATH_CAP 128u
 
 static modcontext s_ctx;
 static msample s_pcm[PCM_BLOCK_FRAMES*2u];
 static uint8_t s_status[16];
-static uint8_t *s_file;
+static uint8_t *s_file;  /* header+patterns only, never PCM samples */
+static uint8_t s_mod_header[MOD_HEADER_PROBE];
+static uint8_t s_mod_transfer[MOD_STORE_PAGE];
 static volatile uint32_t s_path_seq;
 static uint32_t s_seen_seq;
 static char s_path[MOD_PATH_CAP];
@@ -184,46 +188,102 @@ static void player_release(void)
     if(s_file)vPortFree(s_file);
     s_file=NULL;
 }
+/* J2: bounded file parser and single-copy external sample staging. The MCU
+ * only allocates the pattern table (<=132 KiB). Up to 2 MiB of PCM instrument
+ * bytes are written into an exclusive high-SDRAM region via XFER SPACE1. */
 static bool player_load(const char *path)
 {
     fs_req_t fs;
-    uint32_t rem,off;
+    mod_format_t fmt;
+    uint32_t off;
     bool ok=false,opened=false;
     memset(&fs,0,sizeof fs);
     fs.op=FSOP_MOD_OPEN;fs.path=path;
-    if(disk_fs_request(&fs)!=0)goto finish;
+    if(disk_fs_request(&fs)!=0) {
+        osd_log("MCU MOD: FILE OPEN FAILED");
+        goto finish;
+    }
     opened=true;
-    if(fs.size<1084u || fs.size>MOD_FILE_LIMIT) {
-        osd_log("MCU MOD: UNSUPPORTED SIZE %lu (MAX 192K)",
-                (unsigned long)fs.size);
+    const uint32_t file_size=fs.size;
+    if(file_size<MOD_HEADER_PROBE || file_size>MOD_FILE_LIMIT) {
+        osd_log("MCU MOD: FILE SIZE %lu UNSUPPORTED",
+                (unsigned long)file_size);
         goto finish;
     }
-    s_file=(uint8_t*)pvPortMalloc(fs.size);
+    memset(&fs,0,sizeof fs);
+    fs.op=FSOP_MOD_READ;
+    fs.buf=s_mod_header;
+    fs.len=MOD_HEADER_PROBE;
+    if(disk_fs_request(&fs)!=0 || fs.out!=MOD_HEADER_PROBE) {
+        osd_log("MCU MOD: HEADER READ FAILED");
+        goto finish;
+    }
+    if(!mod_format_probe(s_mod_header,file_size,&fmt)) {
+        osd_log("MCU MOD: BAD/UNSUPPORTED 4CH FORMAT %s",path);
+        goto finish;
+    }
+    if(!mod_store_begin(fmt.lengths)) {
+        osd_log("MCU MOD: TOO MANY SAMPLE BYTES");
+        goto finish;
+    }
+    s_file=(uint8_t*)pvPortMalloc(fmt.prefix_bytes);
     if(!s_file) {
-        osd_log("MCU MOD: NO RAM FOR %lu BYTE FILE",(unsigned long)fs.size);
+        osd_log("MCU MOD: NO RAM FOR %luB PATTERNS",
+                (unsigned long)fmt.prefix_bytes);
         goto finish;
     }
-    rem=fs.size;off=0;
-    while(rem) {
+    memcpy(s_file,s_mod_header,fmt.header_bytes);
+    /* For 15-instrument MODs the initial 1084-byte probe already contains
+     * part of the first pattern. Preserve those bytes, don't read past them. */
+    if(fmt.header_bytes<MOD_HEADER_PROBE) {
+        const uint32_t preloaded=MOD_HEADER_PROBE-fmt.header_bytes;
+        memcpy(s_file+fmt.header_bytes,s_mod_header+fmt.header_bytes,
+               preloaded<fmt.pattern_bytes?preloaded:fmt.pattern_bytes);
+        off=MOD_HEADER_PROBE;
+    }else off=MOD_HEADER_PROBE;
+    while(off<fmt.prefix_bytes) {
         memset(&fs,0,sizeof fs);
         fs.op=FSOP_MOD_READ;
         fs.buf=s_file+off;
-        fs.len=rem>4096u?4096u:rem;
-        if(disk_fs_request(&fs)!=0 || fs.out==0 || fs.out>fs.len)
+        fs.len=(fmt.prefix_bytes-off)>MOD_STORE_PAGE ?
+               MOD_STORE_PAGE : fmt.prefix_bytes-off;
+        if(disk_fs_request(&fs)!=0 || fs.out!=fs.len) {
+            osd_log("MCU MOD: PATTERN READ FAILED");
             goto finish;
-        rem-=fs.out;off+=fs.out;
+        }
+        off+=fs.out;
+    }
+    /* Exactly the declared sample body is copied to FPGA SDRAM. An optional
+     * trailing MOD tag/padding is deliberately ignored. */
+    for(off=0;off<fmt.sample_bytes;) {
+        uint32_t len=fmt.sample_bytes-off;
+        if(len>MOD_STORE_PAGE)len=MOD_STORE_PAGE;
+        memset(&fs,0,sizeof fs);
+        fs.op=FSOP_MOD_READ;
+        fs.buf=s_mod_transfer;
+        fs.len=len;
+        if(disk_fs_request(&fs)!=0 || fs.out!=len ||
+           !mod_store_stage(off,s_mod_transfer,(uint16_t)len)) {
+            osd_log("MCU MOD: SAMPLE STAGE FAILED +%lu",
+                    (unsigned long)off);
+            goto finish;
+        }
+        off+=len;
     }
     if(!hxcmod_init(&s_ctx) ||
-       !hxcmod_setcfg(&s_ctx,PCM_HZ,100,1) ||
-       !hxcmod_load(&s_ctx,s_file,(int)off)) {
+       !hxcmod_setcfg(&s_ctx,PCM_HZ,100,1))goto finish;
+    hxcmod_external_samples(&s_ctx,MOD_SDRAM_BASE,MOD_SDRAM_CAPACITY,
+                            NULL,mod_store_read,mod_store_write);
+    if(!hxcmod_load(&s_ctx,s_file,(int)fmt.prefix_bytes)) {
         osd_log("MCU MOD: HxCMOD REJECTED FILE");
         goto finish;
     }
-    osd_log("MCU MOD: HxCMOD %luB 44100 STEREO",
-            (unsigned long)off);
+    osd_log("MCU MOD: %luB FILE, %luB PATTERNS, %luB FPGA PCM",
+            (unsigned long)file_size,(unsigned long)fmt.prefix_bytes,
+            (unsigned long)fmt.sample_bytes);
     ok=true;
 finish:
-    if(opened){
+    if(opened) {
         memset(&fs,0,sizeof fs);
         fs.op=FSOP_MOD_CLOSE;
         (void)disk_fs_request(&fs);
@@ -232,6 +292,7 @@ finish:
         hxcmod_unload(&s_ctx);
         if(s_file)vPortFree(s_file);
         s_file=NULL;
+        mod_store_invalidate();
     }
     return ok;
 }
