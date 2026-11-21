@@ -68,6 +68,24 @@ jobs:
             "$MCU/mcu_mod_pattern_store.c" "$MCU/third_party/hxcmod/hxcmod.c" \
             -o /tmp/mod_pattern_cache
           /tmp/mod_pattern_cache
+          # A/B comparison: both sample cache page sizes must preserve exact
+          # full-memory HxCMOD parity and reject unsupported tracker signatures.
+          gcc -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O2 \
+            -DMOD_STORE_PAGE=4096u -DHXCMOD_MAXCHANNELS=8 \
+            -I"$MCU" -I"$MCU/third_party/hxcmod" \
+            -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware \
+            boards/a2n20v2-Enhanced/tests/test_mcu_mod_multichannel.c \
+            "$MCU/mcu_mod_format.c" "$MCU/mcu_mod_sample_store.c" \
+            "$MCU/third_party/hxcmod/hxcmod.c" -o /tmp/mod_multichannel_4k
+          /tmp/mod_multichannel_4k
+          gcc -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O2 \
+            -DMOD_STORE_PAGE=4096u -DHXCMOD_MAXCHANNELS=8 \
+            -I"$MCU" -I"$MCU/third_party/hxcmod" \
+            -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware \
+            boards/a2n20v2-Enhanced/tests/test_mcu_mod_large.c \
+            "$MCU/mcu_mod_format.c" "$MCU/mcu_mod_sample_store.c" \
+            "$MCU/third_party/hxcmod/hxcmod.c" -o /tmp/mod_j2_large_4k
+          /tmp/mod_j2_large_4k
       - name: Check ROMless slot3 address, preserve other hardware routes
         run: |
           python3 - <<'PY'
