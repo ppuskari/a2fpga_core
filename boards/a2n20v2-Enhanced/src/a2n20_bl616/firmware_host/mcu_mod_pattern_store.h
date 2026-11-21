@@ -1,4 +1,4 @@
-/* J2R7: independent FPGA SDRAM bank and 8-KiB four-pattern MCU LRU cache.
+/* J2R7: independent FPGA SDRAM bank and 8-KiB variable-size MCU LRU cache.
  * FPGA has 8 MiB byte-addressed via SPI SPACE1. Samples occupy 0x400000-
  * 0x5fffff. This 256-KiB bank occupies 0x600000-0x63ffff; no overlap.
  * Max pattern payload: 128 patterns * 64 rows * 8 channels * 4B = 256 KiB.
