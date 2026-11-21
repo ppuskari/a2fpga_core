@@ -182,6 +182,7 @@ typedef struct {
 #endif
 
 	muint   tablepos;
+	muint   song_wraps; // a2fpga J1: completed order-list loops (including Bxx/Dxx)
 	muint   patternpos;
 	muint   patterndelay;
 	muchar  jump_loop_effect;

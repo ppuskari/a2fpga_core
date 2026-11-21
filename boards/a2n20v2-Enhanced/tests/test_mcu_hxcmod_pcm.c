@@ -40,6 +40,12 @@ int main(void)
     }
     check(nonzero>500u,"render generated silence");
     check(left>500u && right>500u,"stereo PCM channels missing");
+    /* A one-order MOD must still emit a completion marker when the
+     * position wraps to zero. Looking only at tablepos would miss it. */
+    check(ctx.song_wraps==0u,"early song-wrap before completing pattern");
+    for(unsigned n=0;n<500u && !ctx.song_wraps;n++)
+        hxcmod_fillbuffer(&ctx,pcm,2048,NULL);
+    check(ctx.song_wraps>=1u,"one-order MOD never signaled completion");
     hxcmod_unload(&ctx);
     printf("PASS MCU MOD: HxCMOD loads original ProTracker fixture and emits %u nonzero stereo frames\n",nonzero);
     return 0;

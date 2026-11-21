@@ -114,6 +114,22 @@ static uint8_t mb_handle_cmd(uint8_t cmd)
     case MEDIA_CMD_STOP:
         mod_audio_request_stop();
         return MEDIA_RESULT_OK;
+    case MEDIA_CMD_JUKE_FOLDER:
+        mod_audio_jukebox_from_last(false);
+        return MEDIA_RESULT_OK;
+    case MEDIA_CMD_JUKE_TREE:
+        mod_audio_jukebox_from_last(true);
+        return MEDIA_RESULT_OK;
+    case MEDIA_CMD_NEXT:
+        return mod_audio_next()?MEDIA_RESULT_OK:MEDIA_RESULT_NO_SONG;
+    case MEDIA_CMD_PREVIOUS:
+        return mod_audio_previous()?MEDIA_RESULT_OK:MEDIA_RESULT_NO_SONG;
+    case MEDIA_CMD_PLAY_ONCE:
+        mod_audio_set_play_once(true);
+        return MEDIA_RESULT_OK;
+    case MEDIA_CMD_REPEAT_ONE:
+        mod_audio_set_play_once(false);
+        return MEDIA_RESULT_OK;
     case MEDIA_CMD_BEGIN_TEST:
         s_received=0u;s_xor=0u;
         s_test_active=true;

@@ -378,6 +378,17 @@ static void picker_load(void)
 
 static void picker_choose(int id)
 {
+    /* J1: choose the currently displayed folder, with or without children.
+     * The folder selection survives no global picker state mutations. */
+    if (s_pick_mod && (id == -4 || id == -5)) {
+        if (mod_audio_jukebox_start(s_pick_path,id == -5))
+            set_status(id == -5 ? "JUKEBOX TREE: SCANNING" :
+                                  "JUKEBOX FOLDER: SCANNING");
+        else
+            set_status("INVALID JUKEBOX DIRECTORY");
+        screen_pop();
+        return;
+    }
     if (id == -3) {                            /* UP: parent directory */
         char *slash = strrchr(s_pick_path, '/');
         if (slash)
@@ -476,6 +487,14 @@ static void picker_build(void)
         m = mi_add(MI_ACTION, "(EJECT - NO IMAGE)", "");
         m->action = picker_choose;
         m->id = -2;
+    }
+    if (s_pick_mod) {
+        m = mi_add(MI_ACTION, "(JUKEBOX: THIS FOLDER)", "");
+        m->action = picker_choose;
+        m->id = -4;
+        m = mi_add(MI_ACTION, "(JUKEBOX: WITH SUBFOLDERS)", "");
+        m->action = picker_choose;
+        m->id = -5;
     }
     for (int i = 0; i < s_pick_count; i++) {
         if (s_pick_ents[i].is_dir) {
@@ -1184,6 +1203,35 @@ static void mod_library_stop(int id)
     mod_audio_request_stop();
     set_status("STOP DIRECT HDMI PCM REQUESTED");
 }
+static void mod_library_juke_folder(int id)
+{
+    (void)id;
+    mod_audio_jukebox_from_last(false);
+    set_status("JUKEBOX LAST FOLDER: SCANNING");
+}
+static void mod_library_juke_tree(int id)
+{
+    (void)id;
+    mod_audio_jukebox_from_last(true);
+    set_status("JUKEBOX LAST TREE: SCANNING");
+}
+static void mod_library_next(int id)
+{
+    (void)id;
+    set_status(mod_audio_next()?"NEXT MOD REQUESTED":"NO JUKEBOX PLAYLIST");
+}
+static void mod_library_previous(int id)
+{
+    (void)id;
+    set_status(mod_audio_previous()?"PREVIOUS MOD REQUESTED":"NO JUKEBOX PLAYLIST");
+}
+static void mod_library_once(int id)
+{
+    (void)id;
+    mod_audio_set_play_once(!mod_audio_play_once());
+    set_status(mod_audio_play_once()?"SINGLE MOD: PLAY ONCE":
+                                     "SINGLE MOD: REPEAT");
+}
 static void mod_library_build(void)
 {
     const char *status="IDLE";
@@ -1199,8 +1247,23 @@ static void mod_library_build(void)
     mi_add(MI_INFO,"INDEPENDENT OF ENSONIQ DOC", "");
     mi_add(MI_INFO,"44100 HZ, 16-BIT STEREO", "");
     mi_add(MI_INFO,"MOD PLAYBACK",status);
+    {
+        char value[12];
+        snprintf(value,sizeof value,"%u",mod_audio_jukebox_count());
+        mi_add(MI_INFO,"JUKEBOX TRACKS",value);
+    }
     menu_item_t *m=mi_add(MI_SUBMENU,"BROWSE .MOD FILES","");
     m->action=mod_library_open;
+    m=mi_add(MI_ACTION,"JUKEBOX LAST FOLDER","");
+    m->action=mod_library_juke_folder;
+    m=mi_add(MI_ACTION,"JUKEBOX LAST FOLDER+SUBDIRS","");
+    m->action=mod_library_juke_tree;
+    m=mi_add(MI_ACTION,"NEXT MOD","");
+    m->action=mod_library_next;
+    m=mi_add(MI_ACTION,"PREVIOUS MOD","");
+    m->action=mod_library_previous;
+    m=mi_add(MI_ACTION,"SINGLE MOD PLAY ONCE",mod_audio_play_once()?"ON":"OFF");
+    m->action=mod_library_once;
     m=mi_add(MI_ACTION,"STOP PLAYBACK","");
     m->action=mod_library_stop;
     mi_add(MI_INFO,"", "");

@@ -1156,6 +1156,9 @@ static bool               g_fs_fil_open, g_fs_dir_open;
  * exclusively by disk-thread service dispatch. */
 static FIL                g_mod_fil;
 static bool               g_mod_fil_open;
+/* Dedicated jukebox enumerator, separate from FTP's g_fs_dir. */
+static DIR                g_mod_dir;
+static bool               g_mod_dir_open;
 
 int disk_fs_request(fs_req_t *r)
 {
@@ -1242,6 +1245,38 @@ static void fs_service(void)
         if(g_mod_fil_open) {
             fr=f_close(&g_mod_fil);
             g_mod_fil_open=false;
+        }
+        break;
+    case FSOP_MOD_LIST_OPEN:
+        if (g_mod_dir_open) {
+            f_closedir(&g_mod_dir);
+            g_mod_dir_open=false;
+        }
+        if (!r->path || strstr(r->path,"..") || r->path[0]=='/' ||
+            strchr(r->path,':') || strchr(r->path,'\\') ||
+            strlen(r->path)+4u>=sizeof(full)) {
+            fr=FR_INVALID_NAME;
+            break;
+        }
+        snprintf(full,sizeof(full),"0:/%s",r->path);
+        fr=f_opendir(&g_mod_dir,full);
+        g_mod_dir_open=(fr==FR_OK);
+        break;
+    case FSOP_MOD_LIST_NEXT: {
+        FILINFO fno;
+        r->name[0]=0;
+        fr=g_mod_dir_open ? f_readdir(&g_mod_dir,&fno) : FR_NOT_ENABLED;
+        if(fr==FR_OK && fno.fname[0]) {
+            snprintf(r->name,sizeof(r->name),"%s",fno.fname);
+            r->attr=fno.fattrib;
+            r->size=(uint32_t)fno.fsize;
+        }
+        break;
+    }
+    case FSOP_MOD_LIST_CLOSE:
+        if(g_mod_dir_open) {
+            fr=f_closedir(&g_mod_dir);
+            g_mod_dir_open=false;
         }
         break;
     case FSOP_OPEN_R:

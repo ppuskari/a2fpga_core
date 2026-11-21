@@ -34,6 +34,7 @@
 #include "fpga_spi.h"
 #include "boot_timeline.h"   /* 'b' = boot-milestone timeline */
 #include "media_mailbox.h" /* p/P = slot-3 media mailbox probe/loopback */
+#include "mcu_mod_audio.h" /* j/J, n/N, 1/0 jukebox controls */
 
 #define TELNET_PORT     23
 #define TEE_LINES       32
@@ -354,7 +355,8 @@ static void session(int fd)
     static const uint8_t nego[] = { 255, 251, 1, 255, 251, 3, 255, 253, 3 };
     tn_send(fd, nego, sizeof(nego));
     tn_puts(fd, "\r\nA2FPGA a2n20v2-Enhanced remote console\r\n"
-                "keys: c=console m=menu p=media-probe P=media-loopback d=snapshot D=full dump s=scope t=trigger o=oneshot b=boot-timeline q=quit\r\n"
+                "keys: c=console m=menu p/P=media test, j/J=jukebox folder/tree, n/N=next/prev, 1/0=once/repeat, k=stop\r\n"
+                "other: d/D=bus snapshot/dump s=scope t=trigger o=oneshot b=boot-timeline q=quit\r\n"
                 "menu: up/down move, right/enter=ok, left/esc/b=back,\r\n"
                 "      y=view, s=select, [ ]=+/-16\r\n\r\n");
 
@@ -408,6 +410,29 @@ static void session(int fd)
             }
             if (esc_st == 0 && ch == 'q')
                 return;
+            if(esc_st==0 && !menu_mode && (ch=='j' || ch=='J')) {
+                mod_audio_jukebox_from_last(ch=='J');
+                tn_puts(fd,ch=='J' ? "\r\n-- JUKEBOX TREE REQUESTED --\r\n":
+                                    "\r\n-- JUKEBOX FOLDER REQUESTED --\r\n");
+                continue;
+            }
+            if(esc_st==0 && !menu_mode && (ch=='n' || ch=='N')) {
+                bool ok=ch=='n'?mod_audio_next():mod_audio_previous();
+                tn_puts(fd,ok?"\r\n-- TRACK SKIP REQUESTED --\r\n":
+                              "\r\n-- NO ACTIVE PLAYLIST --\r\n");
+                continue;
+            }
+            if(esc_st==0 && !menu_mode && (ch=='1' || ch=='0')) {
+                mod_audio_set_play_once(ch=='1');
+                tn_puts(fd,ch=='1'?"\r\n-- SINGLE MOD ONCE --\r\n":
+                                    "\r\n-- SINGLE MOD REPEAT --\r\n");
+                continue;
+            }
+            if(esc_st==0 && !menu_mode && ch=='k') {
+                mod_audio_request_stop();
+                tn_puts(fd,"\r\n-- MOD STOP REQUESTED --\r\n");
+                continue;
+            }
             if (esc_st == 0 && ch == 'p' && !menu_mode) {
                 media_mailbox_request_probe(); // reported in console tee
                 continue;
