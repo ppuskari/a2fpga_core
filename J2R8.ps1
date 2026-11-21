@@ -208,7 +208,7 @@ function Invoke-Programmer([string[]]$arguments) {
 
 function Detect-Device {
     Assert-J2R8-Checkout
-    Invoke-Programmer @('--detect')
+    Invoke-Programmer -arguments @('--detect')
     Write-Host 'Note: USB identification alone does not prove J2R8 Stage2 is running.'
 }
 
@@ -222,11 +222,11 @@ function Flash-Stage2 {
     if($answer -cne 'FLASH J2R8') {
         Fail 'Programming cancelled; no write attempted.'
     }
-    $args=@('--stage2', $firmware, '--baudrate', [string]$BaudRate,
-            '--skip-verify')
-    if($Port) { $args+=@('--port',$Port) }
-    if($VerboseFlash) { $args+='--verbose' }
-    Invoke-Programmer $args
+    $flashArgs=@('--stage2', $firmware, '--baudrate', [string]$BaudRate,
+                 '--skip-verify')
+    if($Port) { $flashArgs+=@('--port',$Port) }
+    if($VerboseFlash) { $flashArgs+='--verbose' }
+    Invoke-Programmer -arguments $flashArgs
     Write-Host ''
     Write-Host 'Stage2 flash tool reported WRITE SUCCESS at 0x40000.' -ForegroundColor Green
     Write-Warning 'Flash readback was not performed; actual flash contents are unverified.'
@@ -238,7 +238,7 @@ function Flash-Stage2 {
 function Check-Runtime {
     Assert-J2R8-Checkout
     Write-Host 'Checking USB identity after normal power-on (no UPDATE)...'
-    Invoke-Programmer @('--detect')
+    Invoke-Programmer -arguments @('--detect')
     Write-Host ''
     Write-Warning 'Stage1 may enumerate before Stage2 chain-loads. PARTIAL is not proof of bad flash.'
     Write-Host 'Wait until the normal MCU menu appears; verify J2R8 cache sizes on the MOD OSD.'
@@ -253,12 +253,12 @@ function Verify-Readback {
     if($answer -cne 'READBACK') {
         Fail 'Readback cancelled.'
     }
-    $args=@('--firmware',$firmware,'--addr','0x40000','--verify-flash',
-            '--baudrate',[string]$BaudRate)
-    if($Port) { $args+=@('--port',$Port) }
-    if($VerboseFlash) { $args+='--verbose' }
+    $verifyArgs=@('--firmware',$firmware,'--addr','0x40000','--verify-flash',
+                  '--baudrate',[string]$BaudRate)
+    if($Port) { $verifyArgs+=@('--port',$Port) }
+    if($VerboseFlash) { $verifyArgs+='--verbose' }
     try {
-        Invoke-Programmer $args
+        Invoke-Programmer -arguments $verifyArgs
         Write-Host 'Stage2 bytes read back and matched the build image.' -ForegroundColor Green
     } catch {
         Write-Warning 'Byte readback NOT verified. This alone does not prove that Stage2 programming failed.'
