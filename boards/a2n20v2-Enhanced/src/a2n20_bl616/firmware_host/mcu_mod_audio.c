@@ -209,9 +209,9 @@ static void player_release(void)
     if(s_file)vPortFree(s_file);
     s_file=NULL;
 }
-/* J2: bounded file parser and single-copy external sample staging. The MCU
- * only allocates the pattern table (<=132 KiB). Up to 2 MiB of PCM instrument
- * bytes are written into an exclusive high-SDRAM region via XFER SPACE1. */
+/* J2R3: bounded multichannel MOD parser and external sample staging.
+ * The MCU allocates only header/patterns (up to ~263 KiB at 8CH/128 patterns),
+ * subject to heap availability. PCM samples live in exclusive FPGA SDRAM. */
 static bool player_load(const char *path)
 {
     fs_req_t fs;
@@ -240,7 +240,7 @@ static bool player_load(const char *path)
         goto finish;
     }
     if(!mod_format_probe(s_mod_header,file_size,&fmt)) {
-        osd_log("MCU MOD: BAD/UNSUPPORTED 4CH FORMAT %s",path);
+        osd_log("MCU MOD: BAD/UNSUPPORTED MOD FORMAT %s",path);
         goto finish;
     }
     if(!mod_store_begin(fmt.lengths)) {
@@ -497,10 +497,13 @@ void mod_audio_task(void *arg)
                 }
                 // All counters come from FPGA's actual HDMI-clocked FIFO.
                 if(++window>=384u) {
-                    osd_log("MCU MOD: FRAMES=%lu FREE=%u UDR=%u",
+                    osd_log("MCU MOD: CH=%u FRAMES=%lu FREE=%u UDR=%u MISS=%lu FAULT=%lu",
+                            (unsigned)s_ctx.number_of_channels,
                             (unsigned long)(blocks*PCM_BLOCK_FRAMES),
                             (unsigned)pcm_free(),
-                            (unsigned)pcm_underruns());
+                            (unsigned)pcm_underruns(),
+                            (unsigned long)mod_store_misses(),
+                            (unsigned long)mod_store_faults());
                     window=0;
                 }
             }
