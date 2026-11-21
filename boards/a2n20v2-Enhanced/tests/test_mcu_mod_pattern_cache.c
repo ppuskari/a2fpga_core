@@ -38,37 +38,36 @@ void fpga_spi_xfer_read(uint8_t space,uint32_t addr,uint8_t *p,uint16_t n)
     memcpy(p,sdram+addr-MOD_SDRAM_BASE,n);
 }
 
-/* Verify the eight 1-KiB pages are used efficiently instead of wasting
- * 1 KiB for every four-channel pattern. The same 8192B must hold either
- * 8 x 4CH, 4 x 6/8CH, with correct LRU eviction at the capacity boundary. */
-static void run_8k_lru(unsigned channels,unsigned resident_patterns)
+/* Verify sixteen 1-KiB pages serve both pattern sizes efficiently. The
+ * same 16384B must hold 16 x 4CH or 8 x 6/8CH with bounded LRU eviction. */
+static void run_16k_lru(unsigned channels,unsigned resident_patterns)
 {
-    enum { N=9u, MAX_PATTERN=2048u };
+    enum { N=17u, MAX_PATTERN=2048u };
     static uint8_t patterns[N*MAX_PATTERN];
     const unsigned len=256u*channels;
-    ck(mod_patterns_begin(channels,resident_patterns+1u),"8K begin");
+    ck(mod_patterns_begin(channels,resident_patterns+1u),"16K begin");
     for(unsigned p=0;p<resident_patterns+1u;p++) {
         memset(patterns+p*MAX_PATTERN,(int)(p+1u),len);
         ck(mod_patterns_stage(p*len,patterns+p*MAX_PATTERN,(uint16_t)len),
-           "8K pattern staging");
+           "16K pattern staging");
     }
     for(unsigned p=0;p<resident_patterns;p++) {
         note *n=mod_patterns_get(NULL,p,channels);
-        ck(((const uint8_t *)n)[0]==(uint8_t)(p+1u),"8K pattern identity");
+        ck(((const uint8_t *)n)[0]==(uint8_t)(p+1u),"16K pattern identity");
     }
     ck(mod_patterns_fetch_count()==resident_patterns &&
-       mod_patterns_evictions()==0u,"initial 8K residency");
+       mod_patterns_evictions()==0u,"initial 16K residency");
     for(unsigned p=0;p<resident_patterns;p++) {
         note *n=mod_patterns_get(NULL,p,channels);
         ck(((const uint8_t *)n)[0]==(uint8_t)(p+1u),
-           "8K hit preserved pattern");
+           "16K hit preserved pattern");
     }
     ck(mod_patterns_cache_hits()==resident_patterns &&
        mod_patterns_fetch_count()==resident_patterns &&
-       mod_patterns_evictions()==0u,"8K hit without SPI refill");
+       mod_patterns_evictions()==0u,"16K hit without SPI refill");
     ck(((const uint8_t *)mod_patterns_get(
          NULL,resident_patterns,channels))[0]==(uint8_t)(resident_patterns+1u),
-       "8K first LRU eviction read");
+       "16K first LRU eviction read");
     ck(mod_patterns_fetch_count()==resident_patterns+1u &&
        mod_patterns_evictions()==1u,"LRU evicts just one resident pattern");
     ck(((const uint8_t *)mod_patterns_get(NULL,1u,channels))[0]==2u,
@@ -82,7 +81,7 @@ static void run_8k_lru(unsigned channels,unsigned resident_patterns)
     ck(mod_patterns_read_bytes()==(resident_patterns+2u)*len,
        "cache byte counters");
     ck(mod_patterns_faults()==0u,"no pattern-cache faults");
-    printf("PASS J2R7: %uCH 8KiB LRU, %u resident, hits=%lu evicts=%lu\n",
+    printf("PASS J2R8: %uCH 16KiB LRU, %u resident, hits=%lu evicts=%lu\n",
            channels,resident_patterns,
            (unsigned long)mod_patterns_cache_hits(),
            (unsigned long)mod_patterns_evictions());
@@ -201,10 +200,10 @@ int main(void)
     ck(mod_patterns_begin(8,128),"max 8CH 128 patterns");
     ck(mod_patterns_bytes()==MOD_PATTERN_SDRAM_CAPACITY,"256KiB limit");
     ck(!mod_patterns_begin(8,129),"129 patterns must be rejected");
-    ck(MOD_PATTERN_CACHE_BYTES==8192u,"8 KiB cache layout");
-    run_8k_lru(4u,8u);
-    run_8k_lru(6u,4u);
-    run_8k_lru(8u,4u);
+    ck(MOD_PATTERN_CACHE_BYTES==16384u,"16 KiB cache layout");
+    run_16k_lru(4u,16u);
+    run_16k_lru(6u,8u);
+    run_16k_lru(8u,8u);
     run_48_patterns();
     run_15_sample();
     return 0;
