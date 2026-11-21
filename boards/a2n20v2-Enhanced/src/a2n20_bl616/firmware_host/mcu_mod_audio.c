@@ -495,19 +495,18 @@ void mod_audio_task(void *arg)
                     draining=true;
                     osd_log("MCU MOD: SONG COMPLETE (ORDER WRAP)");
                 }
-                // OSD text is 39 columns; never put the volatile UDR
-                // counter after the growing frame count on a long line.
-                // Each line fits even with 10-digit 32-bit counters and
-                // five-digit FIFO occupancy. All counters reflect the
-                // FPGA HDMI-clocked FIFO or SDRAM sample cache.
+                // The 40-column Apple II OSD uses 39 printable columns
+                // to avoid auto-wrap. Keep each line bounded even when
+                // counters grow (u16 FIFO/UDR, u32 frame/cache counters).
+                // MIS = SDRAM cache misses; ERR = SDRAM sample faults.
+                // Two lines minimize full-screen OSD repaints during 8CH.
                 if(++window>=384u) {
-                    osd_log("MCU MOD: CH=%u FRAMES=%lu",
+                    osd_log("MOD %uCH FRAMES=%lu FREE=%u",
                             (unsigned)s_ctx.number_of_channels,
-                            (unsigned long)(blocks*PCM_BLOCK_FRAMES));
-                    osd_log("MCU MOD: FREE=%u UDR=%u",
-                            (unsigned)pcm_free(),
-                            (unsigned)pcm_underruns());
-                    osd_log("MOD MISS=%lu FAULT=%lu",
+                            (unsigned long)(blocks*PCM_BLOCK_FRAMES),
+                            (unsigned)pcm_free());
+                    osd_log("UDR=%u MIS=%lu ERR=%lu",
+                            (unsigned)pcm_underruns(),
                             (unsigned long)mod_store_misses(),
                             (unsigned long)mod_store_faults());
                     window=0;
