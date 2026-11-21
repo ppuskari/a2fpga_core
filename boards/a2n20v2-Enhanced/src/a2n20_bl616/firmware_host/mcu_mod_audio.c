@@ -75,8 +75,10 @@ static void juke_publish(const char *dir,bool recursive)
     memset(s_juke_path,0,sizeof(s_juke_path));
     memcpy(s_juke_path,dir,strlen(dir)+1u);
     s_juke_recursive=recursive?1u:0u;
-    __atomic_store_n(&s_juke_seq,old+2u,__ATOMIC_RELEASE);
+    /* Publish QUEUED before unlocking the request seqlock: the MOD task
+     * must not publish SCANNING/READY and then lose it to a late QUEUED. */
     juke_state(MOD_JUKE_QUEUED);
+    __atomic_store_n(&s_juke_seq,old+2u,__ATOMIC_RELEASE);
 }
 static bool take_juke(char out[MOD_PATH_CAP],bool *recursive)
 {
