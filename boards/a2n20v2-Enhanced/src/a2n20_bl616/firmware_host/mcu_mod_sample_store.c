@@ -50,6 +50,14 @@ bool mod_store_stage(uint32_t offset,const uint8_t *data,uint16_t len)
     /* The audio task never stages and renders simultaneously. */
     return true;
 }
+bool mod_store_verify(uint32_t offset,const uint8_t *expected,uint16_t len)
+{
+    uint8_t got[32];
+    if(!expected || len==0 || len>sizeof(got) || offset>s_size ||
+       len>s_size-offset)return false;
+    fpga_spi_xfer_read(FPGA_SPACE_SDRAM,MOD_SDRAM_BASE+offset,got,len);
+    return memcmp(got,expected,len)==0;
+}
 static bool resolve(sample_cache_t *c,uintptr_t token,uint32_t index,
                     uint32_t *address)
 {
