@@ -37,6 +37,7 @@ static uint8_t s_status[16];
 static uint8_t *s_file;  /* header+patterns only, never PCM samples */
 static uint8_t s_mod_header[MOD_HEADER_PROBE];
 static uint8_t s_mod_transfer[MOD_STORE_PAGE];
+static uint8_t s_mod_stage_head[32],s_mod_stage_tail[32];
 static volatile uint32_t s_path_seq;
 static uint32_t s_seen_seq;
 static char s_path[MOD_PATH_CAP];
@@ -255,6 +256,8 @@ static bool player_load(const char *path)
     }
     /* Exactly the declared sample body is copied to FPGA SDRAM. An optional
      * trailing MOD tag/padding is deliberately ignored. */
+    const uint16_t verify_len=(uint16_t)(fmt.sample_bytes<32u ?
+                                           fmt.sample_bytes : 32u);
     for(off=0;off<fmt.sample_bytes;) {
         uint32_t len=fmt.sample_bytes-off;
         if(len>MOD_STORE_PAGE)len=MOD_STORE_PAGE;
@@ -268,7 +271,17 @@ static bool player_load(const char *path)
                     (unsigned long)off);
             goto finish;
         }
+        if(off==0u)memcpy(s_mod_stage_head,s_mod_transfer,verify_len);
+        if(off+len==fmt.sample_bytes)
+            memcpy(s_mod_stage_tail,s_mod_transfer+len-verify_len,verify_len);
         off+=len;
+    }
+    if(verify_len &&
+       (!mod_store_verify(0u,s_mod_stage_head,verify_len) ||
+        !mod_store_verify(fmt.sample_bytes-verify_len,
+                          s_mod_stage_tail,verify_len))) {
+        osd_log("MCU MOD: FPGA SDRAM READBACK FAILED");
+        goto finish;
     }
     if(!hxcmod_init(&s_ctx) ||
        !hxcmod_setcfg(&s_ctx,PCM_HZ,100,1))goto finish;
