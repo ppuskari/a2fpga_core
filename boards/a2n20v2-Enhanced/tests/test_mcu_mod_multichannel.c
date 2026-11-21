@@ -159,6 +159,51 @@ static void run_eight_independent_instruments(void)
            "%lu cache fills\n",(unsigned long)mod_store_misses());
 }
 
+/* FastTracker .MODs may leave a nonzero repeat sentinel in an unused
+ * instrument. There is no PCM behind a zero-length slot, so rejecting the
+ * entire module on that header field is stricter than HxCMOD itself. */
+static void run_fasttracker_empty_instrument(void)
+{
+    enum { VOICES=8, PAT_BYTES=VOICES*256, SAMPLE_BYTES=1024 };
+    const uint32_t bytes=HEADER+PAT_BYTES+SAMPLE_BYTES;
+    mod_format_t fmt;
+    memset(file,0,sizeof file);
+    memcpy(file+1080,"8CHN",4);
+    file[950]=1;
+    /* Live instrument #1 with one KiB of samples. */
+    file[20+22]=2;
+    file[20+25]=64;
+    file[20+28]=0;
+    file[20+29]=1;
+    file[HEADER]=0x01;
+    file[HEADER+1]=0xAC;
+    file[HEADER+2]=0x10;
+    for(unsigned i=0;i<SAMPLE_BYTES;i++)
+        file[HEADER+PAT_BYTES+i]=(uint8_t)((i*73u+91u)&255u);
+    /* Empty instrument #2 with irrelevant nonzero loop metadata. */
+    const unsigned empty=20u+30u;
+    file[empty+26]=0xFF;
+    file[empty+27]=0xFF;
+    file[empty+29]=1;
+    require(mod_format_probe(file,bytes,&fmt),
+            "FastTracker empty-sample repeat sentinel wrongly rejected");
+    require(fmt.channels==VOICES && fmt.sample_bytes==SAMPLE_BYTES,
+            "FastTracker header capacity changed");
+    require(hxcmod_init(&reference_ctx) &&
+            hxcmod_setcfg(&reference_ctx,44100,100,1) &&
+            hxcmod_load(&reference_ctx,file,(int)bytes),
+            "FastTracker sentinel rejected by HxCMOD");
+    hxcmod_fillbuffer(&reference_ctx,pcm_ref,256,NULL);
+    hxcmod_unload(&reference_ctx);
+    /* Keep the bound on a real sample; the empty-slot exception must
+     * not silently permit an out-of-range live instrument pointer. */
+    file[20+26]=2;
+    file[20+27]=1;
+    require(!mod_format_probe(file,bytes,&fmt),
+            "nonempty sample out-of-bounds loop falsely accepted");
+    puts("PASS J2R3: FastTracker 8CHN empty instrument repeat sentinel");
+}
+
 int main(void)
 {
     require(MOD_STORE_VOICES==8u,"8-voice SRAM cache not configured");
@@ -176,6 +221,7 @@ int main(void)
     run("TDZ8",8);
     run("FA08",8);
     run_eight_independent_instruments();
+    run_fasttracker_empty_instrument();
     /* Validating the *source* format matters: an unsupported 8ch signature
      * must not silently enter SoundTracker-15's four-channel fallback. */
     memset(file,0,sizeof file);
