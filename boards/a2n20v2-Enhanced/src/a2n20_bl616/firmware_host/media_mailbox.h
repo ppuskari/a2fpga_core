@@ -11,6 +11,13 @@
 #define MEDIA_CMD_PING          0x01u
 #define MEDIA_CMD_REPLAY_LAST   0x02u
 #define MEDIA_CMD_STOP          0x03u
+/* J1: no FPGA change; commands use the existing M1 slot-3 latch. */
+#define MEDIA_CMD_JUKE_FOLDER   0x04u
+#define MEDIA_CMD_JUKE_TREE     0x05u
+#define MEDIA_CMD_NEXT          0x06u
+#define MEDIA_CMD_PREVIOUS      0x07u
+#define MEDIA_CMD_PLAY_ONCE     0x08u
+#define MEDIA_CMD_REPEAT_ONE    0x09u
 #define MEDIA_CMD_BEGIN_TEST    0x10u
 #define MEDIA_CMD_END_TEST      0x11u
 #define MEDIA_CMD_ABORT_TEST    0x12u
