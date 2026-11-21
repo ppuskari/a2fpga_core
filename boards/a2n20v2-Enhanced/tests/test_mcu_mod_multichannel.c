@@ -93,7 +93,7 @@ static void run(const char sig[4],unsigned voices)
            sig,voices,nonzero);
 }
 
-/* Exercise eight distinct instruments simultaneously. Four cache pages are
+/* Exercise eight distinct instruments simultaneously. Two SDRAM pages are
  * shared across voices 0..3 and 4..7, so accidentally sharing per-voice cache
  * state is detected by full-memory PCM parity over several sample loops. */
 static void run_eight_independent_instruments(void)
@@ -103,7 +103,7 @@ static void run_eight_independent_instruments(void)
     const uint32_t bytes=(uint32_t)sizeof multi;
     mod_format_t fmt;
     memset(multi,0,sizeof multi);
-    memcpy(multi,"J2R3 8 DIFFERENT VOICES",22);
+    memcpy(multi,"J2R3 8 DIFFERENT VOICES",20u);
     memcpy(multi+1080,"8CHN",4u);
     multi[950]=1u;
     for(unsigned ch=0;ch<INSTRUMENTS;ch++){
@@ -156,7 +156,7 @@ static void run_eight_independent_instruments(void)
     hxcmod_unload(&reference_ctx);
     hxcmod_unload(&virtual_ctx);
     printf("PASS J2R3: eight distinct sample loops, multiple SDRAM pages, "
-           "%lu cache fills\\n",(unsigned long)mod_store_misses());
+           "%lu cache fills\n",(unsigned long)mod_store_misses());
 }
 
 int main(void)
