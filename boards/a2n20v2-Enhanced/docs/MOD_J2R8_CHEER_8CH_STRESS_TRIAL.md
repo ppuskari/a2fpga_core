@@ -61,24 +61,70 @@ audio. If `RMAX + SMAX + GMAX` regularly exceeds this, the CPU cannot
 sustain real-time production at that moment without stored PCM headroom.
 Single spikes may still be absorbed by the FIFO; correlate with UDR slope.
 
-## Windows PowerShell: isolated build, Stage2 flash only
+## Windows PowerShell: reusable one-command Stage2 scripts
 
-Single-line commands follow. Build an **isolated** checkout; do not overwrite
-the working J2R6 directory.
+The repository root contains [J2R8.ps1](../../../J2R8.ps1), which configures
+the Bouffalo SDK, Make, CMake and RISC-V compiler paths automatically from the
+checkout's parent folder. The script also generates and validates a SHA256
+build manifest so an old binary cannot be mistaken for the current source.
+
+Clone into an **isolated** directory; do not overwrite the working J2R6 tree:
+
+
+
+
 
 ```powershell
 $j2r8="C:\AppleIIgsDev_02\a2fpga-jukebox-j2r8"; git clone --single-branch --branch petar/mod-j2r8-16kpattern-8ksample-20261121 https://github.com/ppuskari/a2fpga_core.git $j2r8; if($LASTEXITCODE -ne 0){throw "Clone failed"}
-$env:BL_SDK_BASE="C:\AppleIIgsDev_02\bouffalo_sdk"; $gcc="C:\AppleIIgsDev_02\bouffalo_tools\xuantie\xuantie-gcc-riscv-v2.10.2-windows-x86_64\bin"; $env:PATH="$env:BL_SDK_BASE\tools\make;$env:BL_SDK_BASE\tools\cmake\bin;$gcc;$env:PATH"
-Set-Location "$j2r8\boards\a2n20v2-Enhanced\src\a2n20_bl616\firmware_host"; make -j4 CHIP=bl616 BOARD=bl616dk; if($LASTEXITCODE -ne 0){throw "Build failed - DO NOT FLASH"}
-$bin=(Resolve-Path ".\build\build_out\a2n20_bl616_host_bl616.bin").Path; $raw=[Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($bin)); if(-not $raw.Contains("PCM RMAX=") -or -not $raw.Contains("MOD SMP CACHE=8x")){throw "J2R8 signature missing - DO NOT FLASH"}; Get-Item $bin | Select FullName,Length,LastWriteTime
-Set-Location "$j2r8\boards\a2n20v2-Enhanced\src\a2n20_bl616"; py -3 .\tools\a2n20-mcu-program --detect
-py -3 .\tools\a2n20-mcu-program --stage2 "$bin" --verify-flash --verbose; if($LASTEXITCODE -ne 0){throw "Stage2 write/readback verification failed"}
 ```
 
-Only program after a successful build, validated correct binary, hardware
-in UPDATE/ROM mode, and successful Stage2-only readback. Never flash Stage1
-or the FPGA bitstream as part of this experiment. The J2R6 branch/binary
-is the physical fallback; restore that Stage2 if needed.
+Every subsequent invocation is a single line from that checkout:
+
+
+```powershell
+Set-Location $j2r8
+.\J2R8.ps1 Build
+.\J2R8.ps1 Detect
+.\J2R8.ps1 Flash
+.\J2R8.ps1 CheckRuntime
+```
+
+Or build and flash with a single command (a typed confirmation is still
+required):
+
+
+```powershell
+.\J2R8.ps1 BuildFlash
+```
+
+For a custom SDK or compiler location, use `-DevRoot`, `-SdkRoot`, or
+`-ToolchainBin`. Run `.J2R8.ps1 Help` to see all supported arguments.
+
+### Important: what flashing "verification" actually means
+
+The underlying programmer offers **three independent operations**:
+
+1. **Write** Stage2 at address `0x40000`. The wrapper checks the flash
+   command's return and failure output, but does not claim a byte-verified
+   flash image just because writing reported success.
+2. **Post-reboot USB detection.** After a normal reboot, the Sipeed signed
+   Stage1 runs first. The programmer may report `[PARTIAL]` while Stage1 has
+   not chain-loaded Stage2 yet. This is a **timing/state observation, not an
+   indication that the flash write failed**. To avoid false alarms, Flash
+   passes `--skip-verify` and CheckRuntime is a separate command.
+3. **Optional byte readback from the BootROM.** Use
+   `.J2R8.ps1 VerifyReadback` with the board in UPDATE mode. The BL616
+   BootROM readback path can have separate tool/output-location failures.
+   A failed readback is **not** proof that Stage2 flash failed, and a
+   successful USB boot is **not** byte-readback verification. The optional
+   command fails explicitly if it cannot compare the bytes.
+
+**No Stage1/FPGA flash writes occur in this script.** The existing J2R6
+Stage2 binary remains the physical rollback choice. After programming, use
+the J2R8 MOD OSD to confirm `MOD MCU CACHE=16384B` and
+`MOD SMP CACHE=8x8192B` on a test MOD. An ordinary USB device
+detection by itself does not establish which Stage2 firmware version ran.
+
 
 ## Repeatable hardware A/B acceptance sequence
 
