@@ -1540,7 +1540,7 @@ int hxcmod_load( modcontext * modctx, void * mod_data, int mod_data_size )
 				return 0; // End passed ? - Probably a bad file !
 
 			// Patterns loading
-			for (i = max = 0; i < 128; i++)
+			for (i = max = 0; i < modctx->song.length; i++)
 			{
 				while (max <= modctx->song.patterntable[i])
 				{
