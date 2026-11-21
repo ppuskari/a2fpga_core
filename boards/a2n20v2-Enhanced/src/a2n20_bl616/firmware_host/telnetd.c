@@ -33,6 +33,7 @@
 #include "telnetd.h"
 #include "fpga_spi.h"
 #include "boot_timeline.h"   /* 'b' = boot-milestone timeline */
+#include "media_mailbox.h" /* p/P = slot-3 media mailbox probe/loopback */
 
 #define TELNET_PORT     23
 #define TEE_LINES       32
@@ -353,7 +354,7 @@ static void session(int fd)
     static const uint8_t nego[] = { 255, 251, 1, 255, 251, 3, 255, 253, 3 };
     tn_send(fd, nego, sizeof(nego));
     tn_puts(fd, "\r\nA2FPGA a2n20v2-Enhanced remote console\r\n"
-                "keys: c=console m=menu d=snapshot D=full dump s=scope t=trigger o=oneshot b=boot-timeline q=quit\r\n"
+                "keys: c=console m=menu p=media-probe P=media-loopback d=snapshot D=full dump s=scope t=trigger o=oneshot b=boot-timeline q=quit\r\n"
                 "menu: up/down move, right/enter=ok, left/esc/b=back,\r\n"
                 "      y=view, s=select, [ ]=+/-16\r\n\r\n");
 
@@ -407,6 +408,14 @@ static void session(int fd)
             }
             if (esc_st == 0 && ch == 'q')
                 return;
+            if (esc_st == 0 && ch == 'p' && !menu_mode) {
+                media_mailbox_request_probe(); // reported in console tee
+                continue;
+            }
+            if (esc_st == 0 && ch == 'P' && !menu_mode) {
+                media_mailbox_request_selftest(); // NO Apple writes required
+                continue;
+            }
             if (esc_st == 0 && ch == 'd' && !menu_mode) {
                 bus_snapshot(fd);          /* diagnostic bus-address snapshot */
                 continue;
