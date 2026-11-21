@@ -240,7 +240,14 @@ static bool player_load(const char *path)
         goto finish;
     }
     if(!mod_format_probe(s_mod_header,file_size,&fmt)) {
-        osd_log("MCU MOD: BAD/UNSUPPORTED MOD FORMAT %s",path);
+        /* Emit the actual MOD signature (offset 1080) as hex, even when
+         * it contains NUL/non-ASCII bytes. This distinguishes unsupported
+         * tracker dialects from malformed files without guessing formats. */
+        osd_log("MCU MOD: BAD FORMAT SIZE=%lu SIG1080=%02X%02X%02X%02X",
+                (unsigned long)file_size,
+                (unsigned)s_mod_header[1080],(unsigned)s_mod_header[1081],
+                (unsigned)s_mod_header[1082],(unsigned)s_mod_header[1083]);
+        osd_log("MCU MOD: REJECTED %s",path);
         goto finish;
     }
     if(!mod_store_begin(fmt.lengths)) {
