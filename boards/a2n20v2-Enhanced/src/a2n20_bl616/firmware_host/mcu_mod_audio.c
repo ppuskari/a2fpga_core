@@ -11,6 +11,7 @@
 #include "mcu_mod_jukebox.h"
 #include "mcu_mod_format.h"
 #include "mcu_mod_sample_store.h"
+#include "mcu_mod_gain.h"
 #include "mcu_mod_now_playing.h"
 #include "third_party/hxcmod/hxcmod.h"
 #include "fpga_spi.h"
@@ -208,9 +209,9 @@ static void player_release(void)
     if(s_file)vPortFree(s_file);
     s_file=NULL;
 }
-/* J2: bounded file parser and single-copy external sample staging. The MCU
- * only allocates the pattern table (<=132 KiB). Up to 2 MiB of PCM instrument
- * bytes are written into an exclusive high-SDRAM region via XFER SPACE1. */
+/* J2R3: bounded multichannel MOD parser and external sample staging.
+ * The MCU allocates only header/patterns (up to ~263 KiB at 8CH/128 patterns),
+ * subject to heap availability. PCM samples live in exclusive FPGA SDRAM. */
 static bool player_load(const char *path)
 {
     fs_req_t fs;
@@ -239,7 +240,7 @@ static bool player_load(const char *path)
         goto finish;
     }
     if(!mod_format_probe(s_mod_header,file_size,&fmt)) {
-        osd_log("MCU MOD: BAD/UNSUPPORTED 4CH FORMAT %s",path);
+        osd_log("MCU MOD: BAD/UNSUPPORTED MOD FORMAT %s",path);
         goto finish;
     }
     if(!mod_store_begin(fmt.lengths)) {
@@ -310,8 +311,9 @@ static bool player_load(const char *path)
         osd_log("MCU MOD: HxCMOD REJECTED FILE");
         goto finish;
     }
-    osd_log("MCU MOD: %luB FILE, %luB PATTERNS, %luB FPGA PCM",
-            (unsigned long)file_size,(unsigned long)fmt.prefix_bytes,
+    osd_log("MCU MOD: %uCH %luB FILE, %luB PATTERNS, %luB FPGA PCM",
+            (unsigned)fmt.channels,(unsigned long)file_size,
+            (unsigned long)fmt.prefix_bytes,
             (unsigned long)fmt.sample_bytes);
     ok=true;
 finish:
@@ -335,6 +337,8 @@ static bool pcm_send_block(bool one_pass)
 {
     const uint32_t wraps=s_ctx.song_wraps;
     hxcmod_fillbuffer(&s_ctx,s_pcm,PCM_BLOCK_FRAMES,NULL);
+    /* J2R3: MCU postmix gain and stereo-linked headroom protection. */
+    mod_gain_apply((int16_t *)s_pcm,PCM_BLOCK_FRAMES);
     fpga_spi_xfer_write(PCM_SPACE,0,(const uint8_t*)s_pcm,PCM_BLOCK_BYTES);
     return one_pass && s_ctx.song_wraps!=wraps;
 }
@@ -353,6 +357,7 @@ static bool start_song(const char *path,unsigned track,unsigned total)
     memcpy(s_last_request,path,strlen(path)+1u);
     __atomic_store_n(&s_has_last,1u,__ATOMIC_RELEASE);
     pcm_control(PCM_CTRL_RESET,0xA5u);
+    mod_gain_reset(); /* clear previous track's limiter envelope */
     pcm_control(PCM_CTRL_ENABLE,1u);
     s_state=MOD_PCM_PLAYING;
     mod_now_playing_publish(path,track,total);
@@ -492,10 +497,13 @@ void mod_audio_task(void *arg)
                 }
                 // All counters come from FPGA's actual HDMI-clocked FIFO.
                 if(++window>=384u) {
-                    osd_log("MCU MOD: FRAMES=%lu FREE=%u UDR=%u",
+                    osd_log("MCU MOD: CH=%u FRAMES=%lu FREE=%u UDR=%u MISS=%lu FAULT=%lu",
+                            (unsigned)s_ctx.number_of_channels,
                             (unsigned long)(blocks*PCM_BLOCK_FRAMES),
                             (unsigned)pcm_free(),
-                            (unsigned)pcm_underruns());
+                            (unsigned)pcm_underruns(),
+                            (unsigned long)mod_store_misses(),
+                            (unsigned long)mod_store_faults());
                     window=0;
                 }
             }
