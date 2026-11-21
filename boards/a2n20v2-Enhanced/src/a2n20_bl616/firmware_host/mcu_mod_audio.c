@@ -11,6 +11,7 @@
 #include "mcu_mod_jukebox.h"
 #include "mcu_mod_format.h"
 #include "mcu_mod_sample_store.h"
+#include "mcu_mod_now_playing.h"
 #include "third_party/hxcmod/hxcmod.h"
 #include "fpga_spi.h"
 #include "disk.h"
@@ -337,7 +338,7 @@ static bool pcm_send_block(bool one_pass)
     fpga_spi_xfer_write(PCM_SPACE,0,(const uint8_t*)s_pcm,PCM_BLOCK_BYTES);
     return one_pass && s_ctx.song_wraps!=wraps;
 }
-static bool start_song(const char *path)
+static bool start_song(const char *path,unsigned track,unsigned total)
 {
     s_state=MOD_PCM_LOADING;
     if(!pcm_read_status()) {
@@ -354,6 +355,7 @@ static bool start_song(const char *path)
     pcm_control(PCM_CTRL_RESET,0xA5u);
     pcm_control(PCM_CTRL_ENABLE,1u);
     s_state=MOD_PCM_PLAYING;
+    mod_now_playing_publish(path,track,total);
     osd_log("MCU MOD: PLAY %s",path);
     return true;
 }
@@ -362,7 +364,7 @@ static bool playlist_play(unsigned *idx,unsigned start)
     const unsigned count=mod_jukebox_count();
     for(unsigned i=start;i<count;i++) {
         const char *path=mod_jukebox_track(i);
-        if(path && start_song(path)) {
+        if(path && start_song(path,i+1u,count)) {
             *idx=i;
             osd_log("MCU JUKE: TRACK %u/%u",i+1u,count);
             return true;
@@ -380,6 +382,7 @@ void mod_audio_task(void *arg)
     (void)arg;
     s_file=NULL;
     s_state=MOD_PCM_IDLE;
+    mod_now_playing_clear();
     osd_log("MCU MOD: DIRECT HxCMOD->HDMI READY");
     for(;;) {
         const bool selected=take_pending(requested);
@@ -389,6 +392,7 @@ void mod_audio_task(void *arg)
         const bool stop=__atomic_exchange_n(&s_stop,0u,__ATOMIC_ACQ_REL)!=0u;
         if(stop) {
             if(playing){player_release();playing=false;}
+            mod_now_playing_clear();
             draining=false;
             juke_active=false;  /* list is retained for NEXT/PREV */
             s_state=MOD_PCM_STOPPED;
@@ -396,6 +400,7 @@ void mod_audio_task(void *arg)
         }else if(jukebox) {
             juke_state(MOD_JUKE_SCANNING);
             if(playing){player_release();playing=false;}
+            mod_now_playing_clear();
             draining=false;
             juke_active=false;
             if(jukedir[0]=='\001' && jukedir[1]==0) {
@@ -424,17 +429,19 @@ void mod_audio_task(void *arg)
             blocks=window=0;
         }else if(selected) {
             if(playing){player_release();playing=false;}
+            mod_now_playing_clear();
             draining=false;
             juke_active=false;
             mod_jukebox_clear();
             __atomic_store_n(&s_juke_count_pub,0u,__ATOMIC_RELEASE);
             juke_state(MOD_JUKE_IDLE);
-            playing=start_song(requested);
+            playing=start_song(requested,0u,0u);
             blocks=window=0;
         }else if(nav && mod_jukebox_count()) {
             unsigned target;
             const unsigned count=mod_jukebox_count();
             if(playing){player_release();playing=false;}
+            mod_now_playing_clear();
             draining=false;
             target=(nav==1u)?(juke_index+1u)%count:
                               (juke_index?juke_index-1u:count-1u);
@@ -446,14 +453,16 @@ void mod_audio_task(void *arg)
             blocks=window=0;
         }else if(replay && __atomic_load_n(&s_has_last,__ATOMIC_ACQUIRE)) {
             if(playing){player_release();playing=false;}
+            mod_now_playing_clear();
             draining=false;
-            playing=start_song(s_last_request);
+            playing=start_song(s_last_request,0u,0u);
             blocks=window=0;
         }
         if(playing) {
             if(!pcm_read_status()) {
                 osd_log("MCU MOD: FPGA PCM LINK LOST");
                 player_release();playing=false;
+                mod_now_playing_clear();
                 draining=false;juke_active=false;
                 s_state=MOD_PCM_ERROR;
             }else if(draining) {
@@ -462,6 +471,7 @@ void mod_audio_task(void *arg)
                 if(pcm_free()>=2048u) {
                     player_release();
                     playing=false;
+                    mod_now_playing_clear();
                     draining=false;
                     if(juke_active && juke_index+1u<mod_jukebox_count()) {
                         juke_active=playlist_play(&juke_index,juke_index+1u);
