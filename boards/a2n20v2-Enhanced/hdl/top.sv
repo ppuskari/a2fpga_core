@@ -483,6 +483,14 @@ module top #(
     wire signed [15:0] pcm_audio_l_w, pcm_audio_r_w;
     wire [15:0] pcm_audio_l_pixel_w, pcm_audio_r_pixel_w;
 
+    // Physically-installed A2FPGA slot-3 ROMless Media Mailbox. This
+    // doesn't depend on slotmaker or the current A3 audio personality.
+    wire media_spi_wr_w,media_spi_rd_w,media_spi_rd_valid_w;
+    wire [23:0] media_spi_wr_addr_w,media_spi_rd_addr_w;
+    wire [7:0] media_spi_wr_data_w,media_spi_rd_data_w;
+    wire media_apple_rd_w;
+    wire [7:0] media_apple_data_w;
+
     slotmaker slotmaker (
         .a2bus_if(a2bus_if),
         .a2mem_if(a2mem_if),
@@ -693,7 +701,14 @@ module top #(
         .pcm_spi_rd_o(pcm_spi_rd_w),
         .pcm_spi_rd_addr_o(pcm_spi_rd_addr_w),
         .pcm_spi_rd_valid_i(pcm_spi_rd_valid_w),
-        .pcm_spi_rd_data_i(pcm_spi_rd_data_w)
+        .pcm_spi_rd_data_i(pcm_spi_rd_data_w),
+        .media_spi_wr_o(media_spi_wr_w),
+        .media_spi_wr_addr_o(media_spi_wr_addr_w),
+        .media_spi_wr_data_o(media_spi_wr_data_w),
+        .media_spi_rd_o(media_spi_rd_w),
+        .media_spi_rd_addr_o(media_spi_rd_addr_w),
+        .media_spi_rd_valid_i(media_spi_rd_valid_w),
+        .media_spi_rd_data_i(media_spi_rd_data_w)
     );
 
     assign ws2812 = mcu_ws2812_w;
@@ -713,6 +728,11 @@ module top #(
     assign pcm_spi_wr_addr_w = 24'b0;
     assign pcm_spi_rd_addr_w = 24'b0;
     assign pcm_spi_wr_data_w = 8'b0;
+    assign media_spi_wr_w = 1'b0;
+    assign media_spi_rd_w = 1'b0;
+    assign media_spi_wr_addr_w = 24'b0;
+    assign media_spi_rd_addr_w = 24'b0;
+    assign media_spi_wr_data_w = 8'b0;
 
     // No BL616: Uthernet2 backing store has no host -- tie the link idle
     assign u2_host_wr_w    = 1'b0;
@@ -1154,6 +1174,34 @@ wire [7:0] doc_128k_status_w;
     wire native_doc_slot_w = AUDIO_MODE_MB_DOC && audio_native_doc_w &&
         !a2bus_if.sw_gs && !slot_if.dev_select_n &&
         (slot_if.card_id == MOCKINGBOARD_ID) && a2bus_if.phi0;
+
+    // M1 ROMless Apple slot-3 service, $C0B0-$C0BF on IIe and IIgs.
+    // No C300 ROM, no C800 expansion ROM, no IRQ, no slot-4 mouse claim.
+    // m2sel_n is a real bus-selection qualifier on the IIgs, and the
+    // existing apple_bus forces it active on the IIe (as slotmaker does).
+    // Unlike the IIe-only native DOC port, this is enabled in both modes
+    // and across every A3 audio personality.
+    wire media_slot3_sel_w =
+        !a2bus_if.m2sel_n && a2bus_if.phi0 &&
+        (a2bus_if.addr[15:4] == 12'hC0B);
+    media_mailbox_slot3 media_mailbox (
+        .clk(clk_logic_w),
+        .rst_n(device_reset_n_w), // Apple /RESET must not clear audio/transfer
+        .apple_sel_i(media_slot3_sel_w),
+        .apple_rw_n_i(a2bus_if.rw_n),
+        .apple_write_strobe_i(a2bus_if.data_in_strobe),
+        .apple_reg_i(a2bus_if.addr[3:0]),
+        .apple_wdata_i(a2bus_if.data),
+        .apple_read_o(media_apple_rd_w),
+        .apple_rdata_o(media_apple_data_w),
+        .spi_wr_i(media_spi_wr_w),
+        .spi_wr_addr_i(media_spi_wr_addr_w),
+        .spi_wr_data_i(media_spi_wr_data_w),
+        .spi_rd_i(media_spi_rd_w),
+        .spi_rd_addr_i(media_spi_rd_addr_w),
+        .spi_rd_valid_o(media_spi_rd_valid_w),
+        .spi_rd_data_o(media_spi_rd_data_w)
+    );
 
     // Direct 44.1 kHz stereo PCM bridge (full replacement for tracker).
     // It does NOT use the DOC, native slot mailbox, or DOC SDRAM ports.
@@ -1600,10 +1648,11 @@ wire [7:0] doc_128k_status_w;
     // Data output
 
     wire mb_bus_rd_w = mb_rd && audio_mb_enabled_w;
-    assign data_out_en_w = ssp_rd || mb_bus_rd_w ||
+    assign data_out_en_w = media_apple_rd_w || ssp_rd || mb_bus_rd_w ||
         sg_rd_w || ssc_rd || u2_rd || diskii_rd || hdd_rd || cardrom_rd;
 
-    assign data_out_w = ssc_rd ? ssc_d_w :
+    assign data_out_w = media_apple_rd_w ? media_apple_data_w :
+        ssc_rd ? ssc_d_w :
         ssp_rd ? ssp_d_w :
         sg_rd_w ? sg_d_w :
         mb_bus_rd_w ? mb_d_w :

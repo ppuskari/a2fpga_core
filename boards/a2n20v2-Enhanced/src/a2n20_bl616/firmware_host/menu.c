@@ -17,6 +17,7 @@
 #include "settings.h"
 #include "disk.h"
 #include "mcu_mod_audio.h"
+#include "media_mailbox.h"
 #include "fwupdate.h"
 #include "fpgaupdate.h"
 #include "menu.h"
@@ -1208,6 +1209,50 @@ static void mod_library_build(void)
 }
 static const menu_screen_t SCR_MOD_LIBRARY={"MCU MOD PLAYER",mod_library_build};
 
+/* ====================== SCREEN: SLOT 3 MEDIA MAILBOX ====================== */
+static void media_probe_action(int id)
+{
+    (void)id;
+    media_mailbox_request_probe();
+    set_status("M1 STATUS SENT TO CONSOLE LOG");
+}
+static void media_selftest_action(int id)
+{
+    (void)id;
+    media_mailbox_request_selftest();
+    set_status("M1 LOOPBACK SENT TO CONSOLE LOG");
+}
+static void media_mailbox_build(void)
+{
+    media_mailbox_info_t st;
+    char val[24];
+    media_mailbox_get_info(&st);
+    mi_add(MI_INFO,"ROMLESS SLOT3 $C0B0-$C0BF","");
+    mi_add(MI_INFO,"IIE + IIGS, NO SLOT ROM","");
+    mi_add(MI_INFO,"SPI XFER7, PCM REMAINS XFER6","");
+    mi_add(MI_INFO,"M1 PROTOCOL",st.online?"ONLINE V1":"NOT DETECTED");
+    snprintf(val,sizeof(val),"%u / %u",
+             (unsigned)st.apple_reads,(unsigned)st.apple_writes);
+    mi_add(MI_INFO,"APPLE READS / WRITES",val);
+    snprintf(val,sizeof(val),"%u / %u",
+             (unsigned)st.queued,(unsigned)st.free_bytes);
+    mi_add(MI_INFO,"FIFO QUEUED / FREE",val);
+    snprintf(val,sizeof(val),"%02X / %02X / %02X",
+             (unsigned)st.sequence,(unsigned)st.acknowledged,
+             (unsigned)st.result);
+    mi_add(MI_INFO,"SEQ / ACK / RESULT",val);
+    snprintf(val,sizeof(val),"%lu XOR %02X",
+             (unsigned long)st.received,(unsigned)st.xor8);
+    mi_add(MI_INFO,"DIAG TRANSFER",val);
+    menu_item_t *m=mi_add(MI_ACTION,"DUMP M1 STATUS TO CONSOLE","");
+    m->action=media_probe_action;
+    m=mi_add(MI_ACTION,"RUN MCU/FPGA FIFO LOOPBACK","");
+    m->action=media_selftest_action;
+}
+static const menu_screen_t SCR_MEDIA_MAILBOX = {
+    "SLOT 3 MEDIA MAILBOX",media_mailbox_build
+};
+
 /* ======================= SCREEN: ROOT ===================================== */
 static void root_enter(int id)
 {
@@ -1221,6 +1266,7 @@ static void root_enter(int id)
     case 6: screen_push(&SCR_FWUPDATE);   break;
     case 7: screen_push(&SCR_FPGAUPDATE); break;
     case 8: screen_push(&SCR_MOD_LIBRARY); break;
+    case 9: screen_push(&SCR_MEDIA_MAILBOX); break;
     }
 }
 
@@ -1252,9 +1298,9 @@ static void root_build(void)
     static const char *const entries[] = {
         "SLOT ASSIGNMENTS", "AUDIO CONFIG", "DISK IMAGES", "STORAGE",
         "NETWORK", "USB DEVICES", "FIRMWARE UPDATE", "FPGA UPDATE",
-        "MCU MOD PLAYER"
+        "MCU MOD PLAYER", "MEDIA MAILBOX"
     };
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < 10; i++) {
         menu_item_t *m = mi_add(MI_SUBMENU, entries[i], "");
         m->action = root_enter;
         m->id = i;

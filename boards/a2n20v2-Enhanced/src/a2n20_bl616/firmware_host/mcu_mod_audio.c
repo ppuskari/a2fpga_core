@@ -36,6 +36,9 @@ static volatile uint32_t s_path_seq;
 static uint32_t s_seen_seq;
 static char s_path[MOD_PATH_CAP];
 static volatile uint32_t s_stop;
+static volatile uint32_t s_replay;
+static char s_last_request[MOD_PATH_CAP]; // written by modpcm task alone
+static volatile uint32_t s_has_last;      // published after full path copy
 static volatile mod_pcm_status_t s_state=MOD_PCM_IDLE;
 
 static bool valid_path(const char *path)
@@ -73,6 +76,13 @@ mod_pcm_status_t mod_audio_status(void){return s_state;}
 void mod_audio_request_stop(void)
 {
     __atomic_store_n(&s_stop,1u,__ATOMIC_RELEASE);
+}
+bool mod_audio_replay_last(void)
+{
+    if(!__atomic_load_n(&s_has_last,__ATOMIC_ACQUIRE))
+        return false;
+    __atomic_store_n(&s_replay,1u,__ATOMIC_RELEASE);
+    return true;
 }
 static bool pcm_read_status(void)
 {
@@ -168,7 +178,17 @@ void mod_audio_task(void *arg)
     s_state=MOD_PCM_IDLE;
     osd_log("MCU MOD: DIRECT HxCMOD->HDMI READY");
     for(;;) {
-        if(take_pending(requested)) {
+        const bool selected=take_pending(requested);
+        const bool replay=__atomic_exchange_n(&s_replay,0u,__ATOMIC_ACQ_REL)!=0u;
+        if(selected || (replay && __atomic_load_n(&s_has_last,__ATOMIC_ACQUIRE))) {
+            if(selected){
+                // A mailbox replay copies only from this task's own cached
+                // validated path, avoiding concurrent menu string writes.
+                memcpy(s_last_request,requested,sizeof(s_last_request));
+                __atomic_store_n(&s_has_last,1u,__ATOMIC_RELEASE);
+            }else{
+                memcpy(requested,s_last_request,sizeof(requested));
+            }
             if(playing) {
                 player_release();
                 playing=false;

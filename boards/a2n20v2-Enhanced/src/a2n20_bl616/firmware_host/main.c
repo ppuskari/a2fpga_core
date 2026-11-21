@@ -42,6 +42,7 @@
 #include "w5100.h"          /* emulated W5100 (Uthernet II) MACRAW bridge */
 #include "disk.h"           /* Disk II image serving (track-on-demand) */
 #include "mcu_mod_audio.h" /* Direct stereo MOD PCM -> HDMI, no DOC */
+#include "media_mailbox.h" /* ROMless Apple slot3 commands/byte FIFO -> MCU */
 #include "boot_timeline.h"  /* boot-milestone timeline (FPGA sys_time capture) */
 
 /* True once the early slot-map apply (below, in main()) has been confirmed by
@@ -1297,6 +1298,11 @@ int main(void)
      * USB host PSC and SSI263 tasks retain priority and responsiveness. */
     usb_osal_thread_create("modpcm", 6144, CONFIG_USBHOST_PSC_PRIO - 1,
                            mod_audio_task, NULL);
+
+    /* Romless Apple IIe/IIgs slot3 $C0B0-BF mailbox, SPI XFER7.
+     * No mouse/GLU/SSI263 ownership. Lower priority than audio servicing. */
+    usb_osal_thread_create("media", 3072, CONFIG_USBHOST_PSC_PRIO - 2,
+                           media_mailbox_task, NULL);
 
     /* R8: keep speech below BOTH the USB PSC host-service task (28)
      * and the HID/menu poll task (29). R7 accidentally ran the hot
