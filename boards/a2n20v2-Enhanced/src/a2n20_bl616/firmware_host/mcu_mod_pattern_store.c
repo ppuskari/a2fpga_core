@@ -1,7 +1,7 @@
-/* J2R7: 8-KiB variable-size LRU HxCMOD pattern cache in MCU SRAM.
- * The 8-KiB area contains eight 1-KiB pages, supporting:
- *  - eight 4-channel patterns (1024B each)
- *  - four 6/8-channel patterns (1536/2048B each)
+/* J2R8: 16-KiB variable-size LRU HxCMOD pattern cache in MCU SRAM.
+ * The 16-KiB area contains sixteen 1-KiB pages, supporting:
+ *  - sixteen 4-channel patterns (1024B each)
+ *  - eight 6/8-channel patterns (1536/2048B each)
  * Every pattern is still stored in FPGA SDRAM at byte 0x600000.
  * HxCMOD consumes each returned pointer synchronously for one row.
  * No dynamic allocation or copying is required on a cache hit.
@@ -11,8 +11,8 @@
 #include <string.h>
 
 _Static_assert(sizeof(note)==4u, "MOD pattern events must be four bytes");
-_Static_assert(MOD_PATTERN_CACHE_BYTES==8u*MOD_PATTERN_CACHE_PAGE_BYTES,
-               "cache page partition must cover exactly 8 KiB");
+_Static_assert(MOD_PATTERN_CACHE_BYTES==16u*MOD_PATTERN_CACHE_PAGE_BYTES,
+               "cache page partition must cover exactly 16 KiB");
 
 typedef struct {
     unsigned pattern;
@@ -22,7 +22,7 @@ typedef struct {
     bool valid;
 } pattern_slot_t;
 
-/* 8192B exactly, plus small separately accounted slot metadata. */
+/* 16384B exactly, plus small separately accounted slot metadata. */
 static note s_cache[MOD_PATTERN_CACHE_BYTES/sizeof(note)];
 static pattern_slot_t s_slot[MOD_PATTERN_CACHE_PAGES];
 static uint32_t s_clock;
@@ -107,10 +107,9 @@ note *mod_patterns_get(void *opaque,unsigned pattern,unsigned channels)
     }
     const unsigned pages=(length+MOD_PATTERN_CACHE_PAGE_BYTES-1u)/
                           MOD_PATTERN_CACHE_PAGE_BYTES;
-    /* All patterns here are <= 2 KiB, so at most two pages are needed.
-     * Choose a contiguous range with the fewest evictions; for a tie,
-     * choose the oldest resident entries (largest accumulated age).
-     * The entire cache is tiny: a bounded <= 8*8 metadata scan. */
+    /* All patterns are <=2 KiB and use at most two contiguous pages.
+     * Prefer the lowest eviction count, then the oldest resident entries.
+     * Metadata search is bounded to <=16*16 comparisons per miss. */
     unsigned best_start=0u,best_conflicts=MOD_PATTERN_CACHE_PAGES+1u;
     uint64_t best_age=0u;
     for(unsigned start=0;start+pages<=MOD_PATTERN_CACHE_PAGES;start++) {
@@ -139,8 +138,8 @@ note *mod_patterns_get(void *opaque,unsigned pattern,unsigned channels)
     for(unsigned i=0;i<MOD_PATTERN_CACHE_PAGES;i++) {
         if(!s_slot[i].valid) { meta=i; break; }
     }
-    /* If every metadata slot was valid then all eight 1-KiB pages were
-     * occupied, and at least one has just been evicted above. */
+    /* If all sixteen metadata slots were occupied then at least one
+     * resident pattern was evicted immediately above. */
     if(meta==MOD_PATTERN_CACHE_PAGES) {
         ++s_faults;
         mod_patterns_invalidate();
