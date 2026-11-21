@@ -34,6 +34,15 @@
 #define MOD_PATH_CAP 128u
 
 static modcontext s_ctx;
+/* A MOD pattern allocation is optional: failure should skip the track,
+ * not enter the fatal FreeRTOS malloc hook. The owner-task check prevents
+ * suppressing real failures in other tasks while allocation is pending. */
+static volatile TaskHandle_t s_fallible_alloc_owner;
+bool mod_audio_malloc_failure_expected(void)
+{
+    TaskHandle_t owner=__atomic_load_n(&s_fallible_alloc_owner,__ATOMIC_ACQUIRE);
+    return owner!=NULL && owner==xTaskGetCurrentTaskHandle();
+}
 static msample s_pcm[PCM_BLOCK_FRAMES*2u];
 static uint8_t s_status[16];
 static uint8_t *s_file;  /* header+patterns only, never PCM samples */
@@ -247,10 +256,26 @@ static bool player_load(const char *path)
         osd_log("MCU MOD: TOO MANY SAMPLE BYTES");
         goto finish;
     }
+    /* Fatal OOM note: the platform's vApplicationMallocFailedHook()
+     * deliberately halts the BL616 even though this caller checks NULL.
+     * Log and reject large requests before touching the allocator.
+     * A 16 KiB reserve also avoids starving USB/SD tasks of heap. */
+    const size_t heap_free=xPortGetFreeHeapSize();
+    osd_log("MOD PAT=%lu HEAP=%lu",
+            (unsigned long)fmt.prefix_bytes,(unsigned long)heap_free);
+    if(fmt.prefix_bytes>heap_free ||
+       heap_free-fmt.prefix_bytes<16384u) {
+        osd_log("MOD: PATTERN HEAP TOO LOW");
+        goto finish;
+    }
+    /* Fragmentation can still prevent a contiguous allocation. Suppress
+     * the fatal hook ONLY for this MOD task's specific allocation. */
+    __atomic_store_n(&s_fallible_alloc_owner,xTaskGetCurrentTaskHandle(),
+                     __ATOMIC_RELEASE);
     s_file=(uint8_t*)pvPortMalloc(fmt.prefix_bytes);
+    __atomic_store_n(&s_fallible_alloc_owner,NULL,__ATOMIC_RELEASE);
     if(!s_file) {
-        osd_log("MCU MOD: NO RAM FOR %luB PATTERNS",
-                (unsigned long)fmt.prefix_bytes);
+        osd_log("MOD: NO CONTIGUOUS PATTERN RAM");
         goto finish;
     }
     memcpy(s_file,s_mod_header,fmt.header_bytes);

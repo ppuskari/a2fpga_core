@@ -9,6 +9,9 @@ typedef enum {
 } mod_pcm_status_t;
 bool mod_audio_choose(const char *relative_path);
 mod_pcm_status_t mod_audio_status(void);
+/* Only a deliberately fallible MOD pattern allocation may allow the
+ * FreeRTOS malloc-failure hook to return. Other failures remain fatal. */
+bool mod_audio_malloc_failure_expected(void);
 void mod_audio_request_stop(void);
 /* Replay the last selected FAT .MOD from the MCU mailbox (no DOC). */
 bool mod_audio_replay_last(void);

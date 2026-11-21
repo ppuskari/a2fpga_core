@@ -154,6 +154,11 @@ static inline void dbg_tick(void)
  * stack; for stack, byte2:byte3 = first two chars of the faulting task name. */
 void vApplicationMallocFailedHook(void)
 {
+    /* Loading a large MOD can legitimately fail to allocate its pattern
+     * table. Only that one task-scoped request is recoverable: let
+     * pvPortMalloc() return NULL so the player can skip the track. */
+    if(mod_audio_malloc_failure_expected())
+        return;
     taskDISABLE_INTERRUPTS();
     fpga_spi_reg_write_raw(0x07, 0xED);
     fpga_spi_reg_write_raw(0x0C, 0xE1);   /* E1 = heap/malloc exhausted */
