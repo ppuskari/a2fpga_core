@@ -86,6 +86,20 @@ jobs:
             "$MCU/mcu_mod_format.c" "$MCU/mcu_mod_sample_store.c" \
             "$MCU/third_party/hxcmod/hxcmod.c" -o /tmp/mod_j2_large_4k
           /tmp/mod_j2_large_4k
+      - name: Smoke-test J2R8 Stage2-only PowerShell helper
+        run: |
+          pwsh -NoProfile -File ./J2R8.ps1 Help
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('J2R8.ps1').read_text()
+          assert "Invoke-Programmer $args" in s
+          assert "('--stage2', $firmware" in s
+          assert "'--skip-verify'" in s
+          assert "'0x40000'" in s
+          assert "--stage1" not in s
+          assert "VerifyReadback" in s and "CheckRuntime" in s
+          print("PASS J2R8 PowerShell wrapper: Stage2-only, no Stage1 path")
+          PY
       - name: Check ROMless slot3 address, preserve other hardware routes
         run: |
           python3 - <<'PY'
