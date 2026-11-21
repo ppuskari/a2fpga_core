@@ -87,6 +87,10 @@ typedef enum {
     FSOP_MOD_OPEN,
     FSOP_MOD_READ,
     FSOP_MOD_CLOSE,
+    /* Jukebox uses an independent directory handle; FTP listing is untouched. */
+    FSOP_MOD_LIST_OPEN,
+    FSOP_MOD_LIST_NEXT,
+    FSOP_MOD_LIST_CLOSE,
 } fs_op_t;
 
 typedef struct {
@@ -99,7 +103,7 @@ typedef struct {
     uint32_t    size;         /* STAT/LIST size             */
     uint8_t     attr;         /* FatFS AM_* bits            */
     uint16_t    fdate, ftime; /* FatFS packed date/time     */
-    char        name[64];     /* LIST_NEXT entry name       */
+    char        name[128];    /* LIST_NEXT entry name       */
 } fs_req_t;
 
 int  disk_fs_request(fs_req_t *r);          /* returns FRESULT */
