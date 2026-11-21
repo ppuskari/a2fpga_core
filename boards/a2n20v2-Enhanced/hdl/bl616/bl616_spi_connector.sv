@@ -105,7 +105,15 @@ module bl616_spi_connector #(
     output wire pcm_spi_rd_o,
     output wire [23:0] pcm_spi_rd_addr_o,
     input wire pcm_spi_rd_valid_i,
-    input wire [7:0] pcm_spi_rd_data_i
+    input wire [7:0] pcm_spi_rd_data_i,
+    // M1 ROMless Apple IIe/IIgs slot 3 media mailbox, XFER SPACE 7.
+    output wire media_spi_wr_o,
+    output wire [23:0] media_spi_wr_addr_o,
+    output wire [7:0] media_spi_wr_data_o,
+    output wire media_spi_rd_o,
+    output wire [23:0] media_spi_rd_addr_o,
+    input wire media_spi_rd_valid_i,
+    input wire [7:0] media_spi_rd_data_i
 );
 
     assign pcm_spi_wr_o = mem_wr_en && mem_space == 3'd6;
@@ -113,6 +121,14 @@ module bl616_spi_connector #(
     assign pcm_spi_wr_data_o = mem_wr_data;
     assign pcm_spi_rd_o = mem_rd_req && mem_rd_space == 3'd6;
     assign pcm_spi_rd_addr_o = mem_rd_addr;
+
+    // Strictly independent of HDMI PCM (SPACE6), SSI (SPACE4/5),
+    // Uthernet (SPACE3), and all native DOC bus/SDRAM paths.
+    assign media_spi_wr_o = mem_wr_en && mem_space == 3'd7;
+    assign media_spi_wr_addr_o = mem_wr_addr;
+    assign media_spi_wr_data_o = mem_wr_data;
+    assign media_spi_rd_o = mem_rd_req && mem_rd_space == 3'd7;
+    assign media_spi_rd_addr_o = mem_rd_addr;
 
     assign ssi_spi_wr_o=mem_wr_en && (mem_space==3'd4);
     assign ssi_spi_wr_space_o=mem_space;
@@ -725,6 +741,9 @@ module bl616_spi_connector #(
         else if (pcm_spi_rd_valid_i) begin
             mem_rd_valid = 1'b1;
             mem_rd_data  = pcm_spi_rd_data_i;
+        end else if (media_spi_rd_valid_i) begin
+            mem_rd_valid = 1'b1;
+            mem_rd_data  = media_spi_rd_data_i;
         end
     end
 
