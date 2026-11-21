@@ -26,7 +26,7 @@ sdk_add_link_options(-Wl,--wrap=exception_entry)
 # sdmm.c must export its SD logic as mmc_disk_* instead of owning disk_*.
 sdk_add_compile_definitions(-DFATFS_EXTERNAL_DISKIO)
 
-sdk_add_compile_definitions(-DHXCMOD_MAXCHANNELS=4)
+sdk_add_compile_definitions(-DHXCMOD_MAXCHANNELS=8)
 
 target_sources(app PRIVATE
     usbh_xinput.c
@@ -39,6 +39,7 @@ target_sources(app PRIVATE
     disk.c
     # Software ProTracker playback -> independent HDMI PCM (no DOC ownership).
     mcu_mod_audio.c
+    mcu_mod_gain.c
     mcu_mod_now_playing.c
     mcu_mod_jukebox.c
     mcu_mod_format.c
