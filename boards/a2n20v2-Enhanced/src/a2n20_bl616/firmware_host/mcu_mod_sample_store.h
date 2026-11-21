@@ -1,6 +1,6 @@
-/* J2: external 4-channel MOD sample bytes in high FPGA SDRAM.
+/* J2R3: external 1..8 channel MOD sample bytes in high FPGA SDRAM.
  * The CPU retains only the header and pattern table; cache misses fetch an
- * aligned SPI SPACE1 page into one of four per-voice MCU SRAM buffers.
+ * aligned SPI SPACE1 page into one of eight per-voice MCU SRAM buffers.
  * Region [0x400000,0x600000) is reserved exclusively for MOD sample bytes.
  * Do not overlap SHADOW/DOC/DiskII/HDD or future SDRAM allocations.
  */
@@ -13,7 +13,7 @@
 #define MOD_SDRAM_BASE      0x400000u
 #define MOD_SDRAM_CAPACITY  0x200000u  /* 2 MiB */
 #define MOD_STORE_PAGE      4096u
-#define MOD_STORE_VOICES    4u
+#define MOD_STORE_VOICES    8u
 
 /* lengths are decoded PCM sample byte lengths, in MOD instrument order. */
 bool mod_store_begin(const uint32_t lengths[31]);
