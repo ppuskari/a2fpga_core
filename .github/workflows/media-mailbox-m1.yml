@@ -10,8 +10,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Icarus Verilog
-        run: sudo apt-get update -qq && sudo apt-get install -y iverilog
+      - name: Install RTL verification and independent synthesis tools
+        run: sudo apt-get update -qq && sudo apt-get install -y iverilog yosys
+      - name: Exercise mailbox through an independent Yosys synthesis pass
+        run: |
+          yosys -Q -T -p 'read_verilog -sv boards/a2n20v2-Enhanced/hdl/media_mailbox_slot3.sv; synth -top media_mailbox_slot3; stat' > /tmp/m1_yosys.log
+          grep -q 'media_mailbox_slot3' /tmp/m1_yosys.log
+          tail -n 38 /tmp/m1_yosys.log
       - name: Verify Apple IIe/IIgs ROMless slot3 SPI7 mailbox
         run: |
           iverilog -g2012 -s tb_media_mailbox_slot3 -o /tmp/m1 boards/a2n20v2-Enhanced/hdl/media_mailbox_slot3.sv boards/a2n20v2-Enhanced/tests/tb_media_mailbox_slot3.sv
@@ -54,6 +59,9 @@ jobs:
           assert 'sensei_' not in cm
           assert 'mod_audio_replay_last' in (m/'mcu_mod_audio.c').read_text()
           assert 'ROMless' in mb and "8'h4D" in mb
+          assert 'syn_ramstyle = "registers"' in mb
+          assert 'function automatic' not in mb and "8'(" not in mb
+          assert 'spi_register_byte_w' in mb
           print('PASS: physical slot3 ROMless C0B0-BF, no A3/slotmaker selection')
           print('PASS: independent SPI7 mailbox and SPI6 HDMI music')
           print('PASS: IIgs GLU and original Mockingboard remain intact')
