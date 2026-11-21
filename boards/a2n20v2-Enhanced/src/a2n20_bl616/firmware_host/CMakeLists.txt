@@ -44,6 +44,7 @@ target_sources(app PRIVATE
     mcu_mod_jukebox.c
     mcu_mod_format.c
     mcu_mod_sample_store.c
+    mcu_mod_pattern_store.c
     media_mailbox.c
     third_party/hxcmod/hxcmod.c
     diskio_host.c

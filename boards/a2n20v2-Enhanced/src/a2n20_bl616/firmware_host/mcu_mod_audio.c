@@ -11,6 +11,7 @@
 #include "mcu_mod_jukebox.h"
 #include "mcu_mod_format.h"
 #include "mcu_mod_sample_store.h"
+#include "mcu_mod_pattern_store.h"
 #include "mcu_mod_gain.h"
 #include "mcu_mod_now_playing.h"
 #include "third_party/hxcmod/hxcmod.h"
@@ -36,10 +37,12 @@
 static modcontext s_ctx;
 static msample s_pcm[PCM_BLOCK_FRAMES*2u];
 static uint8_t s_status[16];
-static uint8_t *s_file;  /* header+patterns only, never PCM samples */
+/* Entire MOD header is held in fixed SRAM; all patterns live in FPGA.
+ * No contiguous MCU heap allocation is required regardless of MOD length. */
 static uint8_t s_mod_header[MOD_HEADER_PROBE];
 static uint8_t s_mod_transfer[MOD_STORE_PAGE];
 static uint8_t s_mod_stage_head[32],s_mod_stage_tail[32];
+static uint8_t s_pat_stage_head[32],s_pat_stage_tail[32];
 static volatile uint32_t s_path_seq;
 static uint32_t s_seen_seq;
 static char s_path[MOD_PATH_CAP];
@@ -206,12 +209,13 @@ static void player_release(void)
     pcm_control(PCM_CTRL_ENABLE,0);
     pcm_control(PCM_CTRL_RESET,0xA5u);
     hxcmod_unload(&s_ctx);
-    if(s_file)vPortFree(s_file);
-    s_file=NULL;
+    mod_patterns_invalidate();
+    mod_store_invalidate();
 }
-/* J2R3: bounded multichannel MOD parser and external sample staging.
- * The MCU allocates only header/patterns (up to ~263 KiB at 8CH/128 patterns),
- * subject to heap availability. PCM samples live in exclusive FPGA SDRAM. */
+/* J2R6: stage every pattern in a separate 256-KiB FPGA SDRAM bank;
+ * the 2-KiB MCU active-pattern cache replaces the old 99+KiB heap
+ * allocation that caused the 3EDGES freeze. Samples retain their entire
+ * independent 2-MiB SDRAM bank. The original file-read order is preserved. */
 static bool player_load(const char *path)
 {
     fs_req_t fs;
@@ -240,44 +244,67 @@ static bool player_load(const char *path)
         goto finish;
     }
     if(!mod_format_probe(s_mod_header,file_size,&fmt)) {
-        osd_log("MCU MOD: BAD/UNSUPPORTED MOD FORMAT %s",path);
+        osd_log("MCU MOD: BAD/UNSUPPORTED MOD FORMAT");
         goto finish;
     }
-    if(!mod_store_begin(fmt.lengths)) {
-        osd_log("MCU MOD: TOO MANY SAMPLE BYTES");
+    if(!mod_store_begin(fmt.lengths) ||
+       !mod_patterns_begin(fmt.channels,fmt.pattern_count) ||
+       fmt.pattern_bytes!=mod_patterns_bytes()) {
+        osd_log("MOD: FPGA PAT/SAMPLE CAPACITY ERROR");
         goto finish;
     }
-    s_file=(uint8_t*)pvPortMalloc(fmt.prefix_bytes);
-    if(!s_file) {
-        osd_log("MCU MOD: NO RAM FOR %luB PATTERNS",
-                (unsigned long)fmt.prefix_bytes);
-        goto finish;
-    }
-    memcpy(s_file,s_mod_header,fmt.header_bytes);
-    /* For 15-instrument MODs the initial 1084-byte probe already contains
-     * part of the first pattern. Preserve those bytes, don't read past them. */
+
+    /* 15-instrument SoundTracker has a 600B header. The initial 1084B
+     * probe already read the first 484B of pattern data; stage those
+     * bytes without rereading them or misaligning the SD file cursor. */
     if(fmt.header_bytes<MOD_HEADER_PROBE) {
         const uint32_t preloaded=MOD_HEADER_PROBE-fmt.header_bytes;
-        memcpy(s_file+fmt.header_bytes,s_mod_header+fmt.header_bytes,
-               preloaded<fmt.pattern_bytes?preloaded:fmt.pattern_bytes);
-        off=MOD_HEADER_PROBE;
-    }else off=MOD_HEADER_PROBE;
-    while(off<fmt.prefix_bytes) {
-        memset(&fs,0,sizeof fs);
-        fs.op=FSOP_MOD_READ;
-        fs.buf=s_file+off;
-        fs.len=(fmt.prefix_bytes-off)>MOD_STORE_PAGE ?
-               MOD_STORE_PAGE : fmt.prefix_bytes-off;
-        if(disk_fs_request(&fs)!=0 || fs.out!=fs.len) {
-            osd_log("MCU MOD: PATTERN READ FAILED");
+        if(preloaded < sizeof s_pat_stage_head ||
+           preloaded > fmt.pattern_bytes ||
+           !mod_patterns_stage(0u,s_mod_header+fmt.header_bytes,
+                               (uint16_t)preloaded)) {
+            osd_log("MOD: EARLY PATTERN STAGE FAILED");
             goto finish;
         }
-        off+=fs.out;
+        memcpy(s_pat_stage_head,s_mod_header+fmt.header_bytes,
+               sizeof s_pat_stage_head);
+        off=MOD_HEADER_PROBE;
+    } else {
+        off=fmt.header_bytes;
     }
-    /* Exactly the declared sample body is copied to FPGA SDRAM. An optional
-     * trailing MOD tag/padding is deliberately ignored. */
+    /* Continue reading sequentially from the exact current FAT offset. */
+    for(;off<fmt.prefix_bytes;) {
+        const uint32_t rel=off-fmt.header_bytes;
+        uint32_t len=fmt.prefix_bytes-off;
+        if(len>MOD_STORE_PAGE)len=MOD_STORE_PAGE;
+        memset(&fs,0,sizeof fs);
+        fs.op=FSOP_MOD_READ;
+        fs.buf=s_mod_transfer;
+        fs.len=len;
+        if(disk_fs_request(&fs)!=0 || fs.out!=len ||
+           !mod_patterns_stage(rel,s_mod_transfer,(uint16_t)len)) {
+            osd_log("MOD: FPGA PAT STAGE FAILED +%lu",
+                    (unsigned long)rel);
+            goto finish;
+        }
+        if(rel==0u)
+            memcpy(s_pat_stage_head,s_mod_transfer,sizeof s_pat_stage_head);
+        if(off+len==fmt.prefix_bytes)
+            memcpy(s_pat_stage_tail,s_mod_transfer+len-
+                   sizeof s_pat_stage_tail,sizeof s_pat_stage_tail);
+        off+=len;
+    }
+    if(!mod_patterns_verify(0u,s_pat_stage_head,sizeof s_pat_stage_head) ||
+       !mod_patterns_verify(fmt.pattern_bytes-sizeof s_pat_stage_tail,
+                            s_pat_stage_tail,sizeof s_pat_stage_tail)) {
+        osd_log("MOD: FPGA PAT READBACK FAILED");
+        goto finish;
+    }
+
+    /* File cursor is now exactly at the first PCM sample; retain the
+     * existing verified 2-MiB sample staging and sentinel checks. */
     const uint16_t verify_len=(uint16_t)(fmt.sample_bytes<32u ?
-                                           fmt.sample_bytes : 32u);
+                                            fmt.sample_bytes : 32u);
     for(off=0;off<fmt.sample_bytes;) {
         uint32_t len=fmt.sample_bytes-off;
         if(len>MOD_STORE_PAGE)len=MOD_STORE_PAGE;
@@ -307,14 +334,31 @@ static bool player_load(const char *path)
        !hxcmod_setcfg(&s_ctx,PCM_HZ,100,1))goto finish;
     hxcmod_external_samples(&s_ctx,MOD_SDRAM_BASE,MOD_SDRAM_CAPACITY,
                             NULL,mod_store_read,mod_store_write);
-    if(!hxcmod_load(&s_ctx,s_file,(int)fmt.prefix_bytes)) {
+    hxcmod_external_patterns(&s_ctx,fmt.pattern_bytes,
+                             NULL,mod_patterns_get);
+    /* HxCMOD copies its 1084-byte header; pattern accesses are always
+     * redirected through mod_patterns_get, never header+pattern heap. */
+    if(!hxcmod_load(&s_ctx,s_mod_header,MOD_HEADER_PROBE)) {
         osd_log("MCU MOD: HxCMOD REJECTED FILE");
         goto finish;
     }
-    osd_log("MCU MOD: %uCH %luB FILE, %luB PATTERNS, %luB FPGA PCM",
-            (unsigned)fmt.channels,(unsigned long)file_size,
-            (unsigned long)fmt.prefix_bytes,
+    /* Prefetch first pattern before enabling HDMI playback. */
+    (void)mod_patterns_get(NULL,s_ctx.song.patterntable[0],fmt.channels);
+    if(mod_patterns_faults()) {
+        osd_log("MOD: PAT CACHE INVALID");
+        goto finish;
+    }
+
+    /* Each line stays below the 39-character Apple II OSD limit.
+     * HEAP SAVED is the old contiguous header+patterns allocation. */
+    osd_log("MOD FPGA PAT=%luB SMP=%luB",
+            (unsigned long)fmt.pattern_bytes,
             (unsigned long)fmt.sample_bytes);
+    osd_log("MOD MCU CACHE=2048B SAVED=%luB",
+            (unsigned long)fmt.prefix_bytes);
+    osd_log("MOD %uCH PATS=%u HDR=%lu",
+            (unsigned)fmt.channels,(unsigned)fmt.pattern_count,
+            (unsigned long)fmt.header_bytes);
     ok=true;
 finish:
     if(opened) {
@@ -324,8 +368,7 @@ finish:
     }
     if(!ok) {
         hxcmod_unload(&s_ctx);
-        if(s_file)vPortFree(s_file);
-        s_file=NULL;
+        mod_patterns_invalidate();
         mod_store_invalidate();
     }
     return ok;
@@ -385,7 +428,6 @@ void mod_audio_task(void *arg)
     unsigned juke_index=0;
     uint32_t blocks=0,window=0;
     (void)arg;
-    s_file=NULL;
     s_state=MOD_PCM_IDLE;
     mod_now_playing_clear();
     osd_log("MCU MOD: DIRECT HxCMOD->HDMI READY");
@@ -509,6 +551,13 @@ void mod_audio_task(void *arg)
                             (unsigned)pcm_underruns(),
                             (unsigned long)mod_store_misses(),
                             (unsigned long)mod_store_faults());
+                    /* Pattern fetches are infrequent; emit this extra
+                     * OSD refresh only every fourth status interval. */
+                    if((blocks/384u)%4u==0u)
+                        osd_log("PF=%lu B=%lu E=%lu",
+                                (unsigned long)mod_patterns_fetch_count(),
+                                (unsigned long)mod_patterns_read_bytes(),
+                                (unsigned long)mod_patterns_faults());
                     window=0;
                 }
             }

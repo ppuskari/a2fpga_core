@@ -99,6 +99,11 @@ typedef struct {
 	muchar  effect;
 } note;
 
+/* J2R6: optional pattern backing store (FPGA SDRAM on BL616).
+ * Callback returns a valid stable pointer for one 64-row pattern. */
+typedef note *(*hxcmod_pattern_read_fn)(void *opaque, unsigned pattern,
+                                        unsigned channels);
+
 typedef struct {
 	muchar  title[20];
 	sample  samples[31];
@@ -181,6 +186,10 @@ typedef struct {
 typedef struct {
 	/* Configure after init() and before load(). Cleared by init(). */
 	muchar external_samples;
+	muchar external_patterns;
+	mulong external_pattern_bytes;
+	void *external_pattern_opaque;
+	hxcmod_pattern_read_fn external_pattern_read;
 	mulong external_base;
 	mulong external_capacity;
 	mulong external_cursor;
@@ -319,6 +328,9 @@ int  hxcmod_load( modcontext * modctx, void * mod_data, int mod_data_size );
 /* For streamed files, mod_data contains just the MOD header and all pattern
  * bytes. Sample data is addressed from external_base (nonzero); the callback
  * handles sample bytes without a CPU-addressable pointer. */
+void hxcmod_external_patterns(modcontext *modctx,
+                              mulong pattern_bytes, void *opaque,
+                              hxcmod_pattern_read_fn read_cb);
 void hxcmod_external_samples(modcontext *modctx, mulong external_base,
                              mulong external_capacity, void *opaque,
                              hxcmod_sample_read_fn read_cb,

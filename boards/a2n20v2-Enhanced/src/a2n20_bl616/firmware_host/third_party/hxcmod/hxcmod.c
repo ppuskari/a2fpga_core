@@ -1429,6 +1429,28 @@ int hxcmod_setcfg(modcontext * modctx, int samplerate, int stereo_separation, in
 	return 0;
 }
 
+/* Pattern bytes can reside in FPGA SDRAM. Only the currently active
+ * 64-row pattern is available as an MCU pointer from the callback.
+ * Normal in-memory HxCMOD operation stays byte-for-byte unchanged. */
+void hxcmod_external_patterns(modcontext *modctx,
+                              mulong pattern_bytes, void *opaque,
+                              hxcmod_pattern_read_fn read_cb)
+{
+    if(!modctx) return;
+    modctx->external_patterns = (read_cb && pattern_bytes) ? 1 : 0;
+    modctx->external_pattern_bytes = pattern_bytes;
+    modctx->external_pattern_opaque = opaque;
+    modctx->external_pattern_read = read_cb;
+}
+static note *hxcmod_get_pattern(modcontext *modctx, unsigned index)
+{
+    if(modctx->external_patterns)
+        return modctx->external_pattern_read(
+            modctx->external_pattern_opaque,index,
+            modctx->number_of_channels);
+    return modctx->patterndata[index];
+}
+
 void hxcmod_external_samples(modcontext *modctx, mulong external_base,
                              mulong external_capacity, void *opaque,
                              hxcmod_sample_read_fn read_cb,
@@ -1537,21 +1559,34 @@ int hxcmod_load( modcontext * modctx, void * mod_data, int mod_data_size )
 			if( modctx->number_of_channels > NUMMAXCHANNELS )
 				return 0; // Too much channels ! - Increase/define HXCMOD_MAXCHANNELS !
 
-			if( modmemory >= endmodmemory )
-				return 0; // End passed ? - Probably a bad file !
+			if( modmemory >= endmodmemory && !modctx->external_patterns )
+                return 0; // Header-only load is valid with external patterns.
 
 			// Patterns loading
 			for (i = max = 0; i < modctx->song.length; i++)
 			{
 				while (max <= modctx->song.patterntable[i])
 				{
-					modctx->patterndata[max] = (note*)modmemory;
-					modmemory += (256*modctx->number_of_channels);
-					max++;
 
-					if( modmemory > endmodmemory ||
-                            (modmemory == endmodmemory && !modctx->external_samples) )
-						return 0; // End passed ? - Probably a bad file !
+                    if(max >= 128u)
+                        return 0;
+                    if(modctx->external_patterns)
+                    {
+                        const mulong used = ((mulong)max + 1UL) *
+                                            (256UL * modctx->number_of_channels);
+                        if(used > modctx->external_pattern_bytes)
+                            return 0;
+                        modctx->patterndata[max] = 0;
+                    }
+                    else
+                    {
+                        modctx->patterndata[max] = (note*)modmemory;
+                        modmemory += (256*modctx->number_of_channels);
+                        if(modmemory > endmodmemory ||
+                           (modmemory == endmodmemory && !modctx->external_samples))
+                            return 0;
+                    }
+                    max++;
 				}
 			}
 
@@ -1689,7 +1724,7 @@ void hxcmod_fillbuffer(modcontext * modctx, msample * outbuffer, mssize nbsample
 				{
 					if( !modctx->patterndelay )
 					{
-						nptr = modctx->patterndata[modctx->song.patterntable[modctx->tablepos]];
+						nptr = hxcmod_get_pattern(modctx,modctx->song.patterntable[modctx->tablepos]);
 						nptr = nptr + modctx->patternpos;
 						cptr = modctx->channels;
 
@@ -1748,7 +1783,7 @@ void hxcmod_fillbuffer(modcontext * modctx, msample * outbuffer, mssize nbsample
 
 				if (modctx->patterntickse++ > modctx->patternticksem)
 				{
-					nptr = modctx->patterndata[modctx->song.patterntable[modctx->tablepos]];
+					nptr = hxcmod_get_pattern(modctx,modctx->song.patterntable[modctx->tablepos]);
 					nptr = nptr + modctx->patternpos;
 					cptr = modctx->channels;
 
