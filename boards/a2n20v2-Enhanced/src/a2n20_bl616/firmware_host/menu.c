@@ -17,6 +17,7 @@
 #include "settings.h"
 #include "disk.h"
 #include "mcu_mod_audio.h"
+#include "mcu_mod_now_playing.h"
 #include "media_mailbox.h"
 #include "fwupdate.h"
 #include "fpgaupdate.h"
@@ -1285,6 +1286,29 @@ static void mod_library_build(void)
     mi_add(MI_INFO,"INDEPENDENT OF ENSONIQ DOC", "");
     mi_add(MI_INFO,"44100 HZ, 16-BIT STEREO", "");
     mi_add(MI_INFO,"MOD PLAYBACK",status);
+    /* Fixed number of NOW PLAYING rows: live updates cannot shift menu
+     * action indices while the user is navigating with the gamepad. */
+    {
+        mod_now_playing_t now={0};
+        char position[12],first[39],second[39];
+        const char *name="";
+        if(mod_now_playing_snapshot(&now) && now.active) {
+            const char *slash=strrchr(now.path,'/');
+            name=slash?slash+1:now.path;
+            if(now.total)
+                snprintf(position,sizeof position,"%u/%u",now.track,now.total);
+            else
+                snprintf(position,sizeof position,"SINGLE");
+        }else{
+            snprintf(position,sizeof position,"NONE");
+        }
+        snprintf(first,sizeof first,"%.38s",name);
+        snprintf(second,sizeof second,"%.38s",
+                 strlen(name)>38u ? name+38u : "");
+        mi_add(MI_INFO,"NOW PLAYING",position);
+        mi_add(MI_INFO,first,"");
+        mi_add(MI_INFO,second,"");
+    }
     {
         char value[12];
         snprintf(value,sizeof value,"%u",mod_audio_jukebox_count());
@@ -1630,10 +1654,15 @@ void menu_input(uint16_t buttons)
      * Only the MOD screen is repainted (never the file picker). */
     if (s_view == VIEW_MENU && s_stack[s_depth] == &SCR_MOD_LIBRARY) {
         static uint32_t last_juke_generation = 0xffffffffu;
+        static uint32_t last_play_generation = 0xffffffffu;
         const uint32_t generation=mod_audio_jukebox_generation();
-        if(generation!=last_juke_generation) {
+        const uint32_t playing_generation=mod_now_playing_generation();
+        if(generation!=last_juke_generation ||
+           playing_generation!=last_play_generation) {
+            const bool scan_changed = generation!=last_juke_generation;
             last_juke_generation=generation;
-            switch(mod_audio_jukebox_scan_state()) {
+            last_play_generation=playing_generation;
+            if(scan_changed) switch(mod_audio_jukebox_scan_state()) {
             case MOD_JUKE_QUEUED:
                 set_status("JUKEBOX SCAN QUEUED");break;
             case MOD_JUKE_SCANNING:
