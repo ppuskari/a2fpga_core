@@ -511,11 +511,11 @@ def verify_flash_image(port, image_path, address, baudrate, verbose=False):
     """Read the flashed region back from the chip and byte-compare it to the
     source image.
 
-    Returns True on an exact match. Returns False ONLY on a confirmed byte
-    mismatch (real corruption). If the read-back itself can't be completed
-    (tool/port error, output file not found), prints a warning and returns True
-    — we don't fail an otherwise-successful flash because the verify plumbing
-    misbehaved; the caller already confirmed the write succeeded.
+    Returns True ONLY after an actual saved readback has been compared byte
+    for byte with the source image. Any command failure, missing output file,
+    short read or mismatch is a verification failure. This fail-closed rule is
+    especially important for standalone --verify-flash, which performs no
+    flashing and must never claim success without comparing the bytes.
     """
     print(bold("  Verifying flash (read-back compare)..."))
 
@@ -552,36 +552,54 @@ def verify_flash_image(port, image_path, address, baudrate, verbose=False):
             result = subprocess.run(cmd, cwd=tmpdir, capture_output=not verbose,
                                     text=True, timeout=120)
         except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-            print(yellow("  [WARN]") + f" read-back could not run ({e}); "
-                  "skipping verify (flash itself succeeded).")
-            return True
+            print(red("  [ERROR]") + f" read-back could not run ({e}); "
+                  "verification FAILED; flash content is UNKNOWN.")
+            return False
 
-        # Search likely locations for a freshly-written flash.bin.
-        search = [os.path.join(tmpdir, "flash.bin"), os.path.join(os.getcwd(), "flash.bin")]
+        if result.returncode != 0:
+            print(red("  [ERROR]") + f" read-back command exited with status "
+                  f"{result.returncode}; verification FAILED.")
+            return False
+
+        # bflb-iot-tool versions disagree on readback output names and
+        # locations. Search the requested temporary directory, current
+        # directory and the tool package directory, but accept only files
+        # created by THIS read operation. The byte comparison below remains
+        # authoritative: discovery alone is never success.
         pkg = _bflb_iot_tool_dir()
+        search = []
+        roots = [tmpdir, os.getcwd()]
         if pkg:
-            search.append(os.path.join(pkg, "flash.bin"))
-        search += glob.glob(os.path.join(tmpdir, "**", "flash.bin"), recursive=True)
+            roots.append(pkg)
+        for root in roots:
+            for pattern in ("flash.bin", "flash_read.bin", "read.bin",
+                            "*flash*read*.bin", "*read*flash*.bin"):
+                search += glob.glob(os.path.join(root, pattern))
+                if root == tmpdir or root == pkg:
+                    search += glob.glob(os.path.join(root, "**", pattern),
+                                        recursive=True)
 
-        read_path = next((p for p in search
-                          if os.path.isfile(p) and os.path.getmtime(p) >= start), None)
+        read_path = next((p for p in dict.fromkeys(search)
+                          if os.path.isfile(p) and os.path.getmtime(p) >= start
+                          and os.path.getsize(p) >= n), None)
         if read_path is None:
-            print(yellow("  [WARN]") + " read-back file not found; skipping "
-                  "verify (flash itself succeeded). Re-run with --verbose to see "
-                  "the read output.")
+            print(red("  [ERROR]") + " no fresh read-back file found; "
+                  "verification FAILED; flash content is UNKNOWN.")
+            print("  bflb-iot-tool may report '[All Successful]' without "
+                  "producing a file that can be byte-compared.")
             if not verbose and result.stdout:
                 for line in result.stdout.strip().splitlines()[-5:]:
                     print(f"    {line}")
-            return True
+            return False
 
         with open(read_path, "rb") as fp:
             back = fp.read()
 
     # The read-back may be padded up to a sector boundary; compare the first n.
     if len(back) < n:
-        print(yellow("  [WARN]") + f" read-back short ({len(back)} < {n} bytes); "
-              "skipping verify.")
-        return True
+        print(red("  [ERROR]") + f" read-back short ({len(back)} < {n} bytes); "
+              "verification FAILED.")
+        return False
 
     if back[:n] == src:
         print(green("  [OK]") + f" verified {n} bytes at 0x{address:x} match the image")
