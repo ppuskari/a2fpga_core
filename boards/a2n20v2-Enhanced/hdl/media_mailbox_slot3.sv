@@ -110,7 +110,9 @@ module media_mailbox_slot3 #(
     end
     endfunction
 
-    always @* begin
+    // always_comb evaluates at time zero as well as on address changes;
+    // a read of +0 is valid even when the address never toggled beforehand.
+    always_comb begin
         apple_rdata_o=register_byte(apple_reg_i);
     end
 
