@@ -22,5 +22,13 @@ bool mod_audio_previous(void);
 void mod_audio_set_play_once(bool once);
 bool mod_audio_play_once(void);
 unsigned mod_audio_jukebox_count(void);
+/* Menu-only snapshot of the asynchronous playlist scan. The generation
+ * increments on queue/scan/completion/clear to prompt UI repaint. */
+typedef enum {
+    MOD_JUKE_IDLE=0, MOD_JUKE_QUEUED, MOD_JUKE_SCANNING,
+    MOD_JUKE_READY, MOD_JUKE_EMPTY
+} mod_jukebox_scan_state_t;
+mod_jukebox_scan_state_t mod_audio_jukebox_scan_state(void);
+uint32_t mod_audio_jukebox_generation(void);
 void mod_audio_task(void *arg);
 #endif
