@@ -1262,7 +1262,7 @@ static void mod_library_build(void)
     m->action=mod_library_next;
     m=mi_add(MI_ACTION,"PREVIOUS MOD","");
     m->action=mod_library_previous;
-    m=mi_add(MI_TOGGLE,"SINGLE MOD PLAY ONCE",mod_audio_play_once()?"ON":"OFF");
+    m=mi_add(MI_ACTION,"SINGLE MOD PLAY ONCE",mod_audio_play_once()?"ON":"OFF");
     m->action=mod_library_once;
     m=mi_add(MI_ACTION,"STOP PLAYBACK","");
     m->action=mod_library_stop;
