@@ -41,6 +41,14 @@ typedef unsigned short  muint;
 typedef          short  mint;
 typedef unsigned long   mulong;
 
+/* J2: optional sample storage outside MCU address space (FPGA SDRAM).
+ * The pattern table remains in ordinary MCU RAM. Virtual sample pointers
+ * are NEVER dereferenced by the renderer when this callback is installed. */
+typedef mchar (*hxcmod_sample_read_fn)(void *opaque, const mchar *sample,
+                                       mulong pos, unsigned channel);
+typedef void (*hxcmod_sample_write_fn)(void *opaque, const mchar *sample,
+                                        mulong pos, mchar value);
+
 #ifdef HXCMOD_16BITS_TARGET
 	typedef unsigned short  mssize;
 #else
@@ -171,6 +179,14 @@ typedef struct {
 } channel;
 
 typedef struct {
+	/* Configure after init() and before load(). Cleared by init(). */
+	muchar external_samples;
+	mulong external_base;
+	mulong external_capacity;
+	mulong external_cursor;
+	void *external_opaque;
+	hxcmod_sample_read_fn external_read;
+	hxcmod_sample_write_fn external_write;
 	module  song;
 	mchar * sampledata[31];
 	note *  patterndata[128];
@@ -300,6 +316,13 @@ typedef struct tracker_buffer_state_
 int  hxcmod_init( modcontext * modctx );
 int  hxcmod_setcfg( modcontext * modctx, int samplerate, int stereo_separation, int filter );
 int  hxcmod_load( modcontext * modctx, void * mod_data, int mod_data_size );
+/* For streamed files, mod_data contains just the MOD header and all pattern
+ * bytes. Sample data is addressed from external_base (nonzero); the callback
+ * handles sample bytes without a CPU-addressable pointer. */
+void hxcmod_external_samples(modcontext *modctx, mulong external_base,
+                             mulong external_capacity, void *opaque,
+                             hxcmod_sample_read_fn read_cb,
+                             hxcmod_sample_write_fn write_cb);
 void hxcmod_fillbuffer( modcontext * modctx, msample * outbuffer, mssize nbsample, tracker_buffer_state * trkbuf );
 void hxcmod_unload( modcontext * modctx );
 

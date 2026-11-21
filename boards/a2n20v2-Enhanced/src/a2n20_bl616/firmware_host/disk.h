@@ -54,13 +54,16 @@ bool disk_remount_pending(void);
  * are always included (is_dir set); files are filtered by exts, a
  * NULL-terminated list of extensions (no dot, case-insensitive).
  * Directories sort before files; each group is sorted alphabetically. */
-#define DISK_LIST_MAX 64
+#define DISK_LIST_MAX 256 /* full sorted snapshot; picker displays 48 per page */
 typedef struct {
     char name[80];   /* entry name within the directory (LFN; longer skipped) */
     bool is_dir;
 } disk_list_ent_t;
 void disk_list_begin(const char *path, const char *const *exts);
 int  disk_list_poll(disk_list_ent_t *ents, int max);
+/* Read a page of the same alphabetized listing; total returns number in
+ * the complete snapshot (capped at DISK_LIST_MAX). */
+int  disk_list_poll_page(disk_list_ent_t *ents, int max, int offset, int *total);
 
 /* ---- async FS proxy for network services (ftpd) --------------------------
  * FatFS is single-threaded (FF_FS_REENTRANT=0, disk thread owns it). Network

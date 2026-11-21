@@ -1387,11 +1387,19 @@ void disk_list_begin(const char *path, const char *const *exts)
     g_list_req  = true;           /* serviced by the next disk_poll */
 }
 
+int disk_list_poll_page(disk_list_ent_t *ents,int max,int offset,int *total)
+{
+    if (!g_list_done)return -1;
+    if(total)*total=g_list_count;
+    if(offset<0 || max<0 || offset>g_list_count)return 0;
+    int available=g_list_count-offset;
+    int n=available<max?available:max;
+    if(n>0)memcpy(ents,g_list_ents+offset,
+                  (size_t)n*sizeof(disk_list_ent_t));
+    return n;
+}
+
 int disk_list_poll(disk_list_ent_t *ents, int max)
 {
-    if (!g_list_done)
-        return -1;
-    int n = g_list_count < max ? g_list_count : max;
-    memcpy(ents, g_list_ents, (size_t)n * sizeof(disk_list_ent_t));
-    return n;
+    return disk_list_poll_page(ents,max,0,NULL);
 }

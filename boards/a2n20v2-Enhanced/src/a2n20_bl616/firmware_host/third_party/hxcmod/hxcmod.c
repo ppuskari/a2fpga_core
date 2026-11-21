@@ -53,6 +53,7 @@
 ///////////////////////////////////////////////////////////////////////////////////
 
 #include "hxcmod.h"
+#include <stdint.h> /* uintptr_t for virtual SDRAM sample tokens */
 
 ///////////////////////////////////////////////////////////////////////////////////
 
@@ -429,10 +430,29 @@ static int getnote( modcontext * mod, unsigned short period, unsigned char finet
 		}
 	}
 
-	return MAXNOTES;
+	/* Malformed/out-of-range tracker periods must not index table[144]. */
+	return MAXNOTES-1;
 }
 
-static void doFunk(channel * cptr)
+/* J2: SDRAM sample tokens must never be dereferenced by the MCU. */
+static mchar sample_byte(modcontext *mod,const mchar *base,
+                         mulong offset,unsigned voice)
+{
+    if(mod->external_samples)
+        return mod->external_read ?
+            mod->external_read(mod->external_opaque,base,offset,voice) : 0;
+    return base[offset];
+}
+static void sample_put(modcontext *mod,const mchar *base,
+                       mulong offset,mchar value)
+{
+    if(mod->external_samples) {
+        if(mod->external_write)
+            mod->external_write(mod->external_opaque,base,offset,value);
+    } else ((mchar *)base)[offset] = value;
+}
+
+static void doFunk(channel * cptr, modcontext *mod)
 {
 	if(cptr->funkspeed)
 	{
@@ -450,7 +470,9 @@ static void doFunk(channel * cptr)
 #ifndef HXCMOD_MOD_FILE_IN_ROM
 				// Note : Directly modify the sample in the mod buffer...
 				// The current Invert Loop effect implementation can't be played from ROM.
-				cptr->sampdata[cptr->samppos >> 10] = -1 - cptr->sampdata[cptr->samppos >> 10];
+				sample_put(mod, cptr->sampdata, cptr->samppos >> 10,
+                    (mchar)(-1 - sample_byte(mod, cptr->sampdata,
+                          cptr->samppos >> 10,(unsigned)(cptr-mod->channels))));
 #endif
 			}
 		}
@@ -1051,7 +1073,7 @@ static void worknote( note * nptr, channel * cptr,char t,modcontext * mod )
 
 					cptr->funkspeed = effect_param_l;
 
-					doFunk(cptr);
+					doFunk(cptr,mod);
 
 				break;
 
@@ -1132,7 +1154,7 @@ static void worknote( note * nptr, channel * cptr,char t,modcontext * mod )
 
 static void workeffect( modcontext * modctx, note * nptr, channel * cptr )
 {
-	doFunk(cptr);
+	doFunk(cptr,modctx);
 
 	switch(cptr->effect)
 	{
@@ -1407,6 +1429,21 @@ int hxcmod_setcfg(modcontext * modctx, int samplerate, int stereo_separation, in
 	return 0;
 }
 
+void hxcmod_external_samples(modcontext *modctx, mulong external_base,
+                             mulong external_capacity, void *opaque,
+                             hxcmod_sample_read_fn read_cb,
+                             hxcmod_sample_write_fn write_cb)
+{
+    if(!modctx) return;
+    modctx->external_samples = (read_cb && external_base && external_capacity) ? 1 : 0;
+    modctx->external_base = external_base;
+    modctx->external_capacity = external_capacity;
+    modctx->external_cursor = 0;
+    modctx->external_opaque = opaque;
+    modctx->external_read = read_cb;
+    modctx->external_write = write_cb;
+}
+
 int hxcmod_load( modcontext * modctx, void * mod_data, int mod_data_size )
 {
 	muint i, j, max, digitfactor;
@@ -1504,7 +1541,7 @@ int hxcmod_load( modcontext * modctx, void * mod_data, int mod_data_size )
 				return 0; // End passed ? - Probably a bad file !
 
 			// Patterns loading
-			for (i = max = 0; i < 128; i++)
+			for (i = max = 0; i < modctx->song.length; i++)
 			{
 				while (max <= modctx->song.patterntable[i])
 				{
@@ -1512,7 +1549,8 @@ int hxcmod_load( modcontext * modctx, void * mod_data, int mod_data_size )
 					modmemory += (256*modctx->number_of_channels);
 					max++;
 
-					if( modmemory >= endmodmemory )
+					if( modmemory > endmodmemory ||
+                            (modmemory == endmodmemory && !modctx->external_samples) )
 						return 0; // End passed ? - Probably a bad file !
 				}
 			}
@@ -1525,13 +1563,25 @@ int hxcmod_load( modcontext * modctx, void * mod_data, int mod_data_size )
 			{
 				if (sptr->length == 0) continue;
 
-				modctx->sampledata[i] = (mchar*)modmemory;
-				modmemory += (GET_BGI_W(sptr->length)*2);
+				if(modctx->external_samples)
+                    {
+                        /* An address token; all reads go through sample_byte. */
+                        mulong bytes=(mulong)GET_BGI_W(sptr->length)*2UL;
+                        if(modctx->external_cursor > modctx->external_capacity ||
+                           bytes > modctx->external_capacity-modctx->external_cursor)
+                            return 0;
+                        modctx->sampledata[i]=(mchar*)(uintptr_t)
+                            (modctx->external_base+modctx->external_cursor);
+                        modctx->external_cursor+=bytes;
+                    }else{
+                        modctx->sampledata[i]=(mchar*)modmemory;
+                        modmemory+=(GET_BGI_W(sptr->length)*2);
+                    }
 
 				if (GET_BGI_W(sptr->replen) + GET_BGI_W(sptr->reppnt) > GET_BGI_W(sptr->length))
 					sptr->replen = GET_BGI_W((GET_BGI_W(sptr->length) - GET_BGI_W(sptr->reppnt)));
 
-				if( modmemory > endmodmemory )
+				if(!modctx->external_samples && modmemory > endmodmemory)
 					return 0; // End passed ? - Probably a bad file !
 			}
 
@@ -1812,9 +1862,9 @@ void hxcmod_fillbuffer(modcontext * modctx, msample * outbuffer, mssize nbsample
 						if( cptr->sampdata!=0 )
 						{
 #ifdef HXCMOD_USE_PRECALC_VOLUME_TABLE
-							r += cptr->volume_table[cptr->sampdata[k]];
+							r += cptr->volume_table[sample_byte(modctx,cptr->sampdata,k,j)];
 #else
-							r += ( cptr->sampdata[k] *  cptr->volume );
+							r += ( sample_byte(modctx,cptr->sampdata,k,j) *  cptr->volume );
 #endif
 						}
 #else
@@ -1823,17 +1873,17 @@ void hxcmod_fillbuffer(modcontext * modctx, msample * outbuffer, mssize nbsample
 							if ( !(j & 3) || ((j & 3) == 3) )
 							{
 #ifdef HXCMOD_USE_PRECALC_VOLUME_TABLE
-								l += cptr->volume_table[cptr->sampdata[k]];
+								l += cptr->volume_table[sample_byte(modctx,cptr->sampdata,k,j)];
 #else
-								l += (cptr->sampdata[k] * cptr->volume);
+								l += (sample_byte(modctx,cptr->sampdata,k,j) * cptr->volume);
 #endif
 							}
 							else
 							{
 #ifdef HXCMOD_USE_PRECALC_VOLUME_TABLE
-								r += cptr->volume_table[cptr->sampdata[k]];
+								r += cptr->volume_table[sample_byte(modctx,cptr->sampdata,k,j)];
 #else
-								r += (cptr->sampdata[k] * cptr->volume);
+								r += (sample_byte(modctx,cptr->sampdata,k,j) * cptr->volume);
 #endif
 							}
 						}

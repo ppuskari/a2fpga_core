@@ -4,6 +4,7 @@ on:
     branches:
       - petar/media-mailbox-m1-slot3-console-20261120
       - petar/mod-jukebox-j1-20261121
+      - petar/mod-jukebox-j2-largefile-20261121
   pull_request:
   workflow_dispatch:
 jobs:
@@ -33,11 +34,16 @@ jobs:
       - name: Compile BL616 mailbox and MOD code without SDK
         run: |
           MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
-          gcc -std=gnu11 -Wall -Wextra -Werror -fsyntax-only -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware -DHXCMOD_MAXCHANNELS=4 "$MCU/media_mailbox.c" "$MCU/mcu_mod_audio.c" "$MCU/mcu_mod_jukebox.c"
+          gcc -std=gnu11 -Wall -Wextra -Werror -fsyntax-only -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware -DHXCMOD_MAXCHANNELS=4 "$MCU/media_mailbox.c" "$MCU/mcu_mod_audio.c" "$MCU/mcu_mod_jukebox.c" "$MCU/mcu_mod_format.c" "$MCU/mcu_mod_sample_store.c"
           gcc -std=gnu11 -O2 -I"$MCU/third_party/hxcmod" boards/a2n20v2-Enhanced/tests/test_mcu_hxcmod_pcm.c "$MCU/third_party/hxcmod/hxcmod.c" -o /tmp/hxcmod
           /tmp/hxcmod
           gcc -std=gnu11 -Wall -Wextra -Werror -O2 -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" boards/a2n20v2-Enhanced/tests/test_mcu_jukebox_scan.c "$MCU/mcu_mod_jukebox.c" -o /tmp/juke
           /tmp/juke
+          gcc -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O2 -DHXCMOD_MAXCHANNELS=4 -I"$MCU" -I"$MCU/third_party/hxcmod" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware \
+            boards/a2n20v2-Enhanced/tests/test_mcu_mod_large.c \
+            "$MCU/mcu_mod_format.c" "$MCU/mcu_mod_sample_store.c" \
+            "$MCU/third_party/hxcmod/hxcmod.c" -o /tmp/mod_j2_large
+          /tmp/mod_j2_large
       - name: Check ROMless slot3 address, preserve other hardware routes
         run: |
           python3 - <<'PY'
