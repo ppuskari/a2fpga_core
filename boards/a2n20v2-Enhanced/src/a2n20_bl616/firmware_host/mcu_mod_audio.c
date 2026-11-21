@@ -50,11 +50,16 @@ static void juke_publish(const char *dir,bool recursive)
 {
     /* Avoid two producers corrupting the request buffer. */
     uint32_t old;
-    do {
+    for(;;) {
         old=__atomic_load_n(&s_juke_seq,__ATOMIC_ACQUIRE);
-        if(old&1u){vTaskDelay(pdMS_TO_TICKS(1));continue;}
-    } while(!__atomic_compare_exchange_n(&s_juke_seq,&old,old+1u,
-                 false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE));
+        if(old&1u) {
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+        if(__atomic_compare_exchange_n(&s_juke_seq,&old,old+1u,
+                 false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE))
+            break;
+    }
     memset(s_juke_path,0,sizeof(s_juke_path));
     memcpy(s_juke_path,dir,strlen(dir)+1u);
     s_juke_recursive=recursive?1u:0u;
