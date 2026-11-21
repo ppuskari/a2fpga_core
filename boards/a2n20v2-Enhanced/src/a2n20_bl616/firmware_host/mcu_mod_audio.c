@@ -51,6 +51,13 @@ static volatile mod_pcm_status_t s_state=MOD_PCM_IDLE;
 static char s_juke_path[MOD_PATH_CAP];
 static volatile uint32_t s_juke_seq, s_juke_seen, s_juke_recursive;
 static volatile uint32_t s_juke_count_pub, s_nav, s_once;
+static volatile uint32_t s_juke_generation;
+static volatile mod_jukebox_scan_state_t s_juke_scan_state=MOD_JUKE_IDLE;
+static void juke_state(mod_jukebox_scan_state_t state)
+{
+    __atomic_store_n(&s_juke_scan_state,state,__ATOMIC_RELEASE);
+    __atomic_add_fetch(&s_juke_generation,1u,__ATOMIC_RELEASE);
+}
 static void juke_publish(const char *dir,bool recursive)
 {
     /* Avoid two producers corrupting the request buffer. */
@@ -69,6 +76,7 @@ static void juke_publish(const char *dir,bool recursive)
     memcpy(s_juke_path,dir,strlen(dir)+1u);
     s_juke_recursive=recursive?1u:0u;
     __atomic_store_n(&s_juke_seq,old+2u,__ATOMIC_RELEASE);
+    juke_state(MOD_JUKE_QUEUED);
 }
 static bool take_juke(char out[MOD_PATH_CAP],bool *recursive)
 {
@@ -117,6 +125,14 @@ bool mod_audio_play_once(void)
 unsigned mod_audio_jukebox_count(void)
 {
     return __atomic_load_n(&s_juke_count_pub,__ATOMIC_ACQUIRE);
+}
+mod_jukebox_scan_state_t mod_audio_jukebox_scan_state(void)
+{
+    return __atomic_load_n(&s_juke_scan_state,__ATOMIC_ACQUIRE);
+}
+uint32_t mod_audio_jukebox_generation(void)
+{
+    return __atomic_load_n(&s_juke_generation,__ATOMIC_ACQUIRE);
 }
 
 
@@ -376,6 +392,7 @@ void mod_audio_task(void *arg)
             s_state=MOD_PCM_STOPPED;
             osd_log("MCU MOD: PCM STOPPED");
         }else if(jukebox) {
+            juke_state(MOD_JUKE_SCANNING);
             if(playing){player_release();playing=false;}
             draining=false;
             juke_active=false;
@@ -389,12 +406,16 @@ void mod_audio_task(void *arg)
                 }else jukedir[0]=0; /* FAT root */
             }
             __atomic_store_n(&s_juke_count_pub,0u,__ATOMIC_RELEASE);
+            osd_log("MCU JUKE: SCAN %s %s",recursive?"TREE":"FOLDER",
+                    jukedir[0]?jukedir:"/");
             if(mod_jukebox_scan(jukedir,recursive)) {
                 __atomic_store_n(&s_juke_count_pub,mod_jukebox_count(),__ATOMIC_RELEASE);
+                juke_state(MOD_JUKE_READY);
                 juke_index=0;
                 juke_active=playlist_play(&juke_index,0);
                 playing=juke_active;
             }else {
+                juke_state(MOD_JUKE_EMPTY);
                 s_state=MOD_PCM_STOPPED;
                 osd_log("MCU JUKE: NO .MOD FILES FOUND");
             }
@@ -405,6 +426,7 @@ void mod_audio_task(void *arg)
             juke_active=false;
             mod_jukebox_clear();
             __atomic_store_n(&s_juke_count_pub,0u,__ATOMIC_RELEASE);
+            juke_state(MOD_JUKE_IDLE);
             playing=start_song(requested);
             blocks=window=0;
         }else if(nav && mod_jukebox_count()) {
