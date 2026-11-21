@@ -66,7 +66,10 @@ static bool parse_layout(const uint8_t *h,uint32_t size,
         const unsigned off=20u+i*30u+22u;
         const uint32_t n=(uint32_t)be16(h+off)*2u;
         const uint32_t rep=(uint32_t)be16(h+off+4u)*2u;
-        if(rep>n)return false;
+        /* Empty instrument slots may contain tracker-specific loop sentinels.
+         * HxCMOD ignores their metadata because zero-length samples are not
+         * loaded. Keep strict bounds for instruments with real PCM data. */
+        if(n && rep>n)return false;
         f->lengths[i]=n;
         if(n>0x200000u-total)return false;
         total+=n;
