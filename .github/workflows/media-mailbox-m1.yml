@@ -39,7 +39,7 @@ jobs:
           /tmp/hxcmod
           gcc -std=gnu11 -Wall -Wextra -Werror -O2 -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" boards/a2n20v2-Enhanced/tests/test_mcu_jukebox_scan.c "$MCU/mcu_mod_jukebox.c" -o /tmp/juke
           /tmp/juke
-          gcc -std=gnu11 -Wall -Wextra -Werror -O2 -DHXCMOD_MAXCHANNELS=4 -I"$MCU" -I"$MCU/third_party/hxcmod" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware \
+          gcc -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O2 -DHXCMOD_MAXCHANNELS=4 -I"$MCU" -I"$MCU/third_party/hxcmod" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware \
             boards/a2n20v2-Enhanced/tests/test_mcu_mod_large.c \
             "$MCU/mcu_mod_format.c" "$MCU/mcu_mod_sample_store.c" \
             "$MCU/third_party/hxcmod/hxcmod.c" -o /tmp/mod_j2_large
