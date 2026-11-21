@@ -83,7 +83,11 @@ module tb_media_mailbox_slot3;
         apple_write(5,8'h11);
         apple_write(5,8'h22);
         apple_write(5,8'h33);
-        apple_read(8,v);if(v!==8'd3)$fatal(1,"M1: fifo count 3");
+        apple_read(8,v);
+        if(v!==8'd3)begin
+            $display("M1 DEBUG FIFO: read=%h count=%0d wrptr=%0d rdptr=%0d applewr=%0d",v,dut.count_w,dut.wrptr_r,dut.rdptr_r,dut.apple_writes_r);
+            $fatal(1,"M1: fifo count 3");
+        end
         spi_read(24'h000000,v);if(v!==8'h11)$fatal(1,"M1: FIFO byte1");
         spi_read(24'h000001,v);if(v!==8'h22)$fatal(1,"M1: FIFO byte2");
         spi_read(24'h000002,v);if(v!==8'h33)$fatal(1,"M1: FIFO byte3");
