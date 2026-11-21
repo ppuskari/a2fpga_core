@@ -76,6 +76,7 @@ bool mod_jukebox_scan(const char *root,bool recursive)
     char *dirs[JUKE_DIR_LIMIT]={0};
     unsigned head=0,tail=0;
     bool failed=false;
+    unsigned entries=0,nonmod=0,dirs=0,longpath=0;
     if(!safe_dir(root))return false;
     mod_jukebox_clear();
     dirs[tail]=juke_strdup(root);
@@ -100,14 +101,17 @@ bool mod_jukebox_scan(const char *root,bool recursive)
                 if(disk_fs_request(&r)!=0) {failed=true;break;}
                 if(!r.name[0])break;
                 if(!strcmp(r.name,".") || !strcmp(r.name,".."))continue;
+                ++entries;
                 n=dirs[head][0] ?
                     snprintf(path,sizeof(path),"%s/%s",dirs[head],r.name):
                     snprintf(path,sizeof(path),"%s",r.name);
                 if(n<0 || (unsigned)n>=sizeof(path)) {
                     s_truncated=true;
+                    ++longpath;
                     continue;
                 }
                 if(r.attr & 0x10u) {  /* FatFS AM_DIR */
+                    ++dirs;
                     if(recursive) {
                         if(tail<JUKE_DIR_LIMIT) {
                             dirs[tail]=juke_strdup(path);
@@ -121,7 +125,7 @@ bool mod_jukebox_scan(const char *root,bool recursive)
                         if(!s_tracks[s_count]) {failed=true;break;}
                         s_count++;
                     }else s_truncated=true;
-                }
+                }else ++nonmod;
             }
         }
         if(opened) {
@@ -142,5 +146,7 @@ bool mod_jukebox_scan(const char *root,bool recursive)
     if(s_count)qsort(s_tracks,s_count,sizeof(s_tracks[0]),track_cmp);
     osd_log("MCU JUKE: %u MODS %s%s",s_count,
             recursive?"TREE":"FOLDER",s_truncated?" (LIMIT)":"");
+    osd_log("MCU JUKE: SEEN %u NONMOD %u DIR %u PATHLONG %u",
+            entries,nonmod,dirs,longpath);
     return s_count!=0;
 }
