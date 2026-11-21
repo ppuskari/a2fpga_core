@@ -70,6 +70,16 @@ int main(void)
     }
     ck(!memcmp(fake_sdram,fixture+fmt.prefix_bytes,fmt.sample_bytes),
        "complete 1-MiB sample store parity");
+    ck(mod_store_verify(0,fixture+fmt.prefix_bytes,32u),
+       "SDRAM first-page readback");
+    ck(mod_store_verify(fmt.sample_bytes-32u,
+                        fixture+fmt.prefix_bytes+fmt.sample_bytes-32u,32u),
+       "SDRAM final-page readback");
+    fake_sdram[0]^=1u;
+    ck(!mod_store_verify(0,fixture+fmt.prefix_bytes,32u),
+       "detect a corrupted SDRAM byte");
+    fake_sdram[0]^=1u;
+
     ck(hxcmod_init(&normal_ctx) && hxcmod_setcfg(&normal_ctx,44100,100,1),
        "init regular HxCMOD");
     ck(hxcmod_load(&normal_ctx,fixture,sizeof fixture),
