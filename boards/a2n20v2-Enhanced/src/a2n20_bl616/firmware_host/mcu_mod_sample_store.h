@@ -12,14 +12,14 @@
 
 #define MOD_SDRAM_BASE      0x400000u
 #define MOD_SDRAM_CAPACITY  0x200000u  /* 2 MiB */
-/* J2R8: default to eight 2-KiB independent per-voice PCM sample pages.
- * For host A/B comparison, -DMOD_STORE_PAGE=4096 preserves old 4-KiB pages.
+/* J2R8: default to eight 8-KiB independent per-voice PCM sample pages.
+ * For A/B comparison, -DMOD_STORE_PAGE=4096 restores the old 4-KiB pages.
  * Never use this define for FPGA staging limits or SDRAM address capacity. */
 #ifndef MOD_STORE_PAGE
-#define MOD_STORE_PAGE      2048u
+#define MOD_STORE_PAGE      8192u
 #endif
-#if MOD_STORE_PAGE != 2048u && MOD_STORE_PAGE != 4096u
-#error "MOD_STORE_PAGE must be 2048 or 4096"
+#if MOD_STORE_PAGE != 8192u && MOD_STORE_PAGE != 4096u
+#error "MOD_STORE_PAGE must be 8192 or 4096"
 #endif
 #define MOD_STORE_VOICES    8u
 
