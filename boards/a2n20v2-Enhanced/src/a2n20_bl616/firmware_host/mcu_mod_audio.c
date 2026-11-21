@@ -8,6 +8,7 @@
  * sound sample-bank generation, or NTP instrument translation.
  */
 #include "mcu_mod_audio.h"
+#include "mcu_mod_jukebox.h"
 #include "third_party/hxcmod/hxcmod.h"
 #include "fpga_spi.h"
 #include "disk.h"
@@ -40,6 +41,74 @@ static volatile uint32_t s_replay;
 static char s_last_request[MOD_PATH_CAP]; // written by modpcm task alone
 static volatile uint32_t s_has_last;      // published after full path copy
 static volatile mod_pcm_status_t s_state=MOD_PCM_IDLE;
+/* J1 control mailbox: producer(s) publish directory and mode as a seqlock;
+ * only the MOD task performs scanning, allocation and all HxCMOD calls. */
+static char s_juke_path[MOD_PATH_CAP];
+static volatile uint32_t s_juke_seq, s_juke_seen, s_juke_recursive;
+static volatile uint32_t s_juke_count_pub, s_nav, s_once;
+static void juke_publish(const char *dir,bool recursive)
+{
+    /* Avoid two producers corrupting the request buffer. */
+    uint32_t old;
+    do {
+        old=__atomic_load_n(&s_juke_seq,__ATOMIC_ACQUIRE);
+        if(old&1u){vTaskDelay(pdMS_TO_TICKS(1));continue;}
+    } while(!__atomic_compare_exchange_n(&s_juke_seq,&old,old+1u,
+                 false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE));
+    memset(s_juke_path,0,sizeof(s_juke_path));
+    memcpy(s_juke_path,dir,strlen(dir)+1u);
+    s_juke_recursive=recursive?1u:0u;
+    __atomic_store_n(&s_juke_seq,old+2u,__ATOMIC_RELEASE);
+}
+static bool take_juke(char out[MOD_PATH_CAP],bool *recursive)
+{
+    uint32_t a=__atomic_load_n(&s_juke_seq,__ATOMIC_ACQUIRE);
+    if(!a || (a&1u) || a==s_juke_seen)return false;
+    memcpy(out,s_juke_path,MOD_PATH_CAP);
+    const bool r=s_juke_recursive!=0;
+    uint32_t end=__atomic_load_n(&s_juke_seq,__ATOMIC_ACQUIRE);
+    if(a!=end || (end&1u))return false;
+    s_juke_seen=end;
+    *recursive=r;
+    return true;
+}
+bool mod_audio_jukebox_start(const char *dir,bool recursive)
+{
+    if(!dir || strlen(dir)>=MOD_PATH_CAP || strstr(dir,"..") ||
+       dir[0]=='/' || strchr(dir,':') || strchr(dir,'\\'))return false;
+    juke_publish(dir,recursive);
+    return true;
+}
+void mod_audio_jukebox_from_last(bool recursive)
+{
+    /* Sentinel 0x01 is not a valid user directory name. */
+    juke_publish("\001",recursive);
+}
+bool mod_audio_next(void)
+{
+    if(!__atomic_load_n(&s_juke_count_pub,__ATOMIC_ACQUIRE))return false;
+    __atomic_store_n(&s_nav,1u,__ATOMIC_RELEASE);
+    return true;
+}
+bool mod_audio_previous(void)
+{
+    if(!__atomic_load_n(&s_juke_count_pub,__ATOMIC_ACQUIRE))return false;
+    __atomic_store_n(&s_nav,2u,__ATOMIC_RELEASE);
+    return true;
+}
+void mod_audio_set_play_once(bool once)
+{
+    __atomic_store_n(&s_once,once?1u:0u,__ATOMIC_RELEASE);
+}
+bool mod_audio_play_once(void)
+{
+    return __atomic_load_n(&s_once,__ATOMIC_ACQUIRE)!=0u;
+}
+unsigned mod_audio_jukebox_count(void)
+{
+    return __atomic_load_n(&s_juke_count_pub,__ATOMIC_ACQUIRE);
+}
+
 
 static bool valid_path(const char *path)
 {
@@ -161,17 +230,55 @@ finish:
     }
     return ok;
 }
-static void pcm_send_block(void)
+/* J1: a complete MOD order-list pass ends on the HxCMOD song_wraps
+ * event. HxCMOD still renders classic effect loops faithfully; the
+ * wrap marker lets the host decide when to advance or stop. */
+static bool pcm_send_block(bool one_pass)
 {
-    // HxCMOD native signed 16-bit stereo interleaved.
-    // RV32 BL616 is little endian: Llo,Lhi,Rlo,Rhi per stereo frame.
+    const uint32_t wraps=s_ctx.song_wraps;
     hxcmod_fillbuffer(&s_ctx,s_pcm,PCM_BLOCK_FRAMES,NULL);
     fpga_spi_xfer_write(PCM_SPACE,0,(const uint8_t*)s_pcm,PCM_BLOCK_BYTES);
+    return one_pass && s_ctx.song_wraps!=wraps;
+}
+static bool start_song(const char *path)
+{
+    s_state=MOD_PCM_LOADING;
+    if(!pcm_read_status()) {
+        osd_log("MCU MOD: NEED DIRECT PCM FPGA (SPACE6 PC V1)");
+        s_state=MOD_PCM_ERROR;
+        return false;
+    }
+    if(!player_load(path)) {
+        s_state=MOD_PCM_ERROR;
+        return false;
+    }
+    memcpy(s_last_request,path,strlen(path)+1u);
+    __atomic_store_n(&s_has_last,1u,__ATOMIC_RELEASE);
+    pcm_control(PCM_CTRL_RESET,0xA5u);
+    pcm_control(PCM_CTRL_ENABLE,1u);
+    s_state=MOD_PCM_PLAYING;
+    osd_log("MCU MOD: PLAY %s",path);
+    return true;
+}
+static bool playlist_play(unsigned *idx,unsigned start)
+{
+    const unsigned count=mod_jukebox_count();
+    for(unsigned i=start;i<count;i++) {
+        const char *path=mod_jukebox_track(i);
+        if(path && start_song(path)) {
+            *idx=i;
+            osd_log("MCU JUKE: TRACK %u/%u",i+1u,count);
+            return true;
+        }
+        osd_log("MCU JUKE: SKIP TRACK %u",i+1u);
+    }
+    return false;
 }
 void mod_audio_task(void *arg)
 {
-    char requested[MOD_PATH_CAP];
-    bool playing=false;
+    char requested[MOD_PATH_CAP],jukedir[MOD_PATH_CAP];
+    bool playing=false,draining=false,juke_active=false,recursive=false;
+    unsigned juke_index=0;
     uint32_t blocks=0,window=0;
     (void)arg;
     s_file=NULL;
@@ -179,49 +286,97 @@ void mod_audio_task(void *arg)
     osd_log("MCU MOD: DIRECT HxCMOD->HDMI READY");
     for(;;) {
         const bool selected=take_pending(requested);
+        const bool jukebox=take_juke(jukedir,&recursive);
         const bool replay=__atomic_exchange_n(&s_replay,0u,__ATOMIC_ACQ_REL)!=0u;
-        if(selected || (replay && __atomic_load_n(&s_has_last,__ATOMIC_ACQUIRE))) {
-            if(selected){
-                // A mailbox replay copies only from this task's own cached
-                // validated path, avoiding concurrent menu string writes.
-                memcpy(s_last_request,requested,sizeof(s_last_request));
-                __atomic_store_n(&s_has_last,1u,__ATOMIC_RELEASE);
-            }else{
-                memcpy(requested,s_last_request,sizeof(requested));
-            }
-            if(playing) {
-                player_release();
-                playing=false;
-            }
-            s_state=MOD_PCM_LOADING;
-            if(!pcm_read_status()){
-                osd_log("MCU MOD: NEED DIRECT PCM FPGA (SPACE6 PC V1)");
-                s_state=MOD_PCM_ERROR;
-            }else if(player_load(requested)) {
-                pcm_control(PCM_CTRL_RESET,0xA5u);
-                pcm_control(PCM_CTRL_ENABLE,1u);
-                blocks=window=0;
-                playing=true;
-                s_state=MOD_PCM_PLAYING;
-            } else {
-                s_state=MOD_PCM_ERROR;
-            }
-        }
-        if(__atomic_exchange_n(&s_stop,0u,__ATOMIC_ACQ_REL)) {
-            if(playing){
-                player_release();playing=false;
-            }
+        const uint32_t nav=__atomic_exchange_n(&s_nav,0u,__ATOMIC_ACQ_REL);
+        const bool stop=__atomic_exchange_n(&s_stop,0u,__ATOMIC_ACQ_REL)!=0u;
+        if(stop) {
+            if(playing){player_release();playing=false;}
+            draining=false;
+            juke_active=false;  /* list is retained for NEXT/PREV */
             s_state=MOD_PCM_STOPPED;
             osd_log("MCU MOD: PCM STOPPED");
+        }else if(jukebox) {
+            if(playing){player_release();playing=false;}
+            draining=false;
+            juke_active=false;
+            if(jukedir[0]=='\001' && jukedir[1]==0) {
+                /* Work from the last successfully loaded MOD's folder. */
+                const char *slash=strrchr(s_last_request,'/');
+                if(s_has_last && slash) {
+                    size_t n=(size_t)(slash-s_last_request);
+                    memcpy(jukedir,s_last_request,n);
+                    jukedir[n]=0;
+                }else jukedir[0]=0; /* FAT root */
+            }
+            __atomic_store_n(&s_juke_count_pub,0u,__ATOMIC_RELEASE);
+            if(mod_jukebox_scan(jukedir,recursive)) {
+                __atomic_store_n(&s_juke_count_pub,mod_jukebox_count(),__ATOMIC_RELEASE);
+                juke_index=0;
+                juke_active=playlist_play(&juke_index,0);
+                playing=juke_active;
+            }else {
+                s_state=MOD_PCM_STOPPED;
+                osd_log("MCU JUKE: NO .MOD FILES FOUND");
+            }
+            blocks=window=0;
+        }else if(selected) {
+            if(playing){player_release();playing=false;}
+            draining=false;
+            juke_active=false;
+            mod_jukebox_clear();
+            __atomic_store_n(&s_juke_count_pub,0u,__ATOMIC_RELEASE);
+            playing=start_song(requested);
+            blocks=window=0;
+        }else if(nav && mod_jukebox_count()) {
+            unsigned target;
+            const unsigned count=mod_jukebox_count();
+            if(playing){player_release();playing=false;}
+            draining=false;
+            target=(nav==1u)?(juke_index+1u)%count:
+                              (juke_index?juke_index-1u:count-1u);
+            juke_active=playlist_play(&juke_index,target);
+            /* NEXT wraps around if last items are unloadable. */
+            if(!juke_active && target!=0)
+                juke_active=playlist_play(&juke_index,0);
+            playing=juke_active;
+            blocks=window=0;
+        }else if(replay && __atomic_load_n(&s_has_last,__ATOMIC_ACQUIRE)) {
+            if(playing){player_release();playing=false;}
+            draining=false;
+            playing=start_song(s_last_request);
+            blocks=window=0;
         }
         if(playing) {
             if(!pcm_read_status()) {
                 osd_log("MCU MOD: FPGA PCM LINK LOST");
                 player_release();playing=false;
+                draining=false;juke_active=false;
                 s_state=MOD_PCM_ERROR;
-            } else if(pcm_free()>=PCM_BLOCK_FRAMES) {
-                pcm_send_block();
+            }else if(draining) {
+                /* Let existing FPGA PCM frames finish before clearing FIFO.
+                 * Hardware may count one intentional underrun at song end. */
+                if(pcm_free()>=2048u) {
+                    player_release();
+                    playing=false;
+                    draining=false;
+                    if(juke_active && juke_index+1u<mod_jukebox_count()) {
+                        juke_active=playlist_play(&juke_index,juke_index+1u);
+                        playing=juke_active;
+                        blocks=window=0;
+                    }else {
+                        juke_active=false; /* reached last track, do not loop */
+                        s_state=MOD_PCM_STOPPED;
+                        osd_log("MCU JUKE: FINISHED / PLAY ONCE DONE");
+                    }
+                }
+            }else if(pcm_free()>=PCM_BLOCK_FRAMES) {
+                const bool done=pcm_send_block(juke_active || mod_audio_play_once());
                 ++blocks;
+                if(done) {
+                    draining=true;
+                    osd_log("MCU MOD: SONG COMPLETE (ORDER WRAP)");
+                }
                 // All counters come from FPGA's actual HDMI-clocked FIFO.
                 if(++window>=384u) {
                     osd_log("MCU MOD: FRAMES=%lu FREE=%u UDR=%u",
