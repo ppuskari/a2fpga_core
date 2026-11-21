@@ -351,7 +351,7 @@ static const menu_screen_t SCR_SLOTS = { "SLOT ASSIGNMENTS", slots_build };
 
 /* ======================= SCREEN: FILE PICKER ============================== */
 /* Generic list-of-files picker: fills a target settings name field. */
-static disk_list_ent_t s_pick_ents[DISK_LIST_MAX];
+static disk_list_ent_t s_pick_ents[64]; /* one menu page only */
 static int   s_pick_count;
 static bool  s_pick_fw;                        /* firmware picker mode */
 static bool  s_pick_fpga;                      /* FPGA bitstream picker mode */
