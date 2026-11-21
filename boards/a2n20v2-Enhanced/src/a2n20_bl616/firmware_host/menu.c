@@ -389,12 +389,13 @@ static void picker_choose(int id)
     /* J1: choose the currently displayed folder, with or without children.
      * The folder selection survives no global picker state mutations. */
     if (s_pick_mod && (id == -4 || id == -5)) {
-        if (mod_audio_jukebox_start(s_pick_path,id == -5))
-            set_status(id == -5 ? "JUKEBOX TREE: SCANNING" :
-                                  "JUKEBOX FOLDER: SCANNING");
-        else
-            set_status("INVALID JUKEBOX DIRECTORY");
+        /* screen_pop() clears s_status: publish the scan feedback AFTER
+         * returning to the MOD player menu, not before it. */
+        const bool accepted=mod_audio_jukebox_start(s_pick_path,id==-5);
         screen_pop();
+        set_status(!accepted ? "INVALID JUKEBOX DIRECTORY" :
+                   id==-5 ? "JUKEBOX TREE: QUEUED" :
+                            "JUKEBOX FOLDER: QUEUED");
         return;
     }
     if(s_pick_mod && (id == -6 || id == -7)) {
@@ -1288,6 +1289,15 @@ static void mod_library_build(void)
         char value[12];
         snprintf(value,sizeof value,"%u",mod_audio_jukebox_count());
         mi_add(MI_INFO,"JUKEBOX TRACKS",value);
+        const char *scan="IDLE";
+        switch(mod_audio_jukebox_scan_state()) {
+        case MOD_JUKE_QUEUED: scan="QUEUED";break;
+        case MOD_JUKE_SCANNING: scan="SCANNING";break;
+        case MOD_JUKE_READY: scan="READY";break;
+        case MOD_JUKE_EMPTY: scan="NO MODS";break;
+        default:break;
+        }
+        mi_add(MI_INFO,"JUKEBOX SCAN",scan);
     }
     menu_item_t *m=mi_add(MI_SUBMENU,"BROWSE .MOD FILES","");
     m->action=mod_library_open;
@@ -1609,6 +1619,31 @@ void menu_input(uint16_t buttons)
         s_wait_remount = false;
         if (s_view == VIEW_MENU) {
             set_status(" REMOUNT COMPLETE");
+            screen_refresh();
+            paint();
+        }
+    }
+
+    /* MOD playback runs in its own task. The visible count/status values
+     * are snapshots, so re-render when the background scan publishes an
+     * event rather than requiring ESC and re-enter to get the new count.
+     * Only the MOD screen is repainted (never the file picker). */
+    if (s_view == VIEW_MENU && s_stack[s_depth] == &SCR_MOD_LIBRARY) {
+        static uint32_t last_juke_generation = 0xffffffffu;
+        const uint32_t generation=mod_audio_jukebox_generation();
+        if(generation!=last_juke_generation) {
+            last_juke_generation=generation;
+            switch(mod_audio_jukebox_scan_state()) {
+            case MOD_JUKE_QUEUED:
+                set_status("JUKEBOX SCAN QUEUED");break;
+            case MOD_JUKE_SCANNING:
+                set_status("JUKEBOX SCANNING...");break;
+            case MOD_JUKE_READY:
+                set_status("JUKEBOX SCAN COMPLETE");break;
+            case MOD_JUKE_EMPTY:
+                set_status("JUKEBOX SCAN: NO MODS");break;
+            default: break;
+            }
             screen_refresh();
             paint();
         }
