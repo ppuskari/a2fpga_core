@@ -15,6 +15,7 @@
 
 #ifndef _DISK_H
 #define _DISK_H
+#include <stdint.h>
 
 /* Mount the SD card and open the disk images. Call once before disk_poll(). */
 void disk_init(void);
