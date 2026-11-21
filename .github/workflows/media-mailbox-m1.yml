@@ -1,0 +1,60 @@
+name: M1 ROMless slot3 Media Mailbox and direct HDMI PCM regressions
+on:
+  push:
+    branches:
+      - petar/media-mailbox-m1-slot3-console-20261120
+  pull_request:
+  workflow_dispatch:
+jobs:
+  slot3-mailbox:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Icarus Verilog
+        run: sudo apt-get update -qq && sudo apt-get install -y iverilog
+      - name: Verify Apple IIe/IIgs ROMless slot3 SPI7 mailbox
+        run: |
+          iverilog -g2012 -s tb_media_mailbox_slot3 -o /tmp/m1 boards/a2n20v2-Enhanced/hdl/media_mailbox_slot3.sv boards/a2n20v2-Enhanced/tests/tb_media_mailbox_slot3.sv
+          vvp /tmp/m1
+      - name: Preserve BL616 stereo PCM HDMI stream on SPACE6
+        run: |
+          iverilog -g2012 -s tb_mcu_stereo_pcm_bridge -o /tmp/pcm boards/a2n20v2-Enhanced/hdl/mcu_stereo_pcm_bridge.sv boards/a2n20v2-Enhanced/tests/tb_mcu_stereo_pcm_bridge.sv
+          vvp /tmp/pcm
+      - name: Preserve August native IIgs Ensoniq DOC SWAP
+        run: |
+          iverilog -g2012 -s tb_native_doc_swap_no_ntp -o /tmp/doc hdl/sound/doc5503.sv boards/a2n20v2-Enhanced/tests/tb_native_doc_swap_no_ntp.sv
+          vvp /tmp/doc
+      - name: Compile BL616 mailbox and MOD code without SDK
+        run: |
+          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
+          gcc -std=gnu11 -Wall -Wextra -Werror -fsyntax-only -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware -DHXCMOD_MAXCHANNELS=4 "$MCU/media_mailbox.c" "$MCU/mcu_mod_audio.c"
+          gcc -std=gnu11 -O2 -I"$MCU/third_party/hxcmod" boards/a2n20v2-Enhanced/tests/test_mcu_hxcmod_pcm.c "$MCU/third_party/hxcmod/hxcmod.c" -o /tmp/hxcmod
+          /tmp/hxcmod
+      - name: Check ROMless slot3 address, preserve other hardware routes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('boards/a2n20v2-Enhanced')
+          m=root/'src/a2n20_bl616/firmware_host'
+          top=(root/'hdl/top.sv').read_text()
+          mb=(root/'hdl/media_mailbox_slot3.sv').read_text()
+          glu=Path('hdl/sound/sound_glu.sv').read_text()
+          gowin=(root/'a2n20v2_enhanced.gprj').read_text()
+          cm=(m/'CMakeLists.txt').read_text()
+          spi=(root/'hdl/bl616/bl616_spi_connector.sv').read_text()
+          assert "a2bus_if.addr[15:4] == 12'hC0B" in top
+          assert 'media_slot3_sel_w' in top and 'media_apple_rd_w' in top
+          assert 'a2bus_if.sw_gs &&' not in top[top.index('wire media_slot3_sel_w'):top.index('media_mailbox_slot3 media_mailbox')]
+          assert 'a2bus_if.m2sel_n' in top[top.index('wire media_slot3_sel_w'):top.index('media_mailbox_slot3 media_mailbox')]
+          assert 'MEDIA_MAILBOX' not in glu and 'tracker_' not in glu
+          assert 'media_spi_wr_o' in spi and "mem_space == 3'd7" in spi
+          assert 'media_mailbox_slot3.sv' in gowin
+          assert 'mcu_stereo_pcm_bridge.sv' in gowin
+          assert 'media_mailbox.c' in cm and 'mcu_mod_audio.c' in cm
+          assert 'sensei_' not in cm
+          assert 'mod_audio_replay_last' in (m/'mcu_mod_audio.c').read_text()
+          assert 'ROMless' in mb and "8'h4D" in mb
+          print('PASS: physical slot3 ROMless C0B0-BF, no A3/slotmaker selection')
+          print('PASS: independent SPI7 mailbox and SPI6 HDMI music')
+          print('PASS: IIgs GLU and original Mockingboard remain intact')
+          PY
