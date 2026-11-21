@@ -96,9 +96,9 @@ module media_mailbox_slot3 #(
             4'h3:register_byte=status_w;
             4'h4:register_byte=cmd_r;
             4'h5:register_byte=8'h00;
-            4'h6:register_byte=free_w[7:0];
+            4'h6:register_byte=8'(free_w);
             4'h7:register_byte=8'(free_w>>8);
-            4'h8:register_byte=count_w[7:0];
+            4'h8:register_byte=8'(count_w);
             4'h9:register_byte=8'(count_w>>8);
             4'hA:register_byte=cmd_seq_r;
             4'hB:register_byte=ack_seq_r;
