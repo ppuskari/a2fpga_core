@@ -354,7 +354,8 @@ static bool player_load(const char *path)
     osd_log("MOD FPGA PAT=%luB SMP=%luB",
             (unsigned long)fmt.pattern_bytes,
             (unsigned long)fmt.sample_bytes);
-    osd_log("MOD MCU CACHE=2048B SAVED=%luB",
+    osd_log("MOD MCU CACHE=%luB SAVED=%luB",
+            (unsigned long)MOD_PATTERN_CACHE_BYTES,
             (unsigned long)fmt.prefix_bytes);
     osd_log("MOD %uCH PATS=%u HDR=%lu",
             (unsigned)fmt.channels,(unsigned)fmt.pattern_count,
@@ -553,11 +554,15 @@ void mod_audio_task(void *arg)
                             (unsigned long)mod_store_faults());
                     /* Pattern fetches are infrequent; emit this extra
                      * OSD refresh only every fourth status interval. */
-                    if((blocks/384u)%4u==0u)
+                    if((blocks/384u)%4u==0u) {
                         osd_log("PF=%lu B=%lu E=%lu",
                                 (unsigned long)mod_patterns_fetch_count(),
                                 (unsigned long)mod_patterns_read_bytes(),
                                 (unsigned long)mod_patterns_faults());
+                        osd_log("PH=%lu EV=%lu",
+                                (unsigned long)mod_patterns_cache_hits(),
+                                (unsigned long)mod_patterns_evictions());
+                    }
                     window=0;
                 }
             }
