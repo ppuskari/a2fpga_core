@@ -70,16 +70,11 @@ build manifest so an old binary cannot be mistaken for the current source.
 
 Clone into an **isolated** directory; do not overwrite the working J2R6 tree:
 
-
-
-
-
 ```powershell
 $j2r8="C:\AppleIIgsDev_02\a2fpga-jukebox-j2r8"; git clone --single-branch --branch petar/mod-j2r8-16kpattern-8ksample-20261121 https://github.com/ppuskari/a2fpga_core.git $j2r8; if($LASTEXITCODE -ne 0){throw "Clone failed"}
 ```
 
 Every subsequent invocation is a single line from that checkout:
-
 
 ```powershell
 Set-Location $j2r8
@@ -92,13 +87,12 @@ Set-Location $j2r8
 Or build and flash with a single command (a typed confirmation is still
 required):
 
-
 ```powershell
 .\J2R8.ps1 BuildFlash
 ```
 
 For a custom SDK or compiler location, use `-DevRoot`, `-SdkRoot`, or
-`-ToolchainBin`. Run `.J2R8.ps1 Help` to see all supported arguments.
+`-ToolchainBin`. Run `.\J2R8.ps1 Help` to see all supported arguments.
 
 ### Important: what flashing "verification" actually means
 
@@ -113,7 +107,7 @@ The underlying programmer offers **three independent operations**:
    indication that the flash write failed**. To avoid false alarms, Flash
    passes `--skip-verify` and CheckRuntime is a separate command.
 3. **Optional byte readback from the BootROM.** Use
-   `.J2R8.ps1 VerifyReadback` with the board in UPDATE mode. The BL616
+   `.\J2R8.ps1 VerifyReadback` with the board in UPDATE mode. The BL616
    BootROM readback path can have separate tool/output-location failures.
    A failed readback is **not** proof that Stage2 flash failed, and a
    successful USB boot is **not** byte-readback verification. The optional
