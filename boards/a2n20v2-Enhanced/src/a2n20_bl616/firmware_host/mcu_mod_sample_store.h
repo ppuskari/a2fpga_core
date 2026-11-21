@@ -19,6 +19,8 @@
 bool mod_store_begin(const uint32_t lengths[31]);
 uint32_t mod_store_size(void);
 bool mod_store_stage(uint32_t offset,const uint8_t *data,uint16_t len);
+/* Verify small sentinels after staging to catch unavailable/aliased SDRAM. */
+bool mod_store_verify(uint32_t offset,const uint8_t *expected,uint16_t len);
 void mod_store_invalidate(void);
 uint32_t mod_store_faults(void);
 uint32_t mod_store_misses(void);
