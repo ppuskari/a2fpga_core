@@ -17,6 +17,7 @@
 #include "settings.h"
 #include "disk.h"
 #include "mcu_mod_audio.h"
+#include "mcu_mod_gain.h"
 #include "mcu_mod_now_playing.h"
 #include "media_mailbox.h"
 #include "fwupdate.h"
@@ -1271,6 +1272,15 @@ static void mod_library_once(int id)
     set_status(mod_audio_play_once()?"SINGLE MOD: PLAY ONCE":
                                      "SINGLE MOD: REPEAT");
 }
+static void mod_library_gain_change(int id,int dir)
+{
+    (void)id;
+    int gain=(int)mod_gain_get_db()+dir;
+    if(gain<0)gain=0;
+    if(gain>(int)MOD_GAIN_MAX_DB)gain=(int)MOD_GAIN_MAX_DB;
+    mod_gain_set_db((unsigned)gain);
+    screen_refresh();
+}
 static void mod_library_build(void)
 {
     const char *status="IDLE";
@@ -1286,6 +1296,13 @@ static void mod_library_build(void)
     mi_add(MI_INFO,"INDEPENDENT OF ENSONIQ DOC", "");
     mi_add(MI_INFO,"44100 HZ, 16-BIT STEREO", "");
     mi_add(MI_INFO,"MOD PLAYBACK",status);
+    {
+        char value[12];
+        snprintf(value,sizeof value,"+%u DB",mod_gain_get_db());
+        menu_item_t *gain_item=mi_add(MI_CHOICE,"PCM GAIN - LEFT/RIGHT",value);
+        gain_item->on_change=mod_library_gain_change;
+        mi_add(MI_INFO,"PCM PEAK LIMIT","-2 DBFS");
+    }
     /* Fixed number of NOW PLAYING rows: live updates cannot shift menu
      * action indices while the user is navigating with the gamepad. */
     {
