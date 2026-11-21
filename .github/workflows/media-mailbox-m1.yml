@@ -92,8 +92,8 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           s=Path('J2R8.ps1').read_text()
-          assert "Invoke-Programmer $args" in s
-          assert "('--stage2', $firmware" in s
+          assert "Invoke-Programmer -arguments $flashArgs" in s
+          assert "$flashArgs=@('--stage2', $firmware" in s
           assert "'--skip-verify'" in s
           assert "'0x40000'" in s
           assert "--stage1" not in s
