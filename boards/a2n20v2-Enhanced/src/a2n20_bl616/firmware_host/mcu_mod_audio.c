@@ -11,6 +11,7 @@
 #include "mcu_mod_jukebox.h"
 #include "mcu_mod_format.h"
 #include "mcu_mod_sample_store.h"
+#include "mcu_mod_gain.h"
 #include "mcu_mod_now_playing.h"
 #include "third_party/hxcmod/hxcmod.h"
 #include "fpga_spi.h"
@@ -310,8 +311,9 @@ static bool player_load(const char *path)
         osd_log("MCU MOD: HxCMOD REJECTED FILE");
         goto finish;
     }
-    osd_log("MCU MOD: %luB FILE, %luB PATTERNS, %luB FPGA PCM",
-            (unsigned long)file_size,(unsigned long)fmt.prefix_bytes,
+    osd_log("MCU MOD: %uCH %luB FILE, %luB PATTERNS, %luB FPGA PCM",
+            (unsigned)fmt.channels,(unsigned long)file_size,
+            (unsigned long)fmt.prefix_bytes,
             (unsigned long)fmt.sample_bytes);
     ok=true;
 finish:
@@ -335,6 +337,8 @@ static bool pcm_send_block(bool one_pass)
 {
     const uint32_t wraps=s_ctx.song_wraps;
     hxcmod_fillbuffer(&s_ctx,s_pcm,PCM_BLOCK_FRAMES,NULL);
+    /* J2R3: MCU postmix gain and stereo-linked headroom protection. */
+    mod_gain_apply((int16_t *)s_pcm,PCM_BLOCK_FRAMES);
     fpga_spi_xfer_write(PCM_SPACE,0,(const uint8_t*)s_pcm,PCM_BLOCK_BYTES);
     return one_pass && s_ctx.song_wraps!=wraps;
 }
@@ -353,6 +357,7 @@ static bool start_song(const char *path,unsigned track,unsigned total)
     memcpy(s_last_request,path,strlen(path)+1u);
     __atomic_store_n(&s_has_last,1u,__ATOMIC_RELEASE);
     pcm_control(PCM_CTRL_RESET,0xA5u);
+    mod_gain_reset(); /* clear previous track's limiter envelope */
     pcm_control(PCM_CTRL_ENABLE,1u);
     s_state=MOD_PCM_PLAYING;
     mod_now_playing_publish(path,track,total);
