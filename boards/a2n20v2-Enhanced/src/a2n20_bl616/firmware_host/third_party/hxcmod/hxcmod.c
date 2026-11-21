@@ -430,7 +430,8 @@ static int getnote( modcontext * mod, unsigned short period, unsigned char finet
 		}
 	}
 
-	return MAXNOTES;
+	/* Malformed/out-of-range tracker periods must not index table[144]. */
+	return MAXNOTES-1;
 }
 
 /* J2: SDRAM sample tokens must never be dereferenced by the MCU. */
