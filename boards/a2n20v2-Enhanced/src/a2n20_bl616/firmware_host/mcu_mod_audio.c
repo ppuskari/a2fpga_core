@@ -554,7 +554,7 @@ void mod_audio_task(void *arg)
                     /* Pattern fetches are infrequent; emit this extra
                      * OSD refresh only every fourth status interval. */
                     if((blocks/384u)%4u==0u)
-                        osd_log("PAT F=%lu B=%lu E=%lu",
+                        osd_log("PF=%lu B=%lu E=%lu",
                                 (unsigned long)mod_patterns_fetch_count(),
                                 (unsigned long)mod_patterns_read_bytes(),
                                 (unsigned long)mod_patterns_faults());
