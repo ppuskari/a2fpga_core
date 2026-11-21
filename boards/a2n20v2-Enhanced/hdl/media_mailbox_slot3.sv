@@ -56,10 +56,19 @@ module media_mailbox_slot3 #(
     wire apple_wr=apple_sel_i && !apple_rw_n_i && apple_write_strobe_i;
     assign apple_read_o=apple_sel_i && apple_rw_n_i;
 
-    reg [7:0] fifo [0:DEPTH-1];
+    // M1 bring-up: force flip-flops rather than invoking Gowin's RAM
+    // inference engine.  The register array is 256*8=2048 bits, and
+    // Gowin can otherwise infer an incompatible RAM read/write mode.
+    // Reconsider BRAM only after both physical Apple buses are proven.
+    reg [7:0] fifo [0:DEPTH-1] /* synthesis syn_ramstyle = "registers" */;
     reg [FIFO_AW:0] wrptr_r,rdptr_r;
     wire [FIFO_AW:0] count_w=wrptr_r-rdptr_r;
-    wire [FIFO_AW:0] free_w=(FIFO_AW+1)'(DEPTH)-count_w;
+    localparam [FIFO_AW:0] DEPTH_W = (1 << FIFO_AW);
+    wire [FIFO_AW:0] free_w=DEPTH_W-count_w;
+    // Simple unsigned zero extension: no SystemVerilog size casts,
+    // including in the 8-byte regression parameterization.
+    wire [15:0] count16_w=count_w;
+    wire [15:0] free16_w=free_w;
 
     reg [7:0] cmd_r,cmd_seq_r,ack_seq_r,cmd_result_r,mcu_status_r;
     reg cmd_pending_r,cmd_rejected_r;
@@ -87,33 +96,54 @@ module media_mailbox_slot3 #(
         (count_w<DEPTH),mcu_status_r[0]
     };
 
-    function automatic [7:0] register_byte(input [3:0] a);
-    begin
-        case(a)
-            4'h0:register_byte=8'h4D; // M
-            4'h1:register_byte=8'h42; // B
-            4'h2:register_byte=8'h01;
-            4'h3:register_byte=status_w;
-            4'h4:register_byte=cmd_r;
-            4'h5:register_byte=8'h00;
-            4'h6:register_byte=8'(free_w);
-            4'h7:register_byte=8'(free_w>>8);
-            4'h8:register_byte=8'(count_w);
-            4'h9:register_byte=8'(count_w>>8);
-            4'hA:register_byte=cmd_seq_r;
-            4'hB:register_byte=ack_seq_r;
-            4'hC:register_byte=cmd_result_r;
-            4'hD:register_byte=fifo_overflow_r[7:0];
-            4'hE:register_byte=fifo_overflow_r[15:8];
-            4'hF:register_byte=8'hA5;
+
+    // No automatic function and no cross-referenced sensitivity tracking:
+    // each read port is a plain, independently decoded 16:1 multiplexer.
+    always @* begin
+        apple_rdata_o=8'h00;
+        case(apple_reg_i)
+            4'h0:apple_rdata_o=8'h4D;
+            4'h1:apple_rdata_o=8'h42;
+            4'h2:apple_rdata_o=8'h01;
+            4'h3:apple_rdata_o=status_w;
+            4'h4:apple_rdata_o=cmd_r;
+            4'h5:apple_rdata_o=8'h00;
+            4'h6:apple_rdata_o=free16_w[7:0];
+            4'h7:apple_rdata_o=free16_w[15:8];
+            4'h8:apple_rdata_o=count16_w[7:0];
+            4'h9:apple_rdata_o=count16_w[15:8];
+            4'hA:apple_rdata_o=cmd_seq_r;
+            4'hB:apple_rdata_o=ack_seq_r;
+            4'hC:apple_rdata_o=cmd_result_r;
+            4'hD:apple_rdata_o=fifo_overflow_r[7:0];
+            4'hE:apple_rdata_o=fifo_overflow_r[15:8];
+            4'hF:apple_rdata_o=8'hA5;
+            default:apple_rdata_o=8'h00;
         endcase
     end
-    endfunction
 
-    // always_comb evaluates at time zero as well as on address changes;
-    // a read of +0 is valid even when the address never toggled beforehand.
-    always_comb begin
-        apple_rdata_o=register_byte(apple_reg_i);
+    reg [7:0] spi_register_byte_w;
+    always @* begin
+        spi_register_byte_w=8'h00;
+        case(spi_rd_addr_i[3:0])
+            4'h0:spi_register_byte_w=8'h4D;
+            4'h1:spi_register_byte_w=8'h42;
+            4'h2:spi_register_byte_w=8'h01;
+            4'h3:spi_register_byte_w=status_w;
+            4'h4:spi_register_byte_w=cmd_r;
+            4'h5:spi_register_byte_w=8'h00;
+            4'h6:spi_register_byte_w=free16_w[7:0];
+            4'h7:spi_register_byte_w=free16_w[15:8];
+            4'h8:spi_register_byte_w=count16_w[7:0];
+            4'h9:spi_register_byte_w=count16_w[15:8];
+            4'hA:spi_register_byte_w=cmd_seq_r;
+            4'hB:spi_register_byte_w=ack_seq_r;
+            4'hC:spi_register_byte_w=cmd_result_r;
+            4'hD:spi_register_byte_w=fifo_overflow_r[7:0];
+            4'hE:spi_register_byte_w=fifo_overflow_r[15:8];
+            4'hF:spi_register_byte_w=8'hA5;
+            default:spi_register_byte_w=8'h00;
+        endcase
     end
 
     always @(posedge clk) begin
@@ -153,7 +183,7 @@ module media_mailbox_slot3 #(
                         5'h17:spi_rd_data_o<=transfer_size_r[15:8];
                         5'h18:spi_rd_data_o<=transfer_size_r[23:16];
                         5'h19:spi_rd_data_o<=transfer_size_r[31:24];
-                        default:spi_rd_data_o<=register_byte(spi_rd_addr_i[3:0]);
+                        default:spi_rd_data_o<=spi_register_byte_w;
                     endcase
                 end
             end
