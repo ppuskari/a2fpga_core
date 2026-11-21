@@ -782,6 +782,9 @@ static void worknote( note * nptr, channel * cptr,char t,modcontext * mod )
 			x*16+y are from 0 to 127.
 			*/
 
+			// a2fpga J1: explicit backward Bxx marks a complete pass.
+			if(effect_param<=mod->tablepos && (mod->tablepos || mod->patternpos))
+				mod->song_wraps++;
 			mod->tablepos = effect_param;
 			if(mod->tablepos >= mod->song.length)
 				mod->tablepos = 0;
@@ -826,8 +829,10 @@ static void worknote( note * nptr, channel * cptr,char t,modcontext * mod )
 			if(!mod->jump_loop_effect)
 			{
 				mod->tablepos++;
-				if(mod->tablepos >= mod->song.length)
+				if(mod->tablepos >= mod->song.length) {
 					mod->tablepos = 0;
+					mod->song_wraps++;
+				}
 			}
 
 			mod->jump_loop_effect = 1;
@@ -1533,6 +1538,7 @@ int hxcmod_load( modcontext * modctx, void * mod_data, int mod_data_size )
 			// States init
 
 			modctx->tablepos = 0;
+			modctx->song_wraps = 0;
 			modctx->patternpos = 0;
 			modctx->song.speed = 6;
 			modctx->bpm = 125;
@@ -1674,8 +1680,10 @@ void hxcmod_fillbuffer(modcontext * modctx, msample * outbuffer, mssize nbsample
 						{
 							modctx->tablepos++;
 							modctx->patternpos = 0;
-							if(modctx->tablepos >= modctx->song.length)
+							if(modctx->tablepos >= modctx->song.length) {
 								modctx->tablepos = 0;
+								modctx->song_wraps++;
+							}
 						}
 					}
 					else
@@ -2017,6 +2025,7 @@ void hxcmod_unload( modcontext * modctx )
 		memclear(&modctx->sampledata,0,sizeof(modctx->sampledata));
 		memclear(&modctx->patterndata,0,sizeof(modctx->patterndata));
 		modctx->tablepos = 0;
+		modctx->song_wraps = 0;
 		modctx->patternpos = 0;
 		modctx->patterndelay  = 0;
 		modctx->jump_loop_effect = 0;
