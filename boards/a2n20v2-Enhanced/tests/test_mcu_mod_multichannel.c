@@ -92,6 +92,73 @@ static void run(const char sig[4],unsigned voices)
     printf("PASS J2R3: %.4s %u channels parity %u nonzero frames\n",
            sig,voices,nonzero);
 }
+
+/* Exercise eight distinct instruments simultaneously. Four cache pages are
+ * shared across voices 0..3 and 4..7, so accidentally sharing per-voice cache
+ * state is detected by full-memory PCM parity over several sample loops. */
+static void run_eight_independent_instruments(void)
+{
+    enum { INSTRUMENTS=8, PAT_BYTES=256*INSTRUMENTS, BODY_BYTES=1024*INSTRUMENTS };
+    static uint8_t multi[HEADER+PAT_BYTES+BODY_BYTES];
+    const uint32_t bytes=(uint32_t)sizeof multi;
+    mod_format_t fmt;
+    memset(multi,0,sizeof multi);
+    memcpy(multi,"J2R3 8 DIFFERENT VOICES",22);
+    memcpy(multi+1080,"8CHN",4u);
+    multi[950]=1u;
+    for(unsigned ch=0;ch<INSTRUMENTS;ch++){
+        const unsigned hdr=20u+ch*30u;
+        const unsigned ev=HEADER+ch*4u;
+        multi[hdr+22u]=2u;  /* 512 words = 1024 bytes */
+        multi[hdr+25u]=64u;
+        multi[hdr+28u]=2u;  /* loop the full 1024 bytes */
+        multi[ev+0u]=0x01u;
+        multi[ev+1u]=0xACu; /* period 428 */
+        multi[ev+2u]=(uint8_t)((ch+1u)<<4); /* sample number 1..8 */
+        for(unsigned k=0;k<1024u;k++)
+            multi[HEADER+PAT_BYTES+ch*1024u+k]=
+                (uint8_t)((k*37u+ch*47u+(k>>4))&255u);
+    }
+    require(mod_format_probe(multi,bytes,&fmt),"8ch distinct probe");
+    require(fmt.channels==8u && fmt.sample_bytes==BODY_BYTES,
+            "8ch distinct header");
+    require(mod_store_begin(fmt.lengths),"8ch distinct store begin");
+    for(unsigned off=0;off<BODY_BYTES;off+=MOD_STORE_PAGE)
+        require(mod_store_stage(off,multi+fmt.prefix_bytes+off,MOD_STORE_PAGE),
+                "8ch distinct SDRAM stage");
+    require(hxcmod_init(&reference_ctx) &&
+            hxcmod_setcfg(&reference_ctx,44100,100,1) &&
+            hxcmod_load(&reference_ctx,multi,(int)bytes),
+            "8ch distinct reference load");
+    require(hxcmod_init(&virtual_ctx) &&
+            hxcmod_setcfg(&virtual_ctx,44100,100,1),
+            "8ch distinct virtual init");
+    hxcmod_external_samples(&virtual_ctx,MOD_SDRAM_BASE,
+                            MOD_SDRAM_CAPACITY,NULL,
+                            mod_store_read,mod_store_write);
+    require(hxcmod_load(&virtual_ctx,multi,(int)fmt.prefix_bytes),
+            "8ch distinct virtual load");
+    unsigned nonzero=0u,stereo_differences=0u;
+    for(unsigned n=0;n<128u;n++){
+        hxcmod_fillbuffer(&reference_ctx,pcm_ref,256,NULL);
+        hxcmod_fillbuffer(&virtual_ctx,pcm_virtual,256,NULL);
+        require(!memcmp(pcm_ref,pcm_virtual,sizeof pcm_ref),
+                "8ch independent instruments PCM mismatch");
+        for(unsigned i=0;i<256u;i++){
+            if(pcm_ref[2u*i] || pcm_ref[2u*i+1u])++nonzero;
+            if(pcm_ref[2u*i]!=pcm_ref[2u*i+1u])++stereo_differences;
+        }
+    }
+    require(nonzero>500u,"eight distinct voices were silent");
+    require(stereo_differences>500u,"stereo channels unexpectedly identical");
+    require(mod_store_misses()>=8u,"eight voice caches not exercised");
+    require(mod_store_faults()==0u,"eight voice out-of-bounds sample access");
+    hxcmod_unload(&reference_ctx);
+    hxcmod_unload(&virtual_ctx);
+    printf("PASS J2R3: eight distinct sample loops, multiple SDRAM pages, "
+           "%lu cache fills\\n",(unsigned long)mod_store_misses());
+}
+
 int main(void)
 {
     require(MOD_STORE_VOICES==8u,"8-voice SRAM cache not configured");
@@ -108,6 +175,7 @@ int main(void)
     run("CD81",8);
     run("TDZ8",8);
     run("FA08",8);
+    run_eight_independent_instruments();
     /* Validating the *source* format matters: an unsupported 8ch signature
      * must not silently enter SoundTracker-15's four-channel fallback. */
     memset(file,0,sizeof file);
