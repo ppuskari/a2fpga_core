@@ -301,6 +301,23 @@ static uint8_t m2_dir_close(void)
     m2_scan_cancel();
     return MEDIA_RESULT_OK;
 }
+/* The Apple II page picker can jump backwards directly in the completed
+ * alphabetical catalog, instead of reopening and rescanning 500 files.
+ * Request: ARM followed by two raw offset bytes, little endian. */
+static uint8_t m2_dir_seek(void)
+{
+    const bool valid=s_m2_armed && !s_m2_req_overflow && s_m2_req_len==2u;
+    s_m2_armed=false;
+    if(!valid)return MEDIA_RESULT_M2_BAD_PATH;
+    if(s_m2_scan_active)return MEDIA_RESULT_M2_RETRY;
+    if(s_m2_scan_failed)return MEDIA_RESULT_M2_FS;
+    if(!s_m2_directory_open)return MEDIA_RESULT_M2_NOT_OPEN;
+    const unsigned offset=(unsigned)s_m2_req[0] |
+                          ((unsigned)s_m2_req[1]<<8);
+    if(offset>s_m2_catalog_count)return MEDIA_RESULT_M2_BAD_PATH;
+    s_m2_catalog_next=offset;
+    return MEDIA_RESULT_OK;
+}
 static uint8_t m2_play_or_start(bool jukebox)
 {
     const char *path=m2_path();
@@ -427,6 +444,8 @@ static uint8_t mb_handle_cmd(uint8_t cmd)
     }
     case MEDIA_CMD_M2_NOWPLAY:
         return s_m2_hw ? m2_now_playing():MEDIA_RESULT_M2_OLD_FPGA;
+    case MEDIA_CMD_M2_SEEK:
+        return s_m2_hw ? m2_dir_seek():MEDIA_RESULT_M2_OLD_FPGA;
     case MEDIA_CMD_REPLAY_LAST:
         return mod_audio_replay_last()?MEDIA_RESULT_OK:
                MEDIA_RESULT_NO_SONG;
