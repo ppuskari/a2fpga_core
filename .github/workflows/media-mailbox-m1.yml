@@ -86,6 +86,24 @@ jobs:
             "$MCU/mcu_mod_format.c" "$MCU/mcu_mod_sample_store.c" \
             "$MCU/third_party/hxcmod/hxcmod.c" -o /tmp/mod_j2_large_4k
           /tmp/mod_j2_large_4k
+      - name: J2R9B MCU Stage2 PowerShell helper smoke
+        run: |
+          git checkout -B petar/mod-j2r9b-2k-sample-subpages-20261122 HEAD
+          pwsh -NoProfile -File ./J2R9B.ps1 Help
+          pwsh -NoProfile -File ./J2R9B.ps1 SourceState > /tmp/j2r9b_source.txt
+          grep -q 'Git tracked files are clean' /tmp/j2r9b_source.txt
+          grep -q 'Source diff SHA256' /tmp/j2r9b_source.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('J2R9B.ps1').read_text()
+          assert "petar/mod-j2r9b-2k-sample-subpages-20261122" in p
+          assert "'MOD SMP WIN='" in p
+          assert "'MOD SPI=PCM512 SDRAM=BYTE'" in p
+          assert "$flashArgs=@('--stage2', $firmware" in p
+          assert "'--skip-verify'" in p and "'0x40000'" in p
+          assert "--stage1" not in p
+          print("PASS J2R9B guarded Stage2: 2KiB windows, PCM-only bulk")
+          PY
       - name: J2R9B per-voice PCM window retention and latency regression
         run: |
           MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
