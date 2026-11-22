@@ -79,10 +79,17 @@ int disk_fs_request(fs_req_t *r)
         if(!strcmp(last_open,"READFAIL"))return 1; /* mock FR_DISK_ERR */
         r->name[0]=0;
         if(stress_mode) {
-            const unsigned total=stress_mode==2u?506u:28u;
+            const unsigned total=stress_mode>=2u?506u:28u;
             if(fs_cursor<total) {
                 snprintf(r->name,sizeof r->name,"TRACK%03u.MOD",
                          total-1u-fs_cursor);
+                if(stress_mode==3u) {
+                    /* 506 valid but unusually long MOD filenames exceed
+                     * the static 24KiB pool: fail gracefully, never malloc. */
+                    const size_t old_len=strlen(r->name);
+                    memset(r->name+old_len-4u,'X',62u-old_len);
+                    memcpy(r->name+58u,".MOD",5u);
+                }
                 r->attr=0;
             }
             fs_cursor++;
@@ -387,6 +394,16 @@ int main(void)
           s_m2_catalog_count==4);
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_OK);
     CHECK(response[1]==1 && !memcmp(response+2,"ALBUM",5));
+    CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
+    /* Bound RAM rather than invoking the MCU-wide malloc failure hook if
+     * a 512-file directory contains long names approaching 63 bytes. */
+    stress_mode=3u;
+    path_cmd("PROTRACKER/TOO-LONG-NAMES",
+             MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
+    complete_scan();
+    CHECK(s_m2_scan_failed && !s_m2_directory_open &&
+          s_m2_catalog_count==0 && m2_dynamic_allocations==0);
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_FS);
     CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
     CHECK(command(MEDIA_CMD_STOP)==MEDIA_RESULT_OK && stop_calls==1);
     CHECK(command(MEDIA_CMD_PING)==MEDIA_RESULT_PONG);
