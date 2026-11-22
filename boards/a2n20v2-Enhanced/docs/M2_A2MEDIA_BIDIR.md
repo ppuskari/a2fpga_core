@@ -46,13 +46,22 @@ Each NEXT_ENTRY reply consists of [length][type][name characters], where
 length=1+nameLength, type=1 for folder and 0 for MOD. Names are 1..63
 ASCII bytes, not NUL-terminated. WAIT for ACK before reading, then read
 exactly length+1 bytes from $C0B5. $C0B3 bit7 indicates data ready.
-Directory enumeration is FAT native order; MOD playback J2R11 sorts its
-playlist independently and resolves the selected path to its correct index.
-Only directories and .MOD files are returned.
+Directory enumeration is now a complete, case-insensitively sorted folder
+snapshot (not page-local and not raw FAT order): folders first, then .MOD files.
+The .MOD filename ordering matches the existing J2R11 jukebox's case-insensitive
+sort, including across 12-entry Apple pages; chosen paths still resolve to
+their correct playlist index. The Apple browser owns its own catalog and does
+not alias the live jukebox catalog or FAT handles. The directory scan is
+bounded at 512 visible entries (folders + MODs); OPEN returns $E7 instead of
+silently truncating an oversized directory or a failed allocation. Apple
+displays the 16-bit jukebox position/count in five-digit decimal fields.
 
 All FAT ops execute in the existing disk thread. A new g_media_dir FAT
 handle is entirely separate from both FTP's directory and J2R11's
-jukebox directory. The selected FAT backend (SD/USB) is not remounted.
+jukebox directory. The BL616 mailbox task builds the sorted browser
+catalog by requests to that dedicated FatFS handle, then closes the directory
+before serving paginated Apple reads from the independent catalog. The selected
+FAT backend (SD/USB) is not remounted.
 
 ## Windows isolated test build (no golden flash updates)
 
