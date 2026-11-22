@@ -22,7 +22,7 @@ static unsigned upload_head,upload_count,response_count;
 static uint8_t fake_cmd,fake_seq,fake_ack,fake_result;
 static bool pending;
 static bool fake_hw=true,fake_usb;
-static bool media_dir_open;
+static bool media_dir_open, stress_mode;
 static unsigned fs_cursor,open_calls,close_calls,play_calls,juke_calls,stop_calls;
 static char last_open[128],last_play[128],last_juke[128];
 static bool now_playing_active=true, now_snapshot_valid=true;
@@ -69,6 +69,14 @@ int disk_fs_request(fs_req_t *r)
     case FSOP_MEDIA_LIST_NEXT:
         if(!media_dir_open)return -1;
         r->name[0]=0;
+        if(stress_mode) {
+            if(fs_cursor<28u) {
+                snprintf(r->name,sizeof r->name,"TRACK%03u.MOD",27u-fs_cursor);
+                r->attr=0;
+            }
+            fs_cursor++;
+            return 0;
+        }
         switch(fs_cursor++){
         case 0:snprintf(r->name,sizeof r->name,"ALBUM");r->attr=0x10;break;
         case 1:snprintf(r->name,sizeof r->name,"ignore.mp3");r->attr=0;break;
@@ -172,29 +180,46 @@ int main(void)
     CHECK(response_count==6 && response[0]==5 && response[1]==MOD_PCM_PLAYING &&
           response[2]==3 && response[4]==41);
     path_cmd("MODS",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
-    CHECK(media_dir_open && open_calls==1 && !strcmp(last_open,"MODS"));
+    CHECK(!media_dir_open && open_calls==1 && close_calls==1 && !strcmp(last_open,"MODS"));
     CHECK(command(MEDIA_CMD_M2_NEXT)==0);
     CHECK(response_count==7 && response[0]==6 && response[1]==1 &&
           !memcmp(response+2,"ALBUM",5));
     CHECK(command(MEDIA_CMD_M2_NEXT)==0);
-    CHECK(response_count==11 && response[0]==10 && response[1]==0 &&
-          !memcmp(response+2,"CHEER.MOD",9));
-    CHECK(command(MEDIA_CMD_M2_NEXT)==0);
     CHECK(response_count==12 && response[0]==11 && response[1]==0 &&
           !memcmp(response+2,"3edges.mod",10));
+    CHECK(command(MEDIA_CMD_M2_NEXT)==0);
+    CHECK(response_count==11 && response[0]==10 && response[1]==0 &&
+          !memcmp(response+2,"CHEER.MOD",9));
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_EOF);
     CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
     CHECK(!media_dir_open && close_calls==1);
+    /* Deliberately reverse FAT order across 3 pages. The player and
+     * Apple browser must both present TRACK000..TRACK027 alphabetically,
+     * regardless of the page size (12), without rescanning between pages. */
+    stress_mode=true;
+    path_cmd("MODS",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
+    CHECK(open_calls==2 && close_calls==2 && !media_dir_open);
+    for(unsigned i=0;i<28u;i++) {
+        char expected[32];
+        snprintf(expected,sizeof expected,"TRACK%03u.MOD",i);
+        CHECK(command(MEDIA_CMD_M2_NEXT)==0);
+        CHECK(response_count==14 && response[0]==13 && response[1]==0 &&
+              !memcmp(response+2,expected,12));
+    }
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_EOF);
+    CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
+    CHECK(close_calls==2);
+    stress_mode=false;
     path_cmd("MODS/CHEER.MOD",MEDIA_CMD_M2_PLAY,MEDIA_RESULT_OK);
     CHECK(play_calls==1 && !strcmp(last_play,"MODS/CHEER.MOD"));
     path_cmd("MODS/3edges.mod",MEDIA_CMD_M2_START,MEDIA_RESULT_OK);
     CHECK(juke_calls==1 && !strcmp(last_juke,"MODS/3edges.mod"));
     CHECK(command(MEDIA_CMD_M2_RESUME)==MEDIA_RESULT_OK);
     path_cmd("../danger",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_M2_BAD_PATH);
-    CHECK(open_calls==1); /* no disk requests for traversal */
+    CHECK(open_calls==2); /* no disk requests for traversal */
     CHECK(command(MEDIA_CMD_STOP)==MEDIA_RESULT_OK && stop_calls==1);
     CHECK(command(MEDIA_CMD_PING)==MEDIA_RESULT_PONG);
-    printf("PASS M2 real MCU mailbox: FAT browse reply, file play, jukebox at selected .MOD,\n");
+    printf("PASS M2 real MCU mailbox: globally sorted FAT catalog across 3 pages, file play, start-file\n");
     printf("PASS M2 protocol: M1 compatibility, live now-playing frame, source/status, path validation\n");
     return 0;
 }
