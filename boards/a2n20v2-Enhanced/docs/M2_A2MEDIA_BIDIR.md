@@ -1,0 +1,94 @@
+# M2 — A2MEDIA bidirectional FAT jukebox browser
+
+Status: EXPERIMENTAL, physical hardware validation required. Base J2R11 at
+commit a984abcfb03ef87554c9bf21ea26b6ddb84e7441 is golden and unchanged.
+Separate Apple application branch: ppuskari/a2media.system,
+petar/m2-80col-fat-picker-20261122.
+
+## Preserved M1 interface
+
+Physical slot-3 Apple addresses $C0B0–$C0BF, ROMless. Version remains 1;
+signature M,B,1; P0 A2MEDIA and legacy M1 commands work unmodified.
+
+$C0B4 writes commands; $C0BA sequence, $C0BB ACK, $C0BC result.
+$C0B5 Apple WRITE still appends to Apple->MCU FIFO (256 bytes).
+$C0B5 Apple READ newly returns one MCU->Apple reply FIFO byte (256 bytes).
+Status $C0B3 bit7 REPLY_READY is new. FPGA holds a reply byte stable for an
+entire Apple bus phase and pops it AFTER Apple /SEL drops.
+
+MCU SPI7 write $800030 pushes one reply byte; write $800031 with $A5 clears
+reply FIFO; read $80001A/1B reports reply count; read $80001C overflow;
+read $80001D/1E returns ASCII M,2. MCU refuses new M2 commands if this FPGA
+M2 probe fails, so upgrading Stage2 without upgrading gateware is detectable.
+Space 6 audio PCM and the entire HxCMOD/gain/samples/A3 chain are unchanged.
+
+## Added M2 commands
+
+- $20 CAPS: result $02 if M2 FPGA found, $E8 otherwise
+- $21 ARM: clear request and old reply, start accepting request string
+- $22 OPEN_DIR: open path supplied after ARM; result $00/$E6/$E7
+- $23 NEXT_ENTRY: return one directory entry, or $D0 EOF
+- $24 CLOSE_DIR: close Apple UI FAT iterator
+- $25 PLAY_FILE: queue selected MOD
+- $26 JUKE_START_FILE: scan parent and begin at selected MOD, J2R11 sorted index
+- $27 RESUME_JUKE: resume stopped playlist
+- $28 GET_SOURCE: reply [1,0=SD/1=USB]
+- $29 GET_STATUS: reply [5,state,lastLO,lastHI,totalLO,totalHI]
+
+A pathname request is ARM, then NUL-terminated relative ASCII path bytes
+through Apple writes to $C0B5, then OPEN_DIR / PLAY_FILE / JUKE_START_FILE.
+Root folder path is a single zero byte. Max 127 bytes including NUL.
+Reject absolute paths, dot-dot traversal, drive prefixes and backslash.
+The ARM request assembler handles bytes received over multiple MCU polls.
+
+Each NEXT_ENTRY reply consists of [length][type][name characters], where
+length=1+nameLength, type=1 for folder and 0 for MOD. Names are 1..63
+ASCII bytes, not NUL-terminated. WAIT for ACK before reading, then read
+exactly length+1 bytes from $C0B5. $C0B3 bit7 indicates data ready.
+Directory enumeration is FAT native order; MOD playback J2R11 sorts its
+playlist independently and resolves the selected path to its correct index.
+Only directories and .MOD files are returned.
+
+All FAT ops execute in the existing disk thread. A new g_media_dir FAT
+handle is entirely separate from both FTP's directory and J2R11's
+jukebox directory. The selected FAT backend (SD/USB) is not remounted.
+
+## Windows isolated test build (no golden flash updates)
+
+PS> $m2="C:\AppleIIgsDev_02\a2fpga-media-m2"
+PS> git clone --single-branch --branch petar/media-m2-bidir-fat-picker-20261122 https://github.com/ppuskari/a2fpga_core.git $m2
+
+Open:
+  C:\AppleIIgsDev_02\a2fpga-media-m2\boards\a2n20v2-Enhanced\a2n20v2_enhanced.gprj
+
+Synthesize/place/route in Gowin and program FPGA VOLATILE SRAM ONLY.
+Do not replace golden FPGA flash. M2 duplicates a 2KiB reply buffer;
+the actual Gowin resource utilization/timing remains to be measured.
+
+PS> Set-Location $m2
+PS> .\M2.ps1 Build
+
+With BL616 in BootROM UPDATE mode, flash ONLY MCU Stage2 at 0x40000:
+
+PS> .\M2.ps1 Flash
+
+Script validates source and binary SHA256 and requires M2 FAT REPLY=YES,
+MOD JUKE=STARTFILE, MOD LOG=QUIET1HZ, 2KiB sample windows, PCM512 and
+bytewise FPGA SDRAM signatures. Signed Stage1 and FPGA flash untouched.
+
+## Real-hardware gates
+
+1. On Apple IIe and IIgs, PEEK(49328..49330) still 77,66,1.
+2. Old P0 A2MEDIA continues functioning on the new M2 hardware.
+3. Boot matching experimental M2 A2MEDIA ProDOS 2.4.3 image.
+4. Browse SD root, enter folders and page through MOD files.
+5. RETURN on a MOD plays it alone; J starts jukebox from that file.
+6. Verify the selected song plays first and its sorted successor follows.
+7. Try S/N/P/R transport, B parent, F/G pages, I status, Q quit.
+8. Listen to CHEER.MOD while browsing: target zero UDR/ERR and no audible
+   interruptions, preserving the proven J2R11 gain and sample cache.
+9. IIgs native bus slot-3 behavior must be independently tested.
+
+CI covers Yosys synthesis, Icarus both M1+M2 benches, MCU mocked FAT/SPI
+integration, existing HDMI PCM and DOC regressions. It does not prove
+Gowin place/route, native BL616 SDK build or electrical bus timing.
