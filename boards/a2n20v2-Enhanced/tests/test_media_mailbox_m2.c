@@ -201,7 +201,7 @@ int main(void)
     CHECK(media_dir_open && s_m2_scan_active && close_calls==0 &&
           open_calls==1 && !strcmp(last_open,"MODS"));
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_RETRY);
-    CHECK(response_count==6); /* RETRY must not overwrite prior STATUS FIFO */
+    CHECK(response_count==0); /* ARM cleared FIFO; RETRY sends no frame */
     complete_scan();
     CHECK(s_m2_directory_open && !s_m2_scan_failed &&
           !media_dir_open && close_calls==1);
