@@ -16,6 +16,11 @@ bool mod_audio_replay_last(void);
  * "from last" uses the folder of the most recently chosen MOD; if none
  * exists it uses the FAT volume root. */
 bool mod_audio_jukebox_start(const char *relative_dir, bool recursive);
+/* Scan the picked file's folder, begin at that MOD (sorted order), then
+ * continue to the folder's end. Use picker again after a cold reboot. */
+bool mod_audio_jukebox_start_from_file(const char *relative_file);
+/* One-session shortcut after Stop: replay last jukebox track from its start. */
+bool mod_audio_jukebox_resume(void);
 void mod_audio_jukebox_from_last(bool recursive);
 bool mod_audio_next(void);
 bool mod_audio_previous(void);
@@ -26,7 +31,7 @@ unsigned mod_audio_jukebox_count(void);
  * increments on queue/scan/completion/clear to prompt UI repaint. */
 typedef enum {
     MOD_JUKE_IDLE=0, MOD_JUKE_QUEUED, MOD_JUKE_SCANNING,
-    MOD_JUKE_READY, MOD_JUKE_EMPTY
+    MOD_JUKE_READY, MOD_JUKE_EMPTY, MOD_JUKE_START_MISSING
 } mod_jukebox_scan_state_t;
 mod_jukebox_scan_state_t mod_audio_jukebox_scan_state(void);
 uint32_t mod_audio_jukebox_generation(void);
