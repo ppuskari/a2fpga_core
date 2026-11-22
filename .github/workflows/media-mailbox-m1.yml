@@ -86,6 +86,53 @@ jobs:
             "$MCU/mcu_mod_format.c" "$MCU/mcu_mod_sample_store.c" \
             "$MCU/third_party/hxcmod/hxcmod.c" -o /tmp/mod_j2_large_4k
           /tmp/mod_j2_large_4k
+      - name: J2R10 quiet-console MCU / SSI counter-off regressions
+        run: |
+          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
+          MOCK=boards/a2n20v2-Enhanced/tests/j2r10_osd_mock
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 -I"$MOCK" -I"$MCU" \
+            boards/a2n20v2-Enhanced/tests/test_j2r10_osd_batch.c \
+            "$MCU/osd_console.c" -o /tmp/j2r10_osd
+          /tmp/j2r10_osd
+          # Exercise both speech telemetry modes so the controls can be
+          # restored later without touching the working speech synth code.
+          for enabled in 0 1; do
+            gcc -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter \
+              -DSSI263_DIAG_COUNTERS=${enabled} -fsyntax-only \
+              -Itests/ssi263_hybrid/stubs -I"$MCU" \
+              -Ireference/ssi263/pico-v1.0.1 "$MCU/ssi263_hybrid.c"
+          done
+          grep -q 'set(SSI263_DIAG_COUNTERS 0 CACHE STRING' "$MCU/CMakeLists.txt"
+          grep -q 'if(++window>=1536u)' "$MCU/mcu_mod_audio.c"
+      - name: J2R10 FPGA SSI telemetry-trim contract
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq iverilog
+          iverilog -g2012 -s tb_ssi263_hybrid_bridge -o /tmp/j2r10_ssi_legacy.vvp \
+            boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv \
+            tests/ssi263_hybrid/tb_ssi263_hybrid_bridge.sv
+          vvp /tmp/j2r10_ssi_legacy.vvp
+          iverilog -g2012 -s tb_ssi263_quiet_counters -o /tmp/j2r10_ssi_quiet.vvp \
+            boards/a2n20v2-Enhanced/hdl/ssi263_hybrid_bridge.sv \
+            tests/ssi263_hybrid/tb_ssi263_quiet_counters.sv
+          vvp /tmp/j2r10_ssi_quiet.vvp
+          grep -q "ENABLE_PERF_COUNTERS(1'b0)" boards/a2n20v2-Enhanced/hdl/top.sv
+      - name: J2R10 Stage2 PowerShell helper smoke
+        run: |
+          git checkout -B petar/mod-j2r10-quiet-console-20261122 HEAD
+          pwsh -NoProfile -File ./J2R10.ps1 Help
+          pwsh -NoProfile -File ./J2R10.ps1 SourceState > /tmp/j2r10_source.txt
+          grep -q 'Git tracked files are clean' /tmp/j2r10_source.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('J2R10.ps1').read_text()
+          assert "'MOD LOG=QUIET1HZ'" in p
+          assert "petar/mod-j2r10-quiet-console-20261122" in p
+          assert "$flashArgs=@('--stage2', $firmware" in p
+          assert "'--skip-verify'" in p and "'0x40000'" in p
+          assert "--stage1" not in p
+          print("PASS J2R10 guarded Stage2 / QUIET1HZ firmware")
+          PY
       - name: J2R9B MCU Stage2 PowerShell helper smoke
         run: |
           git checkout -B petar/mod-j2r9b-2k-sample-subpages-20261122 HEAD

@@ -9,9 +9,10 @@
  * Visibility model:
  *   - osd_console_show(): take over the Apple II display, repaint the log.
  *   - osd_console_hide(): hand the display back to the live Apple II.
- *   - While shown, osd_log() repaints; while hidden, osd_log() only buffers the
- *     line (so a later show() reveals the full history) and does NOT steal the
- *     screen back from the Apple II.
+ *   - osd_log() only writes to an MCU SRAM line ring in BOTH states. It never
+ *     repaints the FPGA screen or steals Apple video from real-time audio.
+ *   - osd_console_service() runs on the menu/HID task to repaint at <=1 Hz
+ *     only while visible; osd_console_show() always paints immediately.
  */
 #ifndef _OSD_CONSOLE_H
 #define _OSD_CONSOLE_H
@@ -20,6 +21,8 @@
 #include <stdint.h>
 
 void osd_log(const char *fmt, ...);   /* append one status line (thread-safe) */
+/* MCU menu thread: one buffered FPGA OSD refresh per second, if visible. */
+void osd_console_service(void);
 void osd_console_show(void);          /* take over the screen, show the log */
 void osd_console_hide(void);          /* return the screen to the Apple II */
 void osd_console_hide_if_idle(uint32_t timeout_us); /* auto-dismiss boot console */

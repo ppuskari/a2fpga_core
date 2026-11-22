@@ -1599,6 +1599,10 @@ void menu_input(uint16_t buttons)
     if (s_fw_installing)
         return;   /* install page owns the screen until the MCU stops */
 
+    /* J2R10: run OSD refresh only from menu/HID service, never from
+     * audio/SSI/network logging producers. Buffered logs remain available. */
+    osd_console_service();
+
     uint16_t inj = s_inject;
     s_inject = 0;
     buttons |= inj;

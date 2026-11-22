@@ -1505,7 +1505,8 @@ wire [7:0] doc_128k_status_w;
     // Audio will be silent until updated BL616 P10 firmware connects.
     // The native DOC piano and AY effects do not depend on this path.
     ssi263_hybrid_bridge #(
-        .PCM_DEPTH(2048),.START_WATERMARK(512),.EVENT_DEPTH(256)
+        .PCM_DEPTH(2048),.START_WATERMARK(512),.EVENT_DEPTH(256),
+        .ENABLE_PERF_COUNTERS(1'b0) // J2R10 FPGA trim: no speech UND/OVR stats
     ) ssi263_hybrid (
         .clk_i(clk_logic_w),
         .reset_n_i(device_reset_n_w),

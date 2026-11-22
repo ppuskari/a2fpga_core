@@ -1,7 +1,8 @@
 /*
  * osd_console — see osd_console.h. A small line ring-buffer rendered to the
- * FPGA OSD text page. Repaints only on state changes (when shown), so there is
- * no continuous-refresh flicker and no thread permanently owning the screen.
+ * FPGA OSD text page. J2R10 batches status changes in MCU RAM and repaints
+ * at most once per second when the console view is visible. No dedicated
+ * refresh thread, no new FPGA register/SDRAM accesses in the audio task.
  */
 #include <stdarg.h>
 #include <stdbool.h>
@@ -26,6 +27,9 @@ static int   s_count;
 static bool  s_visible;
 static bool  s_lockout;   /* menu owns the screen; buffer only */
 static uint32_t s_last_visible_activity_us;  /* boot console idle timeout */
+static uint32_t s_last_repaint_us;
+static bool s_dirty;
+#define OSD_CONSOLE_REPAINT_INTERVAL_US 1000000u
 static usb_osal_mutex_t s_lock;
 
 /* The very first osd_log()/show() runs single-threaded at boot (the startup
@@ -72,14 +76,13 @@ void osd_log(const char *fmt, ...)
         strcpy(s_lines[CON_ROWS - 1], line);
     }
 
-    /* Only repaint / assert the takeover when the console is the active view.
-     * When hidden, we just buffer the line — the Apple II keeps the screen. */
-    if (s_visible) {
+    /* Never repaint inside a producer's osd_log call. In the old firmware,
+     * each status line cleared + redrew 23 FPGA text rows. Seven MOD stats
+     * could monopolize the same SPI bus used for audio sample refills.
+     * The menu/HID thread owns throttled repaint via service(). */
+    s_dirty = true;
+    if (s_visible)
         s_last_visible_activity_us = (uint32_t)bflb_mtimer_get_time_us();
-        repaint();
-        fpga_spi_reg_write(REG_TEXT_MODE, 1);
-        fpga_spi_reg_write(REG_VIDEO_ENABLE, 1);
-    }
 
     usb_osal_mutex_give(s_lock);
 }
@@ -94,9 +97,37 @@ void osd_console_show(void)
     }
     s_visible = true;
     s_last_visible_activity_us = (uint32_t)bflb_mtimer_get_time_us();
-    repaint();
+    s_last_repaint_us = s_last_visible_activity_us;
+    repaint();   /* Explicit user show: render latest buffered snapshot now. */
+    s_dirty = false;
     fpga_spi_reg_write(REG_TEXT_MODE, 1);
     fpga_spi_reg_write(REG_VIDEO_ENABLE, 1);
+    usb_osal_mutex_give(s_lock);
+}
+
+/* Called by the existing menu/HID thread, NOT by the PCM mixer. Unlike
+ * osd_log(), this is allowed to touch FPGA SDRAM; it coalesces any number
+ * of log lines into a single full-screen update once per second. */
+void osd_console_service(void)
+{
+    /* Lock-free early exit in the common Apple II/MCU menu views. */
+    if (!__atomic_load_n(&s_visible, __ATOMIC_ACQUIRE))
+        return;
+    uint32_t now = (uint32_t)bflb_mtimer_get_time_us();
+    if ((uint32_t)(now - s_last_repaint_us) <
+        OSD_CONSOLE_REPAINT_INTERVAL_US)
+        return;
+    ensure_lock();
+    usb_osal_mutex_take(s_lock);
+    if (s_visible && !s_lockout && s_dirty &&
+        (uint32_t)(now - s_last_repaint_us) >=
+          OSD_CONSOLE_REPAINT_INTERVAL_US) {
+        repaint();
+        s_dirty = false;
+        s_last_repaint_us = now;
+        /* VIDEO_ENABLE and TEXT_MODE are already asserted by show().
+         * The ownership state is unchanged; no extra reg writes needed. */
+    }
     usb_osal_mutex_give(s_lock);
 }
 
@@ -145,8 +176,11 @@ int osd_console_snapshot(char dst[][41], int max)
     ensure_lock();
     usb_osal_mutex_take(s_lock);
     int n = s_count < max ? s_count : max;
+    /* Both arrays are statically bounded to 40 printable bytes plus NUL.
+     * Avoid snprintf's expensive formatting and false host-GCC size
+     * warnings in a path used by the remote console. */
     for (int i = 0; i < n; i++)
-        snprintf(dst[i], 41, "%s", s_lines[i]);
+        memcpy(dst[i], s_lines[i], CON_COLS + 1);
     usb_osal_mutex_give(s_lock);
     return n;
 }
