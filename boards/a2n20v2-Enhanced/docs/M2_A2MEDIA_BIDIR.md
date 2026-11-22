@@ -230,20 +230,23 @@ The M2 Apple FAT browser previously kept **one `pvPortMalloc` string per
 entry** in a 512-pointer catalog; unlike the MCU console picker, this
 catalog stays allocated while `mod_audio_jukebox_start_from_file()`
 starts the independent MOD-thread playlist scan and allocates hundreds
-of complete filenames. On this M2 branch the Apple catalog is now **a compact 24-KiB
-static name pool plus 512 small index records**, with no per-filename
-heap allocations or `vPortFree` calls. It preserves A–Z ordering,
-`DIR_SEEK`, and normal forward/backward paging. The actual capacity
-is the smaller of 512 files and the 24-KiB name-pool budget: 506
-normal ProTracker names fit, but a pathological directory with
-hundreds of almost-63-character filenames returns a bounded
-filesystem error rather than calling the fatal malloc hook. Check
-Stage 2's actual linker/BSS use before flashing. The MCU console
-jukebox and HxCMOD engine remain unchanged.
+of complete filenames. On this M2 branch the Apple catalog is now a **compact,
+chunk-allocated name arena**: up to 20 blocks of 2 KiB each and 512
+small index records, instead of 506 independent heap allocations.
+Normal ProTracker file names use only the blocks actually needed.
+Each block uses libc `malloc()` under the FreeRTOS scheduler lock,
+matching SDK heap_3 serialization but without `pvPortMalloc()`'s
+fatal out-of-memory hook. Low-heap conditions now return an M2 FAT
+browse error instead of disabling interrupts; this preserves the
+USB keyboard and error reporting. A–Z ordering, `DIR_SEEK`, and
+forward/backward page behavior remain unchanged. The MCU console
+jukebox and HxCMOD engine remain untouched.
 
 The M2 host integration test now enumerates 506 entries, starts the
 selected-file jukebox while the catalog is still active, confirms the
-directory remains usable, and asserts **zero M2 browser heap allocations**.
+directory remains usable, and asserts **zero per-filename
+`pvPortMalloc()` calls**. It additionally tests 506 long filenames
+and forces `malloc()` failure, expecting a recoverable M2 error.
 Hardware must confirm whether the interrupted keyboard symptom is
 resolved. If the MCU still freezes, inspect the existing fatal diagnostic
 marker (DebugOverlay): `ED E1 E1 E1 ED` means malloc-failure hook,
