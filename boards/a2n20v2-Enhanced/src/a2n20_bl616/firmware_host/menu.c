@@ -1361,6 +1361,12 @@ static void mod_library_build(void)
         char value[12];
         snprintf(value,sizeof value,"%u",mod_audio_jukebox_count());
         mi_add(MI_INFO,"JUKEBOX TRACKS",value);
+        const unsigned last=mod_audio_jukebox_last_track();
+        if(last && mod_audio_jukebox_count())
+            snprintf(value,sizeof value,"%u/%u",last,mod_audio_jukebox_count());
+        else
+            snprintf(value,sizeof value,"NONE");
+        mi_add(MI_INFO,"LAST JUKE TRACK",value);
         const char *scan="IDLE";
         switch(mod_audio_jukebox_scan_state()) {
         case MOD_JUKE_QUEUED: scan="QUEUED";break;
