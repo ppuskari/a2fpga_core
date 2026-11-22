@@ -67,6 +67,11 @@ The repository root contains [J2R8.ps1](../../../J2R8.ps1), which configures
 the Bouffalo SDK, Make, CMake and RISC-V compiler paths automatically from the
 checkout's parent folder. The script also generates and validates a SHA256
 build manifest so an old binary cannot be mistaken for the current source.
+**Locally modified tracked files no longer block Build or Flash**. The helper
+lists the modifications and fingerprints their combined Git diff at build
+time; before Flash, it checks that the source diff, Git HEAD, and firmware
+binary SHA256 still match the recorded build. Nothing is reset or discarded.
+Use `.\J2R8.ps1 SourceState` to display the changes and fingerprint.
 
 Clone into an **isolated** directory; do not overwrite the working J2R6 tree:
 
