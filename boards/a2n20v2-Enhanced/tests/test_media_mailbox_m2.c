@@ -12,6 +12,7 @@
 #include "fpga_spi.h"
 #include "disk.h"
 #include "mcu_mod_audio.h"
+#include "mcu_mod_now_playing.h"
 #include "osd_console.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -24,6 +25,17 @@ static bool fake_hw=true,fake_usb;
 static bool media_dir_open;
 static unsigned fs_cursor,open_calls,close_calls,play_calls,juke_calls,stop_calls;
 static char last_open[128],last_play[128],last_juke[128];
+static bool now_playing_active=true, now_snapshot_valid=true;
+static char now_playing_path[128]="MUSIC/CLASSICS/CHEER.MOD";
+bool mod_now_playing_snapshot(mod_now_playing_t *out)
+{
+    if(!now_snapshot_valid)return false;
+    memset(out,0,sizeof(*out));
+    out->active=now_playing_active;
+    if(now_playing_active)
+        snprintf(out->path,sizeof out->path,"%s",now_playing_path);
+    return true;
+}
 #define CHECK(v) do{ if(!(v)){fprintf(stderr,"FAIL M2 line %d: %s\n",__LINE__,#v);exit(1);} }while(0)
 void vTaskDelay(uint32_t ticks) {(void)ticks;}
 void osd_log(const char *fmt,...) {(void)fmt;}
@@ -145,6 +157,16 @@ int main(void)
     CHECK(command(MEDIA_CMD_M2_CAPS)==MEDIA_RESULT_M2_OLD_FPGA);
     fake_hw=true;
     CHECK(command(MEDIA_CMD_M2_SOURCE)==0);
+    CHECK(command(MEDIA_CMD_M2_NOWPLAY)==0);
+    CHECK(response_count==11 && response[0]==10 && response[1]==1 &&
+          !memcmp(response+2,"CHEER.MOD",9));
+    now_playing_active=false;
+    CHECK(command(MEDIA_CMD_M2_NOWPLAY)==0);
+    CHECK(response_count==2 && response[0]==1 && response[1]==0);
+    now_playing_active=true;
+    now_snapshot_valid=false;
+    CHECK(command(MEDIA_CMD_M2_NOWPLAY)==MEDIA_RESULT_M2_RETRY);
+    now_snapshot_valid=true;
     CHECK(response_count==2 && response[0]==1 && response[1]==0);
     CHECK(command(MEDIA_CMD_M2_STATUS)==0);
     CHECK(response_count==6 && response[0]==5 && response[1]==MOD_PCM_PLAYING &&
@@ -173,6 +195,6 @@ int main(void)
     CHECK(command(MEDIA_CMD_STOP)==MEDIA_RESULT_OK && stop_calls==1);
     CHECK(command(MEDIA_CMD_PING)==MEDIA_RESULT_PONG);
     printf("PASS M2 real MCU mailbox: FAT browse reply, file play, jukebox at selected .MOD,\n");
-    printf("PASS M2 protocol: M1 compatibility, source/status, path validation, missing FPGA\n");
+    printf("PASS M2 protocol: M1 compatibility, live now-playing frame, source/status, path validation\n");
     return 0;
 }
