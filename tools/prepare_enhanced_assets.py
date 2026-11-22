@@ -36,6 +36,44 @@ ROM_CHECKS = (
     ("ssi263_p9_outfir.mem", "generate_ssi263_p9_output_fir.py"),
 )
 
+# Seven ROM images used by the Enhanced FPGA project: six SSI263 tables and
+# the seven-zone SynthLAB piano ROM. Sizes refer to $readmemh words, not text
+# file byte sizes. Generators/extractor verify the actual contents separately.
+ROM_FORMATS = {
+    "ssi263_voice.mem": (8192, 2),       # 64 phonemes x 128 PCM bytes
+    "ssi263_p8_params.mem": (64, 8),
+    "ssi263_p8_coefs.mem": (50, 14),
+    "ssi263_p8_glottal.mem": (64, 4),
+    "ssi263_p9_f2nas.mem": (256, 14),
+    "ssi263_p9_outfir.mem": (193, 4),
+    "piano_multisustain.mem": (1408, 8), # 5632 PCM bytes, seven sustain zones
+}
+
+
+def verify_seven_rom_inventory() -> None:
+    expected = {name for name, _ in ROM_CHECKS} | {PIANO.name}
+    if set(ROM_FORMATS) != expected:
+        raise RuntimeError("Enhanced ROM inventory drift: update ROM_FORMATS")
+
+    project = (ROOT / "boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj").read_text(
+        encoding="utf-8")
+    for name, (word_count, hex_width) in ROM_FORMATS.items():
+        rom = HDL / name
+        if not rom.is_file():
+            raise RuntimeError(f"Missing required Enhanced FPGA ROM: {rom}")
+        lines = rom.read_text(encoding="ascii").splitlines()
+        if len(lines) != word_count:
+            raise RuntimeError(
+                f"{name}: {len(lines)} ROM words; expected {word_count}")
+        if any(len(line) != hex_width or
+               any(c not in "0123456789abcdefABCDEF" for c in line)
+               for line in lines):
+            raise RuntimeError(f"{name}: malformed or wrong-width hex words")
+        if f'path="hdl/{name}"' not in project:
+            raise RuntimeError(f"Missing Gowin project ROM dependency: hdl/{name}")
+        print(f"  ROM ready: {name} ({word_count} x {hex_width * 4} bits)")
+    print("PASS: all seven ROM files are valid and included in the Gowin project")
+
 
 def invoke(tool: str, *args: object) -> None:
     command = [sys.executable, str(ROOT / "tools" / tool), *(str(a) for a in args)]
@@ -104,8 +142,9 @@ def main() -> None:
 
     if not PIANO.is_file():
         raise RuntimeError("Piano ROM missing after preparation; aborting FPGA build")
-    print("PASS ENHANCED: tracked SSI263 ROMs verified and authentic "
-          "7-zone SynthLAB piano ROM prepared")
+    verify_seven_rom_inventory()
+    print("PASS ENHANCED: six SSI263 ROM tables and authentic "
+          "7-zone SynthLAB piano ROM verified before synthesis")
 
 
 if __name__ == "__main__":
