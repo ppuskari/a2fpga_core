@@ -70,6 +70,7 @@ jobs:
           /tmp/m2_mcu
           gcc -std=gnu11 -Wall -Wextra -Werror -O2 -I"$MCU" boards/a2n20v2-Enhanced/tests/test_mcu_mod_filename.c -o /tmp/m2_filenames
           /tmp/m2_filenames
+          python3 boards/a2n20v2-Enhanced/tests/test_mcu_picker_cached_paging.py
           python3 - <<'PY'
           from pathlib import Path
           root=Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host")
