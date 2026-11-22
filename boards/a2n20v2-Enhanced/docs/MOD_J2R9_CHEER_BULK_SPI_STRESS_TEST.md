@@ -51,7 +51,13 @@ $j2r9="C:\AppleIIgsDev_02\a2fpga-jukebox-j2r9"; git clone --single-branch --bran
 
 Build the MCU. J2R9.ps1 discovers SDK/GCC/Make/CMake under the
 AppleIIgsDev_02 folder. It records both the SHA256 binary digest
-and exact tracked source changes in a Build manifest.
+and exact tracked source changes in a Build manifest. Because the Git
+repository **tracks the output** `firmware_host/build/build_out/
+a2n20_bl616_host_bl616.bin`, a successful native rebuild changes that
+tracked binary. J2R9 excludes only that generated .bin from its **source**
+diff fingerprint, while validating the binary separately with SHA256
+both after Build and immediately before Flash. No source edits are
+reset or discarded.
 
 ~~~powershell
 Set-Location $j2r9; .\J2R9.ps1 Build
