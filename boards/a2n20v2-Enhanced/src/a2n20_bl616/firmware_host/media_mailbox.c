@@ -151,38 +151,79 @@ static bool m2_visible(const char *name,uint8_t attr)
     if(attr&AM_DIR_BIT)return true;
     return mod_filename_matches(name);
 }
-/* Do not hold the slot-3 command ACK hostage to an SD scan. A 500-entry
- * FatFS walk can take seconds; the 6502 client previously returned $E1
- * (local ACK timeout) while the MCU was working correctly.
- * OPEN now ACKs as soon as the isolated directory handle is open.
- * NEXT returns M2_RETRY ($EA) until a bounded background scan finishes;
- * its first successful NEXT then returns the first alphabetized entry.
- * This requires no changes to the physical FPGA SPI7 mailbox protocol. */
-#define M2_SCAN_STEP_ENTRIES 4u
+/* The BL616->FPGA SD tunnel currently needs ~9s just to enumerate 39
+ * folders. disk_fs_request() is SYNCHRONOUS and can hold this very mailbox
+ * task for hundreds of milliseconds on a single FatFS readdir operation.
+ * That starves M2 $23 command ACKs, producing $E1 on the Apple II.
+ *
+ * Use the disk thread's nonblocking FS broker: one persistent request
+ * buffer, one pending OPEN/NEXT/CLOSE at a time, no blocking waits or sleeps
+ * in the slot-3 service task. CANCEL and re-OPEN also ACK immediately, but
+ * drain/close any outstanding broker request before reusing its buffer.
+ * The FatFS DIR handle remains private to M2 and is never used by FTP/MOD.
+ */
+typedef enum {
+    M2_FS_NONE=0, M2_FS_OPEN, M2_FS_NEXT, M2_FS_CLOSE
+} m2_fs_stage_t;
+static m2_fs_stage_t s_m2_fs_stage;
+static fs_req_t s_m2_fs_job;  /* MUST stay alive until try_complete() */
 static bool s_m2_scan_active, s_m2_scan_opened, s_m2_scan_failed;
-static char s_m2_scan_path[M2_PATH_MAX];
+static bool s_m2_scan_finishing, s_m2_abort_requested;
+static bool s_m2_restart_requested;
+static char s_m2_scan_path[M2_PATH_MAX], s_m2_restart_path[M2_PATH_MAX];
 static unsigned s_m2_scan_raw, s_m2_scan_filtered, s_m2_scan_long;
 
-static void m2_scan_finish(bool complete)
+static void m2_scan_start(const char *path)
 {
-    fs_req_t req;
-    memset(&req,0,sizeof(req));
-    if(s_m2_scan_opened) {
-        req.op=FSOP_MEDIA_LIST_CLOSE;
-        const int close_fr=disk_fs_request(&req);
-        if(close_fr!=0) {
-            osd_log("M2 FAT DIR CLOSE FAIL: /%s FR=%d",
-                    s_m2_scan_path,close_fr);
-            complete=false;
-        }
-    }
+    m2_catalog_clear();
+    snprintf(s_m2_scan_path,sizeof(s_m2_scan_path),"%s",path);
+    s_m2_scan_raw=s_m2_scan_filtered=s_m2_scan_long=0u;
+    s_m2_scan_failed=false;
+    s_m2_scan_finishing=false;
     s_m2_scan_opened=false;
+    s_m2_scan_active=true;
+}
+
+/* An in-flight broker job references s_m2_fs_job and may reference
+ * s_m2_scan_path. Never overwrite either until try_complete() succeeds. */
+static void m2_scan_abort(bool reopen,const char *path)
+{
+    if(reopen)
+        snprintf(s_m2_restart_path,sizeof(s_m2_restart_path),"%s",path);
+    s_m2_restart_requested=reopen;
+    if(s_m2_scan_active || s_m2_fs_stage!=M2_FS_NONE) {
+        s_m2_abort_requested=true;
+        return;
+    }
+    m2_catalog_clear();
+    s_m2_scan_opened=false;
+    s_m2_scan_failed=false;
+    s_m2_scan_finishing=false;
+    s_m2_abort_requested=false;
+    if(reopen)m2_scan_start(s_m2_restart_path);
+}
+
+static uint8_t m2_dir_open(void)
+{
+    const char *path=m2_path();
+    s_m2_armed=false;
+    if(!path) {
+        osd_log("M2 FAT DIR: invalid Apple path");
+        return MEDIA_RESULT_M2_BAD_PATH;
+    }
+    m2_scan_abort(true,path);
+    return MEDIA_RESULT_OK;
+}
+
+static void m2_scan_finalize(void)
+{
     s_m2_scan_active=false;
-    if(!complete) {
-        s_m2_scan_failed=true;
+    s_m2_scan_finishing=false;
+    s_m2_scan_opened=false;
+    if(s_m2_scan_failed) {
         m2_catalog_clear();
-        osd_log("M2 FAT DIR SCAN FAILED: /%s raw=%u",
-                s_m2_scan_path,s_m2_scan_raw);
+        osd_log("M2 FAT DIR FAILED: /%s raw=%u",s_m2_scan_path,
+                s_m2_scan_raw);
         return;
     }
     if(s_m2_catalog_count>1u)
@@ -194,110 +235,140 @@ static void m2_scan_finish(bool complete)
             s_m2_scan_filtered,s_m2_scan_long);
 }
 
-static void m2_scan_cancel(void)
+static void m2_scan_consume_entry(void)
 {
-    if(s_m2_scan_active && s_m2_scan_opened) {
-        fs_req_t req;
-        memset(&req,0,sizeof(req));
-        req.op=FSOP_MEDIA_LIST_CLOSE;
-        (void)disk_fs_request(&req);
+    if(!s_m2_fs_job.name[0]) {
+        s_m2_scan_finishing=true;
+        return;
     }
-    s_m2_scan_opened=false;
-    s_m2_scan_active=false;
-    m2_catalog_clear();
-    s_m2_scan_failed=false;
+    s_m2_scan_raw++;
+    if(!m2_visible(s_m2_fs_job.name,s_m2_fs_job.attr)) {
+        s_m2_scan_filtered++;
+        return;
+    }
+    const size_t len=strlen(s_m2_fs_job.name);
+    if(strlen(s_m2_scan_path)+len+
+       (s_m2_scan_path[0]?2u:1u)>127u) {
+        s_m2_scan_long++;
+        return;
+    }
+    if(s_m2_catalog_count>=M2_SORT_MAX) {
+        osd_log("M2 FAT DIR LIMIT: /%s max %u",
+                s_m2_scan_path,M2_SORT_MAX);
+        s_m2_scan_failed=true;
+        s_m2_scan_finishing=true;
+        return;
+    }
+    char *copy=(char *)pvPortMalloc(len+1u);
+    if(!copy) {
+        osd_log("M2 FAT DIR OOM: /%s entries=%u",
+                s_m2_scan_path,s_m2_catalog_count);
+        s_m2_scan_failed=true;
+        s_m2_scan_finishing=true;
+        return;
+    }
+    memcpy(copy,s_m2_fs_job.name,len+1u);
+    m2_browser_entry_t *entry=&s_m2_catalog[s_m2_catalog_count++];
+    entry->name=copy;
+    entry->is_dir=(s_m2_fs_job.attr&AM_DIR_BIT)!=0u;
 }
 
-static uint8_t m2_dir_open(void)
-{
-    const char *path=m2_path();
-    s_m2_armed=false;
-    m2_scan_cancel();
-    if(!path) {
-        osd_log("M2 FAT DIR: invalid Apple path");
-        return MEDIA_RESULT_M2_BAD_PATH;
-    }
-    /* Capture the pathname before any subsequent ARM rewrites s_m2_req. */
-    snprintf(s_m2_scan_path,sizeof(s_m2_scan_path),"%s",path);
-    s_m2_scan_raw=s_m2_scan_filtered=s_m2_scan_long=0u;
-    /* The disk task could be busy scanning the console's 500-file folder.
-     * Defer even f_opendir() until AFTER the Apple M2_OPEN ACK, so this
-     * command never waits on FatFS or returns the Apple-side $E1 timeout. */
-    s_m2_scan_opened=false;
-    s_m2_scan_active=true;
-    return MEDIA_RESULT_OK;
-}
-
-/* Called outside the command-ACK path from the mailbox service task.
- * Max four entries per 10ms iteration; each FatFS job is still performed
- * only by the disk thread, using the M2-specific DIR handle. */
+/* One nonblocking mailbox iteration. Submit an FS job, return immediately;
+ * on later iterations consume its result. A 300ms SD sector read can
+ * therefore proceed in the disk task while SPI7 CMD/ACK stays responsive. */
 static void m2_scan_step(void)
 {
-    if(!s_m2_scan_active)return;
-    if(!s_m2_scan_opened) {
-        fs_req_t openreq;
-        memset(&openreq,0,sizeof(openreq));
-        openreq.op=FSOP_MEDIA_LIST_OPEN;
-        openreq.path=s_m2_scan_path;
-        const int open_fr=disk_fs_request(&openreq);
-        if(open_fr!=0) {
-            osd_log("M2 FAT DIR OPEN FAIL: /%s FR=%d",
-                    s_m2_scan_path,open_fr);
-            s_m2_scan_active=false;
-            s_m2_scan_failed=true;
-            m2_catalog_clear();
+    if(s_m2_fs_stage!=M2_FS_NONE) {
+        int fr;
+        if(!disk_fs_try_complete(&s_m2_fs_job,&fr))
             return;
+        const m2_fs_stage_t completed=s_m2_fs_stage;
+        s_m2_fs_stage=M2_FS_NONE;
+        if(completed==M2_FS_OPEN) {
+            s_m2_scan_opened=(fr==0);
+            if(fr!=0 && !s_m2_abort_requested) {
+                osd_log("M2 FAT DIR OPEN FAIL: /%s FR=%d",
+                        s_m2_scan_path,fr);
+                s_m2_scan_failed=true;
+                s_m2_scan_finishing=true;
+            }
+        } else if(completed==M2_FS_NEXT) {
+            if(!s_m2_abort_requested) {
+                if(fr!=0) {
+                    osd_log("M2 FAT DIR READ FAIL: /%s FR=%d",
+                            s_m2_scan_path,fr);
+                    s_m2_scan_failed=true;
+                    s_m2_scan_finishing=true;
+                } else {
+                    m2_scan_consume_entry();
+                }
+            }
+        } else if(completed==M2_FS_CLOSE) {
+            s_m2_scan_opened=false;
+            if(fr!=0 && !s_m2_abort_requested) {
+                osd_log("M2 FAT DIR CLOSE FAIL: /%s FR=%d",
+                        s_m2_scan_path,fr);
+                s_m2_scan_failed=true;
+            }
+            if(!s_m2_abort_requested) {
+                m2_scan_finalize();
+                return;
+            }
         }
-        s_m2_scan_opened=true;
     }
-    for(unsigned step=0;step<M2_SCAN_STEP_ENTRIES;step++) {
-        fs_req_t req;
-        memset(&req,0,sizeof(req));
-        req.op=FSOP_MEDIA_LIST_NEXT;
-        const int fr=disk_fs_request(&req);
-        if(fr!=0) {
-            osd_log("M2 FAT DIR READ FAIL: /%s FR=%d",s_m2_scan_path,fr);
-            m2_scan_finish(false);
+
+    /* CLOSE or a fresh OPEN can arrive while an SD transaction is pending.
+     * First drain it, then close its directory handle without blocking. */
+    if(s_m2_abort_requested) {
+        if(s_m2_scan_opened) {
+            memset(&s_m2_fs_job,0,sizeof(s_m2_fs_job));
+            s_m2_fs_job.op=FSOP_MEDIA_LIST_CLOSE;
+            if(disk_fs_try_submit(&s_m2_fs_job))
+                s_m2_fs_stage=M2_FS_CLOSE;
             return;
         }
-        if(!req.name[0]) {
-            m2_scan_finish(true);
+        s_m2_abort_requested=false;
+        s_m2_scan_active=false;
+        m2_catalog_clear();
+        s_m2_scan_failed=false;
+        s_m2_scan_finishing=false;
+        if(s_m2_restart_requested) {
+            s_m2_restart_requested=false;
+            m2_scan_start(s_m2_restart_path);
+        }
+        return;
+    }
+
+    if(!s_m2_scan_active)return;
+    if(s_m2_scan_finishing) {
+        if(!s_m2_scan_opened) {
+            m2_scan_finalize();
             return;
         }
-        s_m2_scan_raw++;
-        if(!m2_visible(req.name,req.attr)) {
-            s_m2_scan_filtered++;
-            continue;
-        }
-        const size_t len=strlen(req.name);
-        if(strlen(s_m2_scan_path)+len+
-           (s_m2_scan_path[0]?2u:1u)>127u) {
-            s_m2_scan_long++;
-            continue;
-        }
-        if(s_m2_catalog_count>=M2_SORT_MAX) {
-            osd_log("M2 FAT DIR LIMIT: /%s max %u",
-                    s_m2_scan_path,M2_SORT_MAX);
-            m2_scan_finish(false);
-            return;
-        }
-        char *copy=(char *)pvPortMalloc(len+1u);
-        if(!copy) {
-            osd_log("M2 FAT DIR OOM: /%s entries=%u",
-                    s_m2_scan_path,s_m2_catalog_count);
-            m2_scan_finish(false);
-            return;
-        }
-        memcpy(copy,req.name,len+1u);
-        m2_browser_entry_t *entry=&s_m2_catalog[s_m2_catalog_count++];
-        entry->name=copy;
-        entry->is_dir=(req.attr&AM_DIR_BIT)!=0u;
+        memset(&s_m2_fs_job,0,sizeof(s_m2_fs_job));
+        s_m2_fs_job.op=FSOP_MEDIA_LIST_CLOSE;
+        if(disk_fs_try_submit(&s_m2_fs_job))
+            s_m2_fs_stage=M2_FS_CLOSE;
+        return;
+    }
+
+    memset(&s_m2_fs_job,0,sizeof(s_m2_fs_job));
+    if(!s_m2_scan_opened) {
+        s_m2_fs_job.op=FSOP_MEDIA_LIST_OPEN;
+        s_m2_fs_job.path=s_m2_scan_path;
+        if(disk_fs_try_submit(&s_m2_fs_job))
+            s_m2_fs_stage=M2_FS_OPEN;
+    } else {
+        s_m2_fs_job.op=FSOP_MEDIA_LIST_NEXT;
+        if(disk_fs_try_submit(&s_m2_fs_job))
+            s_m2_fs_stage=M2_FS_NEXT;
     }
 }
 
 static uint8_t m2_dir_next(void)
 {
-    if(s_m2_scan_active)return MEDIA_RESULT_M2_RETRY;
+    if(s_m2_scan_active || s_m2_fs_stage!=M2_FS_NONE ||
+       s_m2_abort_requested)return MEDIA_RESULT_M2_RETRY;
     if(s_m2_scan_failed)return MEDIA_RESULT_M2_FS;
     if(!s_m2_directory_open)return MEDIA_RESULT_M2_NOT_OPEN;
     if(s_m2_catalog_next>=s_m2_catalog_count)
@@ -310,20 +381,22 @@ static uint8_t m2_dir_next(void)
     for(size_t i=0;i<n;i++)m2_reply_byte((uint8_t)entry->name[i]);
     return MEDIA_RESULT_OK;
 }
+
 static uint8_t m2_dir_close(void)
 {
-    m2_scan_cancel();
+    m2_scan_abort(false,NULL);
     return MEDIA_RESULT_OK;
 }
-/* The Apple II page picker can jump backwards directly in the completed
- * alphabetical catalog, instead of reopening and rescanning 500 files.
- * Request: ARM followed by two raw offset bytes, little endian. */
+
+/* Apple 80-column picker can navigate backward via the sorted RAM catalog
+ * without reopening or rescanning a directory. Offset is little endian. */
 static uint8_t m2_dir_seek(void)
 {
     const bool valid=s_m2_armed && !s_m2_req_overflow && s_m2_req_len==2u;
     s_m2_armed=false;
     if(!valid)return MEDIA_RESULT_M2_BAD_PATH;
-    if(s_m2_scan_active)return MEDIA_RESULT_M2_RETRY;
+    if(s_m2_scan_active || s_m2_fs_stage!=M2_FS_NONE ||
+       s_m2_abort_requested)return MEDIA_RESULT_M2_RETRY;
     if(s_m2_scan_failed)return MEDIA_RESULT_M2_FS;
     if(!s_m2_directory_open)return MEDIA_RESULT_M2_NOT_OPEN;
     const unsigned offset=(unsigned)s_m2_req[0] |
