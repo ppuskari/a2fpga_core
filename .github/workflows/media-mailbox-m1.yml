@@ -97,7 +97,7 @@ jobs:
           from pathlib import Path
           p=Path('J2R9B.ps1').read_text()
           assert "petar/mod-j2r9b-2k-sample-subpages-20261122" in p
-          assert "'MOD SMP WIN='" in p
+          assert "'MOD SMP WIN=4x2048B'" in p
           assert "'MOD SPI=PCM512 SDRAM=BYTE'" in p
           assert "$flashArgs=@('--stage2', $firmware" in p
           assert "'--skip-verify'" in p and "'0x40000'" in p
