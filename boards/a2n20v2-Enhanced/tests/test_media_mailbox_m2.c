@@ -45,6 +45,8 @@ static unsigned m2_dynamic_allocations;
 void *pvPortMalloc(size_t n) {m2_dynamic_allocations++;return malloc(n);}
 void vPortFree(void *p) {free(p);}
 void vTaskDelay(uint32_t ticks) {(void)ticks;}
+void vTaskSuspendAll(void) {}
+int xTaskResumeAll(void) {return 1;}
 void osd_log(const char *fmt,...) {(void)fmt;}
 mod_pcm_status_t mod_audio_status(void) {return MOD_PCM_PLAYING;}
 unsigned mod_audio_jukebox_last_track(void) {return 3u;}
@@ -175,8 +177,20 @@ void fpga_spi_xfer_write(uint8_t space,uint32_t addr,const uint8_t *src,uint16_t
     default:fprintf(stderr,"unexpected M2 SPI write $%lX\n",(unsigned long)addr);exit(1);
     }
 }
+/* Compile real media code with a testable libc malloc provider (distinct
+ * from the fatal FreeRTOS pvPortMalloc mock). Simulate OOM without killing
+ * the host process, as the BL616's malloc-failure hook would. */
+static bool m2_force_low_heap;
+static unsigned m2_chunk_allocations;
+static void *m2_test_malloc(size_t n)
+{
+    m2_chunk_allocations++;
+    return m2_force_low_heap?NULL:malloc(n);
+}
+#define malloc m2_test_malloc
 /* Include real source to exercise static mb_service_once(). */
 #include "media_mailbox.c"
+#undef malloc
 
 static uint8_t command(uint8_t cmd)
 {
@@ -304,7 +318,9 @@ int main(void)
     complete_scan();
     CHECK(s_m2_catalog_count==506 && !s_m2_scan_active &&
           s_m2_directory_open && close_calls==3);
-    CHECK(m2_dynamic_allocations==0); /* zero heap allocation across 506 files */
+    CHECK(s_m2_chunk_count>0 && s_m2_chunk_count<20);
+    CHECK(m2_chunk_allocations==s_m2_chunk_count);
+    CHECK(m2_dynamic_allocations==0); /* no fatal pvPortMalloc per file */
     /* J from Apple must be accepted with the 506-entry browser still
      * resident. It must not modify/reclaim the browser catalog. */
     path_cmd("PROTRACKER/1/TRACK250.MOD",
@@ -395,16 +411,28 @@ int main(void)
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_OK);
     CHECK(response[1]==1 && !memcmp(response+2,"ALBUM",5));
     CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
-    /* Bound RAM rather than invoking the MCU-wide malloc failure hook if
-     * a 512-file directory contains long names approaching 63 bytes. */
+    /* 506 very long (62-character) names still work through bounded,
+     * compact allocation and no per-entry FreeRTOS malloc calls. */
     stress_mode=3u;
-    path_cmd("PROTRACKER/TOO-LONG-NAMES",
+    path_cmd("PROTRACKER/LONG-NAMES",
+             MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
+    complete_scan();
+    CHECK(!s_m2_scan_failed && s_m2_directory_open &&
+          s_m2_catalog_count==506 && s_m2_chunk_count<=M2_CHUNK_LIMIT);
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_OK);
+    CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
+    /* When the underlying libc heap really IS exhausted, the Apple
+     * catalog fails cleanly as a filesystem result and never calls the
+     * BL616 fatal pvPortMalloc hook (USB keyboard must remain alive). */
+    m2_force_low_heap=true;
+    path_cmd("PROTRACKER/NO-HEAP",
              MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
     complete_scan();
     CHECK(s_m2_scan_failed && !s_m2_directory_open &&
           s_m2_catalog_count==0 && m2_dynamic_allocations==0);
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_FS);
     CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
+    m2_force_low_heap=false;
     CHECK(command(MEDIA_CMD_STOP)==MEDIA_RESULT_OK && stop_calls==1);
     CHECK(command(MEDIA_CMD_PING)==MEDIA_RESULT_PONG);
     CHECK(m2_dynamic_allocations==0);
