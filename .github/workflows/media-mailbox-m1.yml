@@ -153,20 +153,28 @@ jobs:
           assert "--stage1" not in p
           print("PASS J2R9 PowerShell: J2R9 source / bulk signature / Stage2 only")
           PY
-      - name: J2R9 real SPI driver parity (bulk512 versus legacy)
+      - name: J2R9a real SPI transport tests (PCM-only, legacy, unsafe-lab)
         run: |
           SPI=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware
           MOCK=boards/a2n20v2-Enhanced/tests/j2r9_spi_mock
           TEST=boards/a2n20v2-Enhanced/tests/test_fpga_spi_j2r9_bulk.c
-          gcc -std=gnu11 -Wall -Wextra -Werror -O2 -DFPGA_SPI_MOD_BULK_XFER=1 \
-            -I"$MOCK" -I"$SPI" "$TEST" "$SPI/fpga_spi.c" -o /tmp/j2r9_bulk
-          /tmp/j2r9_bulk
-          gcc -std=gnu11 -Wall -Wextra -Werror -O2 -DFPGA_SPI_MOD_BULK_XFER=0 \
-            -I"$MOCK" -I"$SPI" "$TEST" "$SPI/fpga_spi.c" -o /tmp/j2r9_legacy
-          /tmp/j2r9_legacy
-          # Only host build enables bulk; device-mode build defaults to bytewise.
-          grep -q 'FPGA_SPI_MOD_BULK_XFER 1 CACHE STRING' boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/CMakeLists.txt
-          grep -q 'MOD SPI=BULK512' boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/mcu_mod_audio.c
+          # New deployable default: HDMI PCM bursts, bytewise SDRAM only.
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 \
+            -DFPGA_SPI_MOD_BULK_XFER=1 -DFPGA_SPI_MOD_BULK_SDRAM=0 \
+            -I"$MOCK" -I"$SPI" "$TEST" "$SPI/fpga_spi.c" -o /tmp/j2r9a_pcm
+          /tmp/j2r9a_pcm
+          # Entirely known-good bytewise path remains available as fallback.
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 \
+            -DFPGA_SPI_MOD_BULK_XFER=0 -DFPGA_SPI_MOD_BULK_SDRAM=0 \
+            -I"$MOCK" -I"$SPI" "$TEST" "$SPI/fpga_spi.c" -o /tmp/j2r9a_legacy
+          /tmp/j2r9a_legacy
+          # Experimental all-bulk is mock-tested ONLY, NOT the physical default.
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 \
+            -DFPGA_SPI_MOD_BULK_XFER=1 -DFPGA_SPI_MOD_BULK_SDRAM=1 \
+            -I"$MOCK" -I"$SPI" "$TEST" "$SPI/fpga_spi.c" -o /tmp/j2r9a_full_lab
+          /tmp/j2r9a_full_lab
+          grep -q 'FPGA_SPI_MOD_BULK_SDRAM 0 CACHE STRING' boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/CMakeLists.txt
+          grep -q 'MOD SPI=PCM512 SDRAM=BYTE' boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/mcu_mod_audio.c
       - name: Check ROMless slot3 address, preserve other hardware routes
         run: |
           python3 - <<'PY'
