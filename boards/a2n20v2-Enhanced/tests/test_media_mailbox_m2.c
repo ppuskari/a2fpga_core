@@ -96,6 +96,34 @@ int disk_fs_request(fs_req_t *r)
     default:return -1;
     }
 }
+/* The real broker runs FatFS only in the disk thread. Here the test
+ * advances its work explicitly, proving that the mailbox ACK is immediate
+ * even while a slow SD job remains incomplete. */
+static fs_req_t *fake_async_job;
+static bool fake_async_done;
+static int fake_async_result;
+bool disk_fs_try_submit(fs_req_t *r)
+{
+    if(fake_async_job || !r)return false;
+    fake_async_job=r;
+    fake_async_done=false;
+    return true;
+}
+bool disk_fs_try_complete(fs_req_t *r,int *result)
+{
+    if(fake_async_job!=r || !fake_async_done)return false;
+    if(result)*result=fake_async_result;
+    fake_async_job=NULL;
+    fake_async_done=false;
+    return true;
+}
+static void fake_disk_tick(void)
+{
+    if(fake_async_job && !fake_async_done) {
+        fake_async_result=disk_fs_request(fake_async_job);
+        fake_async_done=true;
+    }
+}
 void fpga_spi_xfer_read(uint8_t space,uint32_t addr,uint8_t *dst,uint16_t len)
 {
     CHECK(space==7);
@@ -170,9 +198,10 @@ static void path_cmd(const char *path,uint8_t cmd,uint8_t expected)
 static void complete_scan(void)
 {
     unsigned passes=0u;
-    while(s_m2_scan_active) {
-        CHECK(++passes<200u);
+    while(s_m2_scan_active || s_m2_fs_stage!=M2_FS_NONE) {
+        CHECK(++passes<2200u);
         m2_scan_step();
+        fake_disk_tick();
     }
 }
 /* Send the same raw 16-bit absolute index as the Apple 6502 page-seek. */
@@ -211,6 +240,10 @@ int main(void)
           close_calls==0 && open_calls==0);
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_RETRY);
     CHECK(response_count==0); /* ARM cleared FIFO; RETRY sends no frame */
+    CHECK(open_calls==0); /* all ACKs independent of SD task progress */
+    for(unsigned i=0;i<8u;i++)
+        CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_RETRY);
+    CHECK(open_calls==0);
     complete_scan();
     CHECK(s_m2_directory_open && !s_m2_scan_failed &&
           !media_dir_open && close_calls==1);
@@ -313,11 +346,16 @@ int main(void)
     CHECK(s_m2_scan_active && !media_dir_open && !s_m2_scan_opened);
     /* Work has not even started; cancel must NOT close someone else's DIR. */
     CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
+    complete_scan();
     CHECK(!s_m2_scan_active && !media_dir_open && close_calls==4);
     path_cmd("MODS",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
-    m2_scan_step();
+    m2_scan_step(); /* Queue OPEN, don't run FatFS in mailbox thread. */
+    CHECK(!media_dir_open && s_m2_fs_stage==M2_FS_OPEN);
+    fake_disk_tick(); /* SD thread opens its dedicated handle. */
+    m2_scan_step(); /* Receive OPEN and queue NEXT. */
     CHECK(s_m2_scan_active && media_dir_open && s_m2_scan_opened);
     CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
+    complete_scan(); /* Drain pending NEXT, then close without blocking. */
     CHECK(!s_m2_scan_active && !media_dir_open &&
           command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_NOT_OPEN);
     CHECK(close_calls==5);
