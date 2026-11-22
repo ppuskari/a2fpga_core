@@ -71,6 +71,6 @@ int main(void)
     check(!mod_jukebox_scan("../escape",true),"reject parent traversal");
     mod_jukebox_clear();
     check(mod_jukebox_count()==0,"clear playlist releases tracks");
-    puts("PASS J2R11: sorted FAT jukebox, exact 4CH/8CH start-at-file lookup and missing handling");
+    puts("PASS J2R11: sorted FAT jukebox, exact start-file lookup and missing handling");
     return 0;
 }
