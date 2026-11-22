@@ -207,8 +207,8 @@ int main(void)
     CHECK(response_count==6 && response[0]==5 && response[1]==MOD_PCM_PLAYING &&
           response[2]==3 && response[4]==41);
     path_cmd("MODS",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
-    CHECK(media_dir_open && s_m2_scan_active && close_calls==0 &&
-          open_calls==1 && !strcmp(last_open,"MODS"));
+    CHECK(!media_dir_open && s_m2_scan_active && !s_m2_scan_opened &&
+          close_calls==0 && open_calls==0);
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_RETRY);
     CHECK(response_count==0); /* ARM cleared FIFO; RETRY sends no frame */
     complete_scan();
@@ -234,7 +234,8 @@ int main(void)
      * regardless of the page size (12), without rescanning between pages. */
     stress_mode=true;
     path_cmd("MODS",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
-    CHECK(open_calls==2 && close_calls==1 && media_dir_open);
+    CHECK(open_calls==1 && close_calls==1 && s_m2_scan_active &&
+          !media_dir_open && !s_m2_scan_opened);
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_RETRY);
     complete_scan();
     CHECK(close_calls==2 && !media_dir_open);
@@ -253,7 +254,8 @@ int main(void)
      * catalog without needing a long 6502 command timeout. */
     stress_mode=2;
     path_cmd("PROTRACKER/1",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
-    CHECK(open_calls==3 && close_calls==2 && s_m2_scan_active);
+    CHECK(open_calls==2 && close_calls==2 && s_m2_scan_active &&
+          !media_dir_open && !s_m2_scan_opened);
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_RETRY);
     complete_scan();
     CHECK(s_m2_catalog_count==506 && !s_m2_scan_active &&
@@ -290,19 +292,31 @@ int main(void)
     CHECK(command(MEDIA_CMD_M2_RESUME)==MEDIA_RESULT_OK);
     path_cmd("../danger",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_M2_BAD_PATH);
     CHECK(open_calls==3); /* no disk requests for traversal */
-    path_cmd("BROKEN",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_M2_FS);
-    CHECK(open_calls==4 && !media_dir_open);
-    path_cmd("READFAIL",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
-    CHECK(open_calls==5 && close_calls==3 && media_dir_open);
+    path_cmd("BROKEN",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
+    CHECK(open_calls==3 && s_m2_scan_active && !media_dir_open);
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_RETRY);
     complete_scan();
-    CHECK(close_calls==4 && !media_dir_open && s_m2_scan_failed);
+    CHECK(open_calls==4 && s_m2_scan_failed && !media_dir_open);
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_FS);
+    path_cmd("READFAIL",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
+    CHECK(open_calls==4 && close_calls==3 && s_m2_scan_active &&
+          !media_dir_open);
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_RETRY);
+    complete_scan();
+    CHECK(open_calls==5 && close_calls==4 && !media_dir_open &&
+          s_m2_scan_failed);
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_FS);
     CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_NOT_OPEN);
     /* Cancel a still-scanning directory, then reopen without stale entries. */
     path_cmd("MODS",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
-    CHECK(s_m2_scan_active && media_dir_open);
+    CHECK(s_m2_scan_active && !media_dir_open && !s_m2_scan_opened);
+    /* Work has not even started; cancel must NOT close someone else's DIR. */
+    CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
+    CHECK(!s_m2_scan_active && !media_dir_open && close_calls==4);
+    path_cmd("MODS",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
+    m2_scan_step();
+    CHECK(s_m2_scan_active && media_dir_open && s_m2_scan_opened);
     CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
     CHECK(!s_m2_scan_active && !media_dir_open &&
           command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_NOT_OPEN);
