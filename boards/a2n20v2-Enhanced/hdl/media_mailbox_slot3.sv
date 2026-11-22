@@ -71,6 +71,7 @@ module media_mailbox_slot3 #(
     reg reply_overflow_r;
     wire [FIFO_AW:0] reply_count_w=reply_wrptr_r-reply_rdptr_r;
     wire reply_available_w=(reply_count_w!=0);
+    wire [15:0] reply_count16_w=reply_count_w;
     wire [FIFO_AW:0] count_w=wrptr_r-rdptr_r;
     localparam [FIFO_AW:0] DEPTH_W = (1 << FIFO_AW);
     wire [FIFO_AW:0] free_w=DEPTH_W-count_w;
@@ -209,8 +210,8 @@ module media_mailbox_slot3 #(
                         5'h17:spi_rd_data_o<=transfer_size_r[15:8];
                         5'h18:spi_rd_data_o<=transfer_size_r[23:16];
                         5'h19:spi_rd_data_o<=transfer_size_r[31:24];
-                        5'h1A:spi_rd_data_o<=reply_count_w[7:0];
-                        5'h1B:spi_rd_data_o<=reply_count_w[FIFO_AW];
+                        5'h1A:spi_rd_data_o<=reply_count16_w[7:0];
+                        5'h1B:spi_rd_data_o<=reply_count16_w[15:8];
                         5'h1C:spi_rd_data_o<={7'b0,reply_overflow_r};
                         default:spi_rd_data_o<=spi_register_byte_w;
                     endcase
