@@ -9,6 +9,7 @@
 #include "disk.h"
 #include "osd_console.h"
 #include "FreeRTOS.h"
+#include "task.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,12 +35,27 @@ static int track_cmp(const void *a,const void *b)
     const char *const *y=(const char *const *)b;
     return icmp(*x,*y);
 }
+/* SDK heap_3 implements pvPortMalloc with libc malloc and a suspended
+ * scheduler. But if malloc returns NULL, pvPortMalloc invokes the global
+ * fatal hook which DISABLES INTERRUPTS, freezing USB HID and the mailbox.
+ * A 506-file jukebox plus the resident M2 Apple catalog can run low on
+ * heap. Use identical scheduler serialization, but handle libc OOM
+ * locally so the scan reports failure instead of halting the whole MCU. */
 static char *juke_strdup(const char *s)
 {
     size_t n=strlen(s)+1u;
-    char *p=(char *)pvPortMalloc(n);
+    vTaskSuspendAll();
+    char *p=(char *)malloc(n);
+    (void)xTaskResumeAll();
     if(p)memcpy(p,s,n);
     return p;
+}
+static void juke_free(char *p)
+{
+    if(!p)return;
+    vTaskSuspendAll();
+    free(p);
+    (void)xTaskResumeAll();
 }
 static bool safe_dir(const char *path)
 {
@@ -51,7 +67,7 @@ static bool safe_dir(const char *path)
 void mod_jukebox_clear(void)
 {
     for(unsigned i=0;i<s_count;i++) {
-        vPortFree(s_tracks[i]);
+        juke_free(s_tracks[i]);
         s_tracks[i]=NULL;
     }
     s_count=0;
@@ -135,11 +151,11 @@ bool mod_jukebox_scan(const char *root,bool recursive)
             r.op=FSOP_MOD_LIST_CLOSE;
             if(disk_fs_request(&r)!=0)failed=true;
         }
-        vPortFree(dirs[head]);
+        juke_free(dirs[head]);
         dirs[head]=NULL;
         head++;
     }
-    for(;head<tail;head++)if(dirs[head])vPortFree(dirs[head]);
+    for(;head<tail;head++)if(dirs[head])juke_free(dirs[head]);
     if(failed) {
         osd_log("MCU JUKE: DIRECTORY SCAN FAILED");
         mod_jukebox_clear();
