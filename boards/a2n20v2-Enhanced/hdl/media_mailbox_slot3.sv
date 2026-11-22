@@ -213,6 +213,8 @@ module media_mailbox_slot3 #(
                         5'h1A:spi_rd_data_o<=reply_count16_w[7:0];
                         5'h1B:spi_rd_data_o<=reply_count16_w[15:8];
                         5'h1C:spi_rd_data_o<={7'b0,reply_overflow_r};
+                        5'h1D:spi_rd_data_o<=8'h4d; // 'M' - M2 FPGA probe
+                        5'h1E:spi_rd_data_o<=8'h32; // '2' - MCU capability gate
                         default:spi_rd_data_o<=spi_register_byte_w;
                     endcase
                 end
