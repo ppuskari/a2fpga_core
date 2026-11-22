@@ -44,6 +44,11 @@ void disk_io_set_backend_usb(bool usb)
     g_backend_usb = usb;
 }
 
+bool disk_io_backend_is_usb(void)
+{
+    return g_backend_usb;
+}
+
 unsigned long disk_usb_block_count(void)
 {
     return g_msc_class ? (unsigned long)g_msc_class->blocknum : 0;
