@@ -10,7 +10,7 @@
 #include <string.h>
 
 typedef struct { const char *name; unsigned attr; } ent_t;
-static const ent_t root[]={{"c.mod",0},{"A",0x10},{"note.txt",0},{"B.MOD",0},{NULL,0}};
+static const ent_t root[]={{"c.mod",0},{"A",0x10},{"note.txt",0},{"MOD.alpha",0},{"B.MOD",0},{NULL,0}};
 static const ent_t sub[]={{"1.mod",0},{"Z",0x10},{NULL,0}};
 static const ent_t deep[]={{"last.mod",0},{NULL,0}};
 static const ent_t *cur;
@@ -48,9 +48,10 @@ int disk_fs_request(fs_req_t *r)
 int main(void)
 {
     check(mod_jukebox_scan("",false),"root folder scan");
-    check(mod_jukebox_count()==2,"root folder has two MOD files");
+    check(mod_jukebox_count()==3,"root folder accepts both MOD filename conventions");
     check(!strcmp(mod_jukebox_track(0),"B.MOD"),"case-insensitive root sort 0");
     check(!strcmp(mod_jukebox_track(1),"c.mod"),"case-insensitive root sort 1");
+    check(!strcmp(mod_jukebox_track(2),"MOD.alpha"),"Amiga prefix MOD entry sorted");
     check(!mod_jukebox_truncated(),"root not truncated");
     check(mod_jukebox_find("c.mod")==1,"resume selected final root track");
     check(mod_jukebox_find("C.MOD")==1,"case-insensitive saved path");
@@ -59,14 +60,16 @@ int main(void)
     check(mod_jukebox_find("../c.mod")==-1,"no substring fallback");
     check(mod_jukebox_find(NULL)==-1,"null path never matches");
     check(mod_jukebox_scan("",true),"recursive tree scan");
-    check(mod_jukebox_count()==4,"tree has four MOD files");
+    check(mod_jukebox_count()==5,"tree has five MOD files");
     check(!strcmp(mod_jukebox_track(0),"A/1.mod"),"nested alphabetic sort 0");
     check(!strcmp(mod_jukebox_track(1),"A/Z/last.mod"),"nested alphabetic sort 1");
     check(!strcmp(mod_jukebox_track(2),"B.MOD"),"nested alphabetic sort 2");
     check(!strcmp(mod_jukebox_track(3),"c.mod"),"nested alphabetic sort 3");
+    check(!strcmp(mod_jukebox_track(4),"MOD.alpha"),"nested Amiga prefix sort 4");
     check(mod_jukebox_find("A/Z/LAST.MOD")==1,"subdirectory path lookup");
     check(mod_jukebox_find("c.mod")==3,"selected recursive last track");
     check(mod_jukebox_find("A/missing.mod")==-1,"no silent track zero");
+    check(mod_jukebox_find("mod.ALPHA")==4,"case-insensitive prefix start-file lookup");
     check(mod_jukebox_find("c.mo")==-1,"no prefix match");
     check(!mod_jukebox_scan("../escape",true),"reject parent traversal");
     mod_jukebox_clear();
