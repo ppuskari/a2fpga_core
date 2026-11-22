@@ -22,6 +22,8 @@ are:
   the last playing jukebox track *from the beginning*, then continues
   through the remainder of the playlist. This shortcut works **as long
   as the MCU remains powered on** and the playlist has not been replaced.
+  The player menu also displays **LAST JUKE TRACK 28/50** (for example),
+  so you can note where you stopped.
   It does **not** resume in the middle of a MOD.
 - **BROWSE .MOD FILES** — retains its existing **single-file** playback
   action. Existing **JUKEBOX LAST FOLDER**, **JUKEBOX LAST FOLDER+SUBDIRS**,
