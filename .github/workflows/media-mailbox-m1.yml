@@ -34,6 +34,14 @@ jobs:
           grep -q 'case FSOP_MEDIA_LIST_NEXT:' "$MCU/disk.c"
           grep -q 'case FSOP_MEDIA_LIST_CLOSE:' "$MCU/disk.c"
           grep -q 'mod_audio_jukebox_start_from_file(path)' "$MCU/media_mailbox.c"
+      - name: M2 MCU request handler and FAT picker host integration
+        run: |
+          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 \
+            -Iboards/a2n20v2-Enhanced/tests/p1d_mock \
+            -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware \
+            boards/a2n20v2-Enhanced/tests/test_media_mailbox_m2.c -o /tmp/m2_mcu
+          /tmp/m2_mcu
       - name: Preserve BL616 stereo PCM HDMI stream on SPACE6
         run: |
           iverilog -g2012 -s tb_mcu_stereo_pcm_bridge -o /tmp/pcm boards/a2n20v2-Enhanced/hdl/mcu_stereo_pcm_bridge.sv boards/a2n20v2-Enhanced/tests/tb_mcu_stereo_pcm_bridge.sv
