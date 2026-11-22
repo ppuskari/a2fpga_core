@@ -111,18 +111,25 @@ static const char *m2_path(void)
  * Each filename is allocated only once; at most 512 visible entries.
  * A larger folder fails OPEN instead of silently showing a partial list.
  */
+/* IMPORTANT: The M2 Apple browser and MCU jukebox have independent
+ * catalogs, which coexist when the user presses J on ProTracker/1 with 506
+ * files. The old M2 catalog allocated one heap string PER filename, and
+ * the jukebox then allocated ~506 more full paths. Heap exhaustion fires
+ * vApplicationMallocFailedHook, which DISABLES INTERRUPTS permanently;
+ * even the USB keyboard becomes unresponsive.
+ *
+ * Keep the Apple browser catalog in fixed BL616 BSS storage. This costs
+ * 512*(64+1) bytes, but removes 500+ heap allocations and heap-fragmentation
+ * pressure without changing its ABI, ordering or retained paging behavior.
+ * Jukebox memory remains independent and owned by its audio task. */
 typedef struct {
-    char *name;
+    char name[M2_ENTRY_MAX+1u];
     bool is_dir;
 } m2_browser_entry_t;
 static m2_browser_entry_t s_m2_catalog[M2_SORT_MAX];
 static unsigned s_m2_catalog_count, s_m2_catalog_next;
 static void m2_catalog_clear(void)
 {
-    for(unsigned i=0;i<s_m2_catalog_count;i++) {
-        vPortFree(s_m2_catalog[i].name);
-        s_m2_catalog[i].name=NULL;
-    }
     s_m2_catalog_count=0u;
     s_m2_catalog_next=0u;
     s_m2_directory_open=false;
@@ -259,17 +266,9 @@ static void m2_scan_consume_entry(void)
         s_m2_scan_finishing=true;
         return;
     }
-    char *copy=(char *)pvPortMalloc(len+1u);
-    if(!copy) {
-        osd_log("M2 FAT DIR OOM: /%s entries=%u",
-                s_m2_scan_path,s_m2_catalog_count);
-        s_m2_scan_failed=true;
-        s_m2_scan_finishing=true;
-        return;
-    }
-    memcpy(copy,s_m2_fs_job.name,len+1u);
     m2_browser_entry_t *entry=&s_m2_catalog[s_m2_catalog_count++];
-    entry->name=copy;
+    /* len <= M2_ENTRY_MAX was checked by m2_visible() above. */
+    memcpy(entry->name,s_m2_fs_job.name,len+1u);
     entry->is_dir=(s_m2_fs_job.attr&AM_DIR_BIT)!=0u;
 }
 
