@@ -27,6 +27,22 @@ jobs:
           python3 tools/generate_ssi263_p8_roms.py --check
           python3 tools/generate_ssi263_p9_nas_rom.py --check
           python3 tools/generate_ssi263_p9_output_fir.py --check
+      - name: Prove clean Enhanced checkout prepares authentic piano and SSI263 without manual steps
+        run: |
+          python3 tools/prepare_enhanced_assets.py
+          python3 tools/prepare_enhanced_assets.py --check
+          test -s boards/a2n20v2-Enhanced/hdl/piano_multisustain.mem
+          test -s boards/a2n20v2-Enhanced/hdl/ssi263_voice.mem
+          bash -n tools/build.sh
+          if git ls-files --error-unmatch boards/a2n20v2-Enhanced/hdl/piano_multisustain.mem >/dev/null 2>&1; then
+            echo "Apple SynthLAB PCM must stay local, not tracked in public Git"
+            exit 1
+          fi
+          if ! git ls-files --error-unmatch boards/a2n20v2-Enhanced/hdl/ssi263_voice.mem >/dev/null 2>&1; then
+            echo "Deterministic SSI voice bank must be tracked for clean builds"
+            exit 1
+          fi
+          echo "PASS: full SSI263 and authentic SynthLAB ROM inventory, clean checkout"
       - name: Verify Apple IIe/IIgs ROMless slot3 SPI7 mailbox
         run: |
           iverilog -g2012 -s tb_media_mailbox_slot3 -o /tmp/m1 boards/a2n20v2-Enhanced/hdl/media_mailbox_slot3.sv boards/a2n20v2-Enhanced/tests/tb_media_mailbox_slot3.sv
