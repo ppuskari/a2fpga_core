@@ -78,17 +78,26 @@ static inline void spi_lock_give(void) {}
 #define XFER_HDR_LEN   7   /* opcode + sub0 + addr[3] + len[2] */
 #define XFER_DUMMY_LEN 1
 
-/* J2R9 experiment: enable bulk HxCMOD SDRAM reads/writes and HDMI PCM
- * payload writes ONLY in the USB-host MCU. The device firmware defaults to
- * the known-good bytewise protocol. A/B fallback: compile the host with
- * -DFPGA_SPI_MOD_BULK_XFER=0 instead of 1. All register access, overlays,
- * media mailbox, W5100, disk and other XFER spaces remain legacy bytewise.
- * The FPGA bitstream / SPI protocol and clock rate are unchanged. */
+/* J2R9a: bulk XFER is enabled only on PCM FIFO writes by default.
+ * FPGA SDRAM must use the J2R8 bytewise path: J2R9 full SDRAM bursts
+ * failed the real hardware pattern readback check during MOD loading.
+ * No changes to FPGA bitstream, Sipeed Stage1 or other SPI spaces.
+ * Fallback: compile with FPGA_SPI_MOD_BULK_XFER=0 (all bytewise). */
 #ifndef FPGA_SPI_MOD_BULK_XFER
 #define FPGA_SPI_MOD_BULK_XFER 0
 #endif
 #if FPGA_SPI_MOD_BULK_XFER != 0 && FPGA_SPI_MOD_BULK_XFER != 1
 #error "FPGA_SPI_MOD_BULK_XFER must be 0 or 1"
+#endif
+/* J2R9a hardware safety gate: full-speed SDRAM reads/writes failed the
+ * J2R9 pattern sentinel check on a real FPGA. Default to the proven
+ * bytewise SDRAM path; PCM FIFO writes remain bulk for isolation.
+ * Explicit SDRAM=1 is reserved for lab-only A/B diagnosis. */
+#ifndef FPGA_SPI_MOD_BULK_SDRAM
+#define FPGA_SPI_MOD_BULK_SDRAM 0
+#endif
+#if FPGA_SPI_MOD_BULK_SDRAM != 0 && FPGA_SPI_MOD_BULK_SDRAM != 1
+#error "FPGA_SPI_MOD_BULK_SDRAM must be 0 or 1"
 #endif
 #define FPGA_SPI_BULK_CS_HOLD_US 3u
 
@@ -196,7 +205,8 @@ static inline void build_xfer_header(uint8_t space, uint32_t addr, uint16_t chun
 static inline bool mod_bulk_write(uint8_t space)
 {
 #if FPGA_SPI_MOD_BULK_XFER
-    return space == FPGA_SPACE_SDRAM || space == FPGA_SPACE_PCM;
+    return space == FPGA_SPACE_PCM ||
+           (FPGA_SPI_MOD_BULK_SDRAM && space == FPGA_SPACE_SDRAM);
 #else
     (void)space;
     return false;
@@ -205,7 +215,7 @@ static inline bool mod_bulk_write(uint8_t space)
 static inline bool mod_bulk_read(uint8_t space)
 {
 #if FPGA_SPI_MOD_BULK_XFER
-    return space == FPGA_SPACE_SDRAM;
+    return FPGA_SPI_MOD_BULK_SDRAM && space == FPGA_SPACE_SDRAM;
 #else
     (void)space;
     return false;
