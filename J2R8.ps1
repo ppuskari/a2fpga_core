@@ -23,7 +23,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position=0)]
-    [ValidateSet('Help','Build','Detect','Flash','BuildFlash','CheckRuntime','VerifyReadback')]
+    [ValidateSet('Help','SourceState','Build','Detect','Flash','BuildFlash','CheckRuntime','VerifyReadback')]
     [string] $Action='Help',
     [string] $DevRoot='',
     [string] $SdkRoot='',
@@ -50,6 +50,7 @@ function Fail([string] $message) { throw $message }
 function Show-Help {
     Write-Host ''
     Write-Host 'J2R8 BL616 - Windows PowerShell single-command helper' -ForegroundColor Cyan
+    Write-Host '  .\J2R8.ps1 SourceState    Show tracked changes and source fingerprint'
     Write-Host '  .\J2R8.ps1 Build          Configure SDK/compiler and compile MCU Stage2'
     Write-Host '  .\J2R8.ps1 Detect         Show connected board, without programming'
     Write-Host '  .\J2R8.ps1 Flash          Write only Stage2 (0x40000), confirmation required'
@@ -90,11 +91,43 @@ function Current-Commit {
     return $sha
 }
 
-function Assert-Clean-Tracked-Sources {
-    $changes=@(& git -C $root status --porcelain --untracked-files=no)
-    if($LASTEXITCODE -ne 0 -or @($changes | Where-Object { $_ }).Count -gt 0) {
-        Fail 'Tracked sources have uncommitted modifications; commit or revert before guarded build.'
+function Get-Tracked-Source-Fingerprint {
+    # A modified checkout is allowed, but its actual source diff MUST be
+    # identical at compile time and at flash time. Do not discard edits.
+    # HEAD includes both staged and unstaged changes (unlike git diff alone).
+    $lines=@(& git -C $root diff --no-ext-diff --no-color --binary HEAD --)
+    if($LASTEXITCODE -ne 0) {
+        Fail 'Could not compute tracked source diff against HEAD.'
     }
+    $content=[string]::Join("`n",[string[]]$lines)
+    $bytes=[Text.Encoding]::UTF8.GetBytes($content)
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-','')
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Show-Tracked-Source-State {
+    Assert-J2R8-Checkout
+    $changes=@(& git -C $root status --short --untracked-files=no)
+    if($LASTEXITCODE -ne 0) {
+        Fail 'Unable to examine tracked Git changes.'
+    }
+    $changed=@($changes | Where-Object { $_ -and $_.Trim() })
+    if($changed.Count -gt 0) {
+        Write-Warning "Found $($changed.Count) locally modified tracked file(s)."
+        foreach($change in $changed) {
+            Write-Host "  $change"
+        }
+        Write-Warning 'Local changes will be included in the build; no edits will be discarded.'
+    } else {
+        Write-Host 'Git tracked files are clean.'
+    }
+    $fingerprint=Get-Tracked-Source-Fingerprint
+    Write-Host "Source diff SHA256: $fingerprint"
+    return $fingerprint
 }
 
 function Configure-Toolchain {
@@ -142,7 +175,7 @@ function Get-Verified-Binary-Hash {
 
 function Assert-Built-Manifest {
     Assert-J2R8-Checkout
-    Assert-Clean-Tracked-Sources
+    $sourceHash=Show-Tracked-Source-State
     $hash=Get-Verified-Binary-Hash
     if(-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
         Fail 'Build manifest absent: run .\J2R8.ps1 Build before Flash.'
@@ -152,6 +185,7 @@ function Assert-Built-Manifest {
     if([string]$record.branch -ne $requiredBranch -or
        [string]$record.commit -ne $head -or
        [string]$record.sha256 -ne $hash -or
+       [string]$record.sourceDiffSha256 -ne $sourceHash -or
        [string]$record.binary -ne $firmware) {
         Fail 'Firmware or repository has changed since Build. Rebuild before Flash.'
     }
@@ -162,7 +196,7 @@ function Assert-Built-Manifest {
 
 function Build-Stage2 {
     Assert-J2R8-Checkout
-    Assert-Clean-Tracked-Sources
+    $sourceBefore=Show-Tracked-Source-State
     Configure-Toolchain
     if(-not (Test-Path -LiteralPath $hostDir -PathType Container)) {
         Fail "firmware_host project missing: $hostDir"
@@ -181,10 +215,15 @@ function Build-Stage2 {
         Pop-Location
     }
     $hash=Get-Verified-Binary-Hash
+    $sourceAfter=Get-Tracked-Source-Fingerprint
+    if($sourceBefore -ne $sourceAfter) {
+        Fail 'Tracked source files changed DURING compilation; rebuild to ensure consistency.'
+    }
     $record=[ordered]@{
         branch=$requiredBranch
         commit=(Current-Commit)
         sha256=$hash
+        sourceDiffSha256=$sourceAfter
         binary=$firmware
         length=(Get-Item -LiteralPath $firmware).Length
         timestampUtc=(Get-Date).ToUniversalTime().ToString('o')
@@ -268,6 +307,7 @@ function Verify-Readback {
 
 switch($Action) {
     'Help' { Show-Help }
+    'SourceState' { $null=Show-Tracked-Source-State }
     'Build' { Build-Stage2 }
     'Detect' { Detect-Device }
     'Flash' { Flash-Stage2 }
