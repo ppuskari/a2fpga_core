@@ -9,5 +9,7 @@ bool mod_jukebox_scan(const char *root, bool recursive);
 void mod_jukebox_clear(void);
 unsigned mod_jukebox_count(void);
 const char *mod_jukebox_track(unsigned index);
+/* Case-insensitive exact path match in the sorted playlist, -1 if absent. */
+int mod_jukebox_find(const char *relative_file);
 bool mod_jukebox_truncated(void);
 #endif

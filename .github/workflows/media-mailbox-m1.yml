@@ -86,6 +86,46 @@ jobs:
             "$MCU/mcu_mod_format.c" "$MCU/mcu_mod_sample_store.c" \
             "$MCU/third_party/hxcmod/hxcmod.c" -o /tmp/mod_j2_large_4k
           /tmp/mod_j2_large_4k
+      - name: J2R11 jukebox selectable starting track and safe resume
+        run: |
+          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 \
+            -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" \
+            boards/a2n20v2-Enhanced/tests/test_mcu_jukebox_scan.c \
+            "$MCU/mcu_mod_jukebox.c" -o /tmp/j2r11_juke
+          /tmp/j2r11_juke
+          python3 - <<'PY'
+          from pathlib import Path
+          a=Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/mcu_mod_audio.c").read_text()
+          menu=Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/menu.c").read_text()
+          assert "mod_audio_jukebox_start_from_file(full)" in menu
+          assert "JUKEBOX START AT .MOD" in menu
+          assert "RESUME LAST JUKEBOX TRACK" in menu
+          assert "LAST JUKE TRACK" in menu
+          assert "mod_audio_jukebox_last_track" in a
+          assert "mod_jukebox_find(juke_start_file)" in a
+          assert "juke_active=playlist_play(&juke_index,(unsigned)first)" in a
+          assert "MOD_JUKE_START_MISSING" in a
+          assert "juke_active=playlist_play(&juke_index,juke_index)" in a
+          assert "MOD JUKE=STARTFILE" in a
+          print("PASS J2R11 start-at-picked-file, sorted seek and same-session resume contract")
+          PY
+      - name: J2R11 Stage2-only PowerShell script smoke
+        run: |
+          git checkout -B petar/mod-j2r11-jukebox-startfile-20261122 HEAD
+          pwsh -NoProfile -File ./J2R11.ps1 Help
+          pwsh -NoProfile -File ./J2R11.ps1 SourceState > /tmp/j2r11_source.txt
+          grep -q 'Git tracked files are clean' /tmp/j2r11_source.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('J2R11.ps1').read_text()
+          assert "petar/mod-j2r11-jukebox-startfile-20261122" in s
+          assert "'MOD JUKE=STARTFILE'" in s
+          assert "$flashArgs=@('--stage2', $firmware" in s
+          assert "'0x40000'" in s and "'--skip-verify'" in s
+          assert "--stage1" not in s
+          print("PASS J2R11 guarded Stage2/known-binary helper")
+          PY
       - name: J2R10 quiet-console MCU / SSI counter-off regressions
         run: |
           MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host

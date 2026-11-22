@@ -69,6 +69,15 @@ const char *mod_jukebox_track(unsigned index)
 {
     return index<s_count?s_tracks[index]:NULL;
 }
+int mod_jukebox_find(const char *relative_file)
+{
+    if(!relative_file || !relative_file[0])
+        return -1;
+    for(unsigned i=0;i<s_count;i++)
+        if(s_tracks[i] && icmp(s_tracks[i],relative_file)==0)
+            return (int)i;
+    return -1;
+}
 bool mod_jukebox_truncated(void){return s_truncated;}
 
 bool mod_jukebox_scan(const char *root,bool recursive)
