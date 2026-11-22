@@ -59,6 +59,13 @@ if [[ "$board" == "a2n20v2-Enhanced" ]]; then
             echo "!! Missing or corrupt SSI263/SynthLAB ROM: aborting Gowin build."
             exit 5
         }
+        # Separate read-only preflight before starting gw_sh. This checks all
+        # seven $readmemh dependencies, their generator hashes and project
+        # references, and never downloads or regenerates an asset.
+        python3 "$REPO/tools/prepare_enhanced_assets.py" --check || {
+            echo "!! Enhanced FPGA seven-ROM preflight failed: synthesis blocked."
+            exit 5
+        }
     fi
 fi
 
