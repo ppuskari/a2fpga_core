@@ -1159,6 +1159,9 @@ static bool               g_mod_fil_open;
 /* Dedicated jukebox enumerator, separate from FTP's g_fs_dir. */
 static DIR                g_mod_dir;
 static bool               g_mod_dir_open;
+/* M2: exclusive Apple UI folder cursor; disk task remains FatFS owner. */
+static DIR                g_media_dir;
+static bool               g_media_dir_open;
 
 int disk_fs_request(fs_req_t *r)
 {
@@ -1277,6 +1280,38 @@ static void fs_service(void)
         if(g_mod_dir_open) {
             fr=f_closedir(&g_mod_dir);
             g_mod_dir_open=false;
+        }
+        break;
+    case FSOP_MEDIA_LIST_OPEN:
+        if(g_media_dir_open) {
+            f_closedir(&g_media_dir);
+            g_media_dir_open=false;
+        }
+        if(!r->path || strlen(r->path)+4u>=sizeof(full) ||
+           strstr(r->path,"..") || r->path[0]=='/' ||
+           strchr(r->path,':') || strchr(r->path,'\\')) {
+            fr=FR_INVALID_NAME;
+            break;
+        }
+        snprintf(full,sizeof(full),"0:/%s",r->path);
+        fr=f_opendir(&g_media_dir,full);
+        g_media_dir_open=(fr==FR_OK);
+        break;
+    case FSOP_MEDIA_LIST_NEXT: {
+        FILINFO fno;
+        r->name[0]=0;
+        fr=g_media_dir_open ? f_readdir(&g_media_dir,&fno) : FR_NOT_ENABLED;
+        if(fr==FR_OK && fno.fname[0]) {
+            snprintf(r->name,sizeof(r->name),"%s",fno.fname);
+            r->attr=fno.fattrib;
+            r->size=(uint32_t)fno.fsize;
+        }
+        break;
+    }
+    case FSOP_MEDIA_LIST_CLOSE:
+        if(g_media_dir_open) {
+            fr=f_closedir(&g_media_dir);
+            g_media_dir_open=false;
         }
         break;
     case FSOP_OPEN_R:
