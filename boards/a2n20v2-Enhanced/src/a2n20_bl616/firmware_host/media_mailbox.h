@@ -38,6 +38,7 @@
 #define MEDIA_CMD_M2_STATUS    0x29u
 /* Current MOD filename: reply [1+n, active, basename ASCII n], n <= 63. */
 #define MEDIA_CMD_M2_NOWPLAY   0x2Au
+#define MEDIA_CMD_M2_SEEK      0x2Bu /* ARM + 2-byte LE catalog offset; no rescan */
 #define MEDIA_RESULT_M2_EOF    0xD0u
 #define MEDIA_RESULT_M2_BAD_PATH 0xE6u
 #define MEDIA_RESULT_M2_FS     0xE7u
