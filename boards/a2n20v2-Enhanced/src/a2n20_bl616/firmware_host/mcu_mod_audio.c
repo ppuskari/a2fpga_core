@@ -62,6 +62,7 @@ static char s_juke_path[MOD_PATH_CAP];
 static char s_juke_start_file[MOD_PATH_CAP];
 static volatile uint32_t s_juke_seq, s_juke_seen, s_juke_recursive;
 static volatile uint32_t s_juke_count_pub, s_nav, s_once, s_resume;
+static volatile uint32_t s_juke_last_track_pub; /* 1-based last started playlist track */
 static volatile uint32_t s_juke_generation;
 static volatile mod_jukebox_scan_state_t s_juke_scan_state=MOD_JUKE_IDLE;
 static void juke_state(mod_jukebox_scan_state_t state)
@@ -169,6 +170,10 @@ bool mod_audio_play_once(void)
 unsigned mod_audio_jukebox_count(void)
 {
     return __atomic_load_n(&s_juke_count_pub,__ATOMIC_ACQUIRE);
+}
+unsigned mod_audio_jukebox_last_track(void)
+{
+    return __atomic_load_n(&s_juke_last_track_pub,__ATOMIC_ACQUIRE);
 }
 mod_jukebox_scan_state_t mod_audio_jukebox_scan_state(void)
 {
@@ -491,6 +496,7 @@ static bool playlist_play(unsigned *idx,unsigned start)
         const char *path=mod_jukebox_track(i);
         if(path && start_song(path,i+1u,count)) {
             *idx=i;
+            __atomic_store_n(&s_juke_last_track_pub,i+1u,__ATOMIC_RELEASE);
             osd_log("MCU JUKE: TRACK %u/%u",i+1u,count);
             return true;
         }
@@ -539,6 +545,7 @@ void mod_audio_task(void *arg)
                 }else jukedir[0]=0; /* FAT root */
             }
             __atomic_store_n(&s_juke_count_pub,0u,__ATOMIC_RELEASE);
+            __atomic_store_n(&s_juke_last_track_pub,0u,__ATOMIC_RELEASE);
             osd_log("MCU JUKE: SCAN %s %s",recursive?"TREE":"FOLDER",
                     jukedir[0]?jukedir:"/");
             if(mod_jukebox_scan(jukedir,recursive)) {
@@ -575,6 +582,7 @@ void mod_audio_task(void *arg)
             juke_active=false;
             mod_jukebox_clear();
             __atomic_store_n(&s_juke_count_pub,0u,__ATOMIC_RELEASE);
+            __atomic_store_n(&s_juke_last_track_pub,0u,__ATOMIC_RELEASE);
             juke_state(MOD_JUKE_IDLE);
             playing=start_song(requested,0u,0u);
             blocks=window=0;
