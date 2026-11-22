@@ -1,4 +1,4 @@
-/* J2R7: independent FPGA SDRAM bank and 8-KiB variable-size MCU LRU cache.
+/* J2R7: independent FPGA SDRAM bank and 16-KiB variable-size MCU LRU cache.
  * FPGA has 8 MiB byte-addressed via SPI SPACE1. Samples occupy 0x400000-
  * 0x5fffff. This 256-KiB bank occupies 0x600000-0x63ffff; no overlap.
  * Max pattern payload: 128 patterns * 64 rows * 8 channels * 4B = 256 KiB.
@@ -11,10 +11,10 @@
 
 #define MOD_PATTERN_SDRAM_BASE     0x600000u
 #define MOD_PATTERN_SDRAM_CAPACITY 0x040000u
-/* Exactly 8 KiB of pattern payload: eight 1 KiB cache pages.
- * Four-channel patterns use one page; six/eight-channel patterns use two. */
+/* Exactly 16 KiB of pattern payload: sixteen 1 KiB pages.
+ * This holds sixteen 4CH patterns or eight 6/8CH patterns. */
 #define MOD_PATTERN_CACHE_PAGE_BYTES 1024u
-#define MOD_PATTERN_CACHE_PAGES 8u
+#define MOD_PATTERN_CACHE_PAGES 16u
 #define MOD_PATTERN_CACHE_BYTES (MOD_PATTERN_CACHE_PAGES * MOD_PATTERN_CACHE_PAGE_BYTES)
 
 bool mod_patterns_begin(unsigned channels, unsigned pattern_count);

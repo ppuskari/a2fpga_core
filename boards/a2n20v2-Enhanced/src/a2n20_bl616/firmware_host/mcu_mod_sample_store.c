@@ -14,7 +14,7 @@ typedef struct {
 static sample_cache_t s_cache[MOD_STORE_VOICES];
 static uint32_t s_sample_token[31];
 static uint32_t s_sample_length[31];
-static uint32_t s_size,s_misses,s_faults;
+static uint32_t s_size,s_misses,s_faults,s_read_bytes;
 
 void mod_store_invalidate(void)
 {
@@ -27,7 +27,7 @@ bool mod_store_begin(const uint32_t lengths[31])
 {
     uint32_t cursor=0;
     mod_store_invalidate();
-    s_faults=s_misses=0;
+    s_faults=s_misses=s_read_bytes=0;
     s_size=0;
     if(!lengths)return false;
     for(unsigned i=0;i<31;i++){
@@ -42,6 +42,7 @@ bool mod_store_begin(const uint32_t lengths[31])
 uint32_t mod_store_size(void){return s_size;}
 uint32_t mod_store_faults(void){return s_faults;}
 uint32_t mod_store_misses(void){return s_misses;}
+uint32_t mod_store_read_bytes(void){return s_read_bytes;}
 bool mod_store_stage(uint32_t offset,const uint8_t *data,uint16_t len)
 {
     if(!data || len==0 || offset>s_size || len>s_size-offset)
@@ -106,6 +107,7 @@ mchar mod_store_read(void *unused,const mchar *virtual_base,
         c->page=page;
         c->page_valid=true;
         ++s_misses;
+        s_read_bytes+=(uint32_t)len;
     }
     return (mchar)c->bytes[addr-page];
 }

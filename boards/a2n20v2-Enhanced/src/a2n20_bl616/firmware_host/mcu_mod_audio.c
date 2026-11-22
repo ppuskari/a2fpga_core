@@ -21,6 +21,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "usb_osal.h"
+#include "bflb_mtimer.h"
 #include <ctype.h>
 #include <string.h>
 
@@ -32,6 +33,8 @@
 #define PCM_BLOCK_BYTES (PCM_BLOCK_FRAMES*4u)
 #define MOD_FILE_LIMIT MOD_TOTAL_FILE_MAX
 #define PCM_HZ 44100u
+#define MOD_STAGE_BYTES 4096u   /* FAT/SDRAM staging independent of cache size */
+#define PCM_FIFO_FRAMES 2048u
 #define MOD_PATH_CAP 128u
 
 static modcontext s_ctx;
@@ -40,7 +43,7 @@ static uint8_t s_status[16];
 /* Entire MOD header is held in fixed SRAM; all patterns live in FPGA.
  * No contiguous MCU heap allocation is required regardless of MOD length. */
 static uint8_t s_mod_header[MOD_HEADER_PROBE];
-static uint8_t s_mod_transfer[MOD_STORE_PAGE];
+static uint8_t s_mod_transfer[MOD_STAGE_BYTES];
 static uint8_t s_mod_stage_head[32],s_mod_stage_tail[32];
 static uint8_t s_pat_stage_head[32],s_pat_stage_tail[32];
 static volatile uint32_t s_path_seq;
@@ -276,7 +279,7 @@ static bool player_load(const char *path)
     for(;off<fmt.prefix_bytes;) {
         const uint32_t rel=off-fmt.header_bytes;
         uint32_t len=fmt.prefix_bytes-off;
-        if(len>MOD_STORE_PAGE)len=MOD_STORE_PAGE;
+        if(len>MOD_STAGE_BYTES)len=MOD_STAGE_BYTES;
         memset(&fs,0,sizeof fs);
         fs.op=FSOP_MOD_READ;
         fs.buf=s_mod_transfer;
@@ -307,7 +310,7 @@ static bool player_load(const char *path)
                                             fmt.sample_bytes : 32u);
     for(off=0;off<fmt.sample_bytes;) {
         uint32_t len=fmt.sample_bytes-off;
-        if(len>MOD_STORE_PAGE)len=MOD_STORE_PAGE;
+        if(len>MOD_STAGE_BYTES)len=MOD_STAGE_BYTES;
         memset(&fs,0,sizeof fs);
         fs.op=FSOP_MOD_READ;
         fs.buf=s_mod_transfer;
@@ -357,6 +360,7 @@ static bool player_load(const char *path)
     osd_log("MOD MCU CACHE=%luB SAVED=%luB",
             (unsigned long)MOD_PATTERN_CACHE_BYTES,
             (unsigned long)fmt.prefix_bytes);
+    osd_log("MOD SMP CACHE=8x%uB", (unsigned)MOD_STORE_PAGE);
     osd_log("MOD %uCH PATS=%u HDR=%lu",
             (unsigned)fmt.channels,(unsigned)fmt.pattern_count,
             (unsigned long)fmt.header_bytes);
@@ -377,13 +381,33 @@ finish:
 /* J1: a complete MOD order-list pass ends on the HxCMOD song_wraps
  * event. HxCMOD still renders classic effect loops faithfully; the
  * wrap marker lets the host decide when to advance or stop. */
+/* J2R8: instrument the critical path. RMAX includes HxCMOD's
+ * per-voice sample-cache SPI fetches; SMAX is the 1-KiB FIFO upload.
+ * DMIS counts misses within a 256-frame block, not over the song. */
+static uint32_t s_rmax_us,s_smax_us,s_gmax_us,s_dmis_max;
+static uint32_t s_min_level=PCM_FIFO_FRAMES;
+static void pcm_perf_reset(void)
+{
+    s_rmax_us=s_smax_us=s_gmax_us=s_dmis_max=0u;
+    s_min_level=PCM_FIFO_FRAMES;
+}
 static bool pcm_send_block(bool one_pass)
 {
     const uint32_t wraps=s_ctx.song_wraps;
+    const uint32_t miss_before=mod_store_misses();
+    const uint64_t t0=bflb_mtimer_get_time_us();
     hxcmod_fillbuffer(&s_ctx,s_pcm,PCM_BLOCK_FRAMES,NULL);
-    /* J2R3: MCU postmix gain and stereo-linked headroom protection. */
+    const uint64_t t1=bflb_mtimer_get_time_us();
     mod_gain_apply((int16_t *)s_pcm,PCM_BLOCK_FRAMES);
+    const uint64_t t2=bflb_mtimer_get_time_us();
     fpga_spi_xfer_write(PCM_SPACE,0,(const uint8_t*)s_pcm,PCM_BLOCK_BYTES);
+    const uint64_t t3=bflb_mtimer_get_time_us();
+    const uint32_t r=(uint32_t)(t1-t0),g=(uint32_t)(t2-t1),spi=(uint32_t)(t3-t2);
+    const uint32_t misses=mod_store_misses()-miss_before;
+    if(r>s_rmax_us)s_rmax_us=r;
+    if(g>s_gmax_us)s_gmax_us=g;
+    if(spi>s_smax_us)s_smax_us=spi;
+    if(misses>s_dmis_max)s_dmis_max=misses;
     return one_pass && s_ctx.song_wraps!=wraps;
 }
 static bool start_song(const char *path,unsigned track,unsigned total)
@@ -402,6 +426,7 @@ static bool start_song(const char *path,unsigned track,unsigned total)
     __atomic_store_n(&s_has_last,1u,__ATOMIC_RELEASE);
     pcm_control(PCM_CTRL_RESET,0xA5u);
     mod_gain_reset(); /* clear previous track's limiter envelope */
+    pcm_perf_reset();
     pcm_control(PCM_CTRL_ENABLE,1u);
     s_state=MOD_PCM_PLAYING;
     mod_now_playing_publish(path,track,total);
@@ -506,6 +531,7 @@ void mod_audio_task(void *arg)
             playing=start_song(s_last_request,0u,0u);
             blocks=window=0;
         }
+        bool fast_refill=false;
         if(playing) {
             if(!pcm_read_status()) {
                 osd_log("MCU MOD: FPGA PCM LINK LOST");
@@ -532,7 +558,16 @@ void mod_audio_task(void *arg)
                     }
                 }
             }else if(pcm_free()>=PCM_BLOCK_FRAMES) {
+                const uint16_t available=pcm_free();
+                /* Measure FIFO low-water after startup buffering. */
+                if(blocks>=8u) {
+                    const uint16_t level=(uint16_t)(PCM_FIFO_FRAMES-available);
+                    if(level<s_min_level)s_min_level=level;
+                }
                 const bool done=pcm_send_block(juke_active || mod_audio_play_once());
+                /* Refill promptly if three blocks will fit. Preserve the
+                 * priority of HID/USB and yield to equal-priority speech. */
+                fast_refill=(!done && available>=PCM_BLOCK_FRAMES*3u);
                 ++blocks;
                 if(done) {
                     draining=true;
@@ -555,6 +590,16 @@ void mod_audio_task(void *arg)
                     /* Pattern fetches are infrequent; emit this extra
                      * OSD refresh only every fourth status interval. */
                     if((blocks/384u)%4u==0u) {
+                        osd_log("PCM RMAX=%lu SMAX=%lu",
+                                (unsigned long)s_rmax_us,
+                                (unsigned long)s_smax_us);
+                        osd_log("PCM GMAX=%lu DMIS=%lu LOW=%lu",
+                                (unsigned long)s_gmax_us,
+                                (unsigned long)s_dmis_max,
+                                (unsigned long)s_min_level);
+                        osd_log("SMP SPI B=%lu PG=%u",
+                                (unsigned long)mod_store_read_bytes(),
+                                (unsigned)MOD_STORE_PAGE);
                         osd_log("PF=%lu B=%lu E=%lu",
                                 (unsigned long)mod_patterns_fetch_count(),
                                 (unsigned long)mod_patterns_read_bytes(),
@@ -567,6 +612,10 @@ void mod_audio_task(void *arg)
                 }
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(2));
+        if(fast_refill) {
+            taskYIELD();
+        }else {
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
     }
 }
