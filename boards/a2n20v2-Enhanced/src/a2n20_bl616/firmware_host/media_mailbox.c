@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -36,6 +37,8 @@
 #define M2_PATH_MAX             128u
 #define M2_ENTRY_MAX             63u
 #define M2_NOWPLAY_MAX           63u
+/* Match the existing jukebox's 512-track ceiling; directories use slots too. */
+#define M2_SORT_MAX             512u
 #define AM_DIR_BIT              0x10u
 #define MB_RX_CHUNK            32u
 #define MB_F_READY             (1u<<0)
@@ -99,53 +102,116 @@ static const char *m2_path(void)
        strchr(p,'\\')) return NULL;
     return p;
 }
+/* Keep the Apple browser's order identical to J2R11 jukebox ordering:
+ * case-insensitive filenames over the ENTIRE directory, never page-local.
+ * Store a separate catalog, not the MOD thread's playlist, so jukebox
+ * playback, FTP and Apple browsing cannot invalidate one another.
+ * Each filename is allocated only once; at most 512 visible entries.
+ * A larger folder fails OPEN instead of silently showing a partial list.
+ */
+typedef struct {
+    char *name;
+    bool is_dir;
+} m2_browser_entry_t;
+static m2_browser_entry_t s_m2_catalog[M2_SORT_MAX];
+static unsigned s_m2_catalog_count, s_m2_catalog_next;
+static void m2_catalog_clear(void)
+{
+    for(unsigned i=0;i<s_m2_catalog_count;i++) {
+        vPortFree(s_m2_catalog[i].name);
+        s_m2_catalog[i].name=NULL;
+    }
+    s_m2_catalog_count=0u;
+    s_m2_catalog_next=0u;
+    s_m2_directory_open=false;
+}
+static int m2_name_icmp(const char *a,const char *b)
+{
+    while(*a && *b) {
+        const int x=tolower((unsigned char)*a++);
+        const int y=tolower((unsigned char)*b++);
+        if(x!=y)return x-y;
+    }
+    return (unsigned char)*a-(unsigned char)*b;
+}
+static int m2_catalog_cmp(const void *a,const void *b)
+{
+    const m2_browser_entry_t *x=(const m2_browser_entry_t *)a;
+    const m2_browser_entry_t *y=(const m2_browser_entry_t *)b;
+    if(x->is_dir!=y->is_dir)return x->is_dir ? -1:1;
+    return m2_name_icmp(x->name,y->name);
+}
+static bool m2_visible(const char *name,uint8_t attr)
+{
+    const size_t n=strlen(name);
+    if(n==0u || n>M2_ENTRY_MAX || name[0]=='.' ||
+       strchr(name,'/') || strchr(name,'\\'))return false;
+    if(attr&AM_DIR_BIT)return true;
+    return n>=5u && name[n-4]=='.' &&
+        tolower((unsigned char)name[n-3])=='m' &&
+        tolower((unsigned char)name[n-2])=='o' &&
+        tolower((unsigned char)name[n-1])=='d';
+}
 static uint8_t m2_dir_open(void)
 {
     const char *path=m2_path();
     s_m2_armed=false;
     if(!path)return MEDIA_RESULT_M2_BAD_PATH;
+    m2_catalog_clear();
     fs_req_t r;
     memset(&r,0,sizeof(r));
-    r.op=FSOP_MEDIA_LIST_OPEN;r.path=path;
-    const int result=disk_fs_request(&r);
-    s_m2_directory_open=(result==0);
-    return result==0 ? MEDIA_RESULT_OK:MEDIA_RESULT_M2_FS;
+    r.op=FSOP_MEDIA_LIST_OPEN;
+    r.path=path;
+    if(disk_fs_request(&r)!=0)return MEDIA_RESULT_M2_FS;
+
+    bool complete=false,failed=false;
+    for(unsigned scanned=0;scanned<65536u;scanned++) {
+        memset(&r,0,sizeof(r));
+        r.op=FSOP_MEDIA_LIST_NEXT;
+        if(disk_fs_request(&r)!=0) {failed=true;break;}
+        if(!r.name[0]) {complete=true;break;}
+        if(!m2_visible(r.name,r.attr))continue;
+        /* WorkPath is limited to 127 including NUL on the Apple side. */
+        const size_t len=strlen(r.name);
+        if(strlen(path)+len+(path[0]?2u:1u)>127u)continue;
+        if(s_m2_catalog_count>=M2_SORT_MAX) {failed=true;break;}
+        char *copy=(char *)pvPortMalloc(len+1u);
+        if(!copy) {failed=true;break;}
+        memcpy(copy,r.name,len+1u);
+        m2_browser_entry_t *entry=&s_m2_catalog[s_m2_catalog_count++];
+        entry->name=copy;
+        entry->is_dir=(r.attr&AM_DIR_BIT)!=0u;
+    }
+    memset(&r,0,sizeof(r));
+    r.op=FSOP_MEDIA_LIST_CLOSE;
+    if(disk_fs_request(&r)!=0)failed=true;
+    if(failed || !complete) {
+        m2_catalog_clear();
+        return MEDIA_RESULT_M2_FS;
+    }
+    if(s_m2_catalog_count>1u)
+        qsort(s_m2_catalog,s_m2_catalog_count,
+              sizeof(s_m2_catalog[0]),m2_catalog_cmp);
+    s_m2_directory_open=true;
+    return MEDIA_RESULT_OK;
 }
 static uint8_t m2_dir_next(void)
 {
     if(!s_m2_directory_open)return MEDIA_RESULT_M2_NOT_OPEN;
-    fs_req_t r;
-    for(unsigned i=0;i<4096u;i++) {
-        memset(&r,0,sizeof(r));r.op=FSOP_MEDIA_LIST_NEXT;
-        if(disk_fs_request(&r)!=0)return MEDIA_RESULT_M2_FS;
-        if(!r.name[0])return MEDIA_RESULT_M2_EOF;
-        const size_t n=strlen(r.name);
-        if(n>M2_ENTRY_MAX || n==0 || strchr(r.name,'/') ||
-           strchr(r.name,'\\') || r.name[0]=='.')continue;
-        const bool dir=(r.attr & AM_DIR_BIT)!=0u;
-        if(!dir) {
-            if(n<5u || r.name[n-4]!='.' ||
-               tolower((unsigned char)r.name[n-3])!='m' ||
-               tolower((unsigned char)r.name[n-2])!='o' ||
-               tolower((unsigned char)r.name[n-1])!='d')
-                continue;
-        }
-        m2_reply_reset();
-        // Reply frame [length=1+namebytes][kind:1=directory][name ASCII].
-        m2_reply_byte((uint8_t)(n+1u));
-        m2_reply_byte(dir ? 1u:0u);
-        for(size_t j=0;j<n;j++)m2_reply_byte((uint8_t)r.name[j]);
-        return MEDIA_RESULT_OK;
-    }
-    return MEDIA_RESULT_M2_FS;
+    if(s_m2_catalog_next>=s_m2_catalog_count)
+        return MEDIA_RESULT_M2_EOF;
+    const m2_browser_entry_t *entry=&s_m2_catalog[s_m2_catalog_next++];
+    const size_t n=strlen(entry->name);
+    m2_reply_reset();
+    m2_reply_byte((uint8_t)(n+1u));
+    m2_reply_byte(entry->is_dir?1u:0u);
+    for(size_t i=0;i<n;i++)m2_reply_byte((uint8_t)entry->name[i]);
+    return MEDIA_RESULT_OK;
 }
 static uint8_t m2_dir_close(void)
 {
-    fs_req_t r;
-    memset(&r,0,sizeof(r));r.op=FSOP_MEDIA_LIST_CLOSE;
-    const int result=disk_fs_request(&r);
-    s_m2_directory_open=false;
-    return result==0 ? MEDIA_RESULT_OK:MEDIA_RESULT_M2_FS;
+    m2_catalog_clear();
+    return MEDIA_RESULT_OK;
 }
 static uint8_t m2_play_or_start(bool jukebox)
 {
