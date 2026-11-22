@@ -974,6 +974,7 @@ void disk_poll(void)
     fs_service();
 
     if (g_list_req) {
+        unsigned raw_seen=0;
         g_list_count = 0;
         g_list_fr = FR_OK;
         for (int pass = 0; pass < 2; pass++) {
@@ -994,6 +995,7 @@ void disk_poll(void)
                 }
                 if (fno.fname[0] == '\0')
                     break;
+                ++raw_seen;
                 if (fno.fname[0] == '.' || fno.fname[0] == '_')
                     continue;
                 bool is_dir = (fno.fattrib & AM_DIR) != 0;
@@ -1032,6 +1034,8 @@ void disk_poll(void)
             }
             g_list_ents[j] = tmp;
         }
+        if(g_list_fr==FR_OK && g_list_count==0)
+            osd_log("PICK DIR EMPTY: %s raw=%u",g_list_path,raw_seen);
         g_list_req  = false;
         g_list_done = true;
     }
