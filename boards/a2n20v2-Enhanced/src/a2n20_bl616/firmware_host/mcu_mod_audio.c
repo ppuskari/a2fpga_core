@@ -140,7 +140,8 @@ bool mod_audio_jukebox_resume(void)
     /* Same-session shortcut; no flash wear, restarts last heard track at
      * its beginning. After MCU reboot use picker "START AT FILE". */
     if(!__atomic_load_n(&s_juke_count_pub,__ATOMIC_ACQUIRE) ||
-       s_state==MOD_PCM_PLAYING || s_state==MOD_PCM_LOADING)
+       __atomic_load_n(&s_juke_scan_state,__ATOMIC_ACQUIRE)!=MOD_JUKE_READY ||
+       s_state!=MOD_PCM_STOPPED)
         return false;
     __atomic_store_n(&s_resume,1u,__ATOMIC_RELEASE);
     return true;
@@ -552,6 +553,8 @@ void mod_audio_task(void *arg)
                     juke_active=false;
                     playing=false;
                     s_state=MOD_PCM_STOPPED;
+                    mod_jukebox_clear();
+                    __atomic_store_n(&s_juke_count_pub,0u,__ATOMIC_RELEASE);
                     juke_state(MOD_JUKE_START_MISSING);
                     osd_log("MCU JUKE: START MOD NOT FOUND");
                 } else {
