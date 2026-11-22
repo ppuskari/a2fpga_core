@@ -37,6 +37,8 @@ bool mod_now_playing_snapshot(mod_now_playing_t *out)
     return true;
 }
 #define CHECK(v) do{ if(!(v)){fprintf(stderr,"FAIL M2 line %d: %s\n",__LINE__,#v);exit(1);} }while(0)
+void *pvPortMalloc(size_t n) {return malloc(n);}
+void vPortFree(void *p) {free(p);}
 void vTaskDelay(uint32_t ticks) {(void)ticks;}
 void osd_log(const char *fmt,...) {(void)fmt;}
 mod_pcm_status_t mod_audio_status(void) {return MOD_PCM_PLAYING;}
