@@ -176,8 +176,11 @@ int osd_console_snapshot(char dst[][41], int max)
     ensure_lock();
     usb_osal_mutex_take(s_lock);
     int n = s_count < max ? s_count : max;
+    /* Both arrays are statically bounded to 40 printable bytes plus NUL.
+     * Avoid snprintf's expensive formatting and false host-GCC size
+     * warnings in a path used by the remote console. */
     for (int i = 0; i < n; i++)
-        snprintf(dst[i], 41, "%s", s_lines[i]);
+        memcpy(dst[i], s_lines[i], CON_COLS + 1);
     usb_osal_mutex_give(s_lock);
     return n;
 }
