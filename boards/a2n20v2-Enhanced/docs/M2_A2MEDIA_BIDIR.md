@@ -58,9 +58,21 @@ jukebox directory. The selected FAT backend (SD/USB) is not remounted.
 PS> $m2="C:\AppleIIgsDev_02\a2fpga-media-m2"
 PS> git clone --single-branch --branch petar/media-m2-bidir-fat-picker-20261122 https://github.com/ppuskari/a2fpga_core.git $m2
 
+Start with the complete ROM and piano preparation (one command):
+
+PS> Set-Location $m2
+PS> .\Build-M2-FPGA.ps1 Prepare
+
+All SSI263 voice/parameter tables are committed and checked. The authentic
+seven-zone Apple SynthLAB piano ROM is automatically downloaded and verified
+if missing. No manual voice/piano ROM copying is required with network access.
+For an offline clean build, use -Offline -SynthLABDisk <original-synthLAB.po>.
+Full instructions: docs/ENHANCED_FPGA_ROM_ASSETS.md.
+
 Open:
   C:\AppleIIgsDev_02\a2fpga-media-m2\boards\a2n20v2-Enhanced\a2n20v2_enhanced.gprj
 
+Alternatively run .\Build-M2-FPGA.ps1 Build -GowinCli <gw_sh.exe>.
 Synthesize/place/route in Gowin and program FPGA VOLATILE SRAM ONLY.
 Do not replace golden FPGA flash. M2 duplicates a 2KiB reply buffer;
 the actual Gowin resource utilization/timing remains to be measured.
