@@ -201,6 +201,47 @@ static uint8_t mb_handle_cmd(uint8_t cmd)
     switch(cmd){
     case MEDIA_CMD_PING:
         return MEDIA_RESULT_PONG;
+    case MEDIA_CMD_M2_CAPS:
+        return s_m2_hw ? 2u:MEDIA_RESULT_M2_OLD_FPGA;
+    case MEDIA_CMD_M2_ARM:
+        if(!s_m2_hw)return MEDIA_RESULT_M2_OLD_FPGA;
+        m2_reply_reset();
+        s_m2_req_len=0u;
+        s_m2_req_overflow=false;
+        s_m2_armed=true;
+        return MEDIA_RESULT_OK;
+    case MEDIA_CMD_M2_OPEN:
+        return s_m2_hw ? m2_dir_open():MEDIA_RESULT_M2_OLD_FPGA;
+    case MEDIA_CMD_M2_NEXT:
+        return s_m2_hw ? m2_dir_next():MEDIA_RESULT_M2_OLD_FPGA;
+    case MEDIA_CMD_M2_CLOSE:
+        return s_m2_hw ? m2_dir_close():MEDIA_RESULT_M2_OLD_FPGA;
+    case MEDIA_CMD_M2_PLAY:
+        return s_m2_hw ? m2_play_or_start(false):MEDIA_RESULT_M2_OLD_FPGA;
+    case MEDIA_CMD_M2_START:
+        return s_m2_hw ? m2_play_or_start(true):MEDIA_RESULT_M2_OLD_FPGA;
+    case MEDIA_CMD_M2_RESUME:
+        return s_m2_hw && mod_audio_jukebox_resume() ?
+               MEDIA_RESULT_OK:MEDIA_RESULT_NO_SONG;
+    case MEDIA_CMD_M2_SOURCE:
+        if(!s_m2_hw)return MEDIA_RESULT_M2_OLD_FPGA;
+        m2_reply_reset();
+        m2_reply_byte(1u);
+        m2_reply_byte(disk_backend_is_usb()?1u:0u);
+        return MEDIA_RESULT_OK;
+    case MEDIA_CMD_M2_STATUS: {
+        if(!s_m2_hw)return MEDIA_RESULT_M2_OLD_FPGA;
+        const unsigned last=mod_audio_jukebox_last_track();
+        const unsigned total=mod_audio_jukebox_count();
+        m2_reply_reset();
+        m2_reply_byte(5u);
+        m2_reply_byte((uint8_t)mod_audio_status());
+        m2_reply_byte((uint8_t)last);
+        m2_reply_byte((uint8_t)(last>>8));
+        m2_reply_byte((uint8_t)total);
+        m2_reply_byte((uint8_t)(total>>8));
+        return MEDIA_RESULT_OK;
+    }
     case MEDIA_CMD_REPLAY_LAST:
         return mod_audio_replay_last()?MEDIA_RESULT_OK:
                MEDIA_RESULT_NO_SONG;
