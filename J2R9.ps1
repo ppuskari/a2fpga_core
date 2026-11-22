@@ -44,6 +44,12 @@ $programmer=Join-Path $board 'tools\a2n20-mcu-program'
 $buildDir=Join-Path $hostDir 'build\build_out'
 $firmware=Join-Path $buildDir 'a2n20_bl616_host_bl616.bin'
 $manifest=Join-Path $buildDir 'j2r9-stage2-build.json'
+# The built host firmware .bin is a *tracked* file in this repository.
+# It is generated output, not source. Exclude ONLY this exact path from the
+# source fingerprint and source-change report; independently hash the actual
+# binary using Get-Verified-Binary-Hash at build and flash time.
+$generatedBinaryPath='boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/build/build_out/a2n20_bl616_host_bl616.bin'
+$excludeGeneratedBinary=":(exclude)$generatedBinaryPath"
 
 function Fail([string] $message) { throw $message }
 
@@ -95,7 +101,7 @@ function Get-Tracked-Source-Fingerprint {
     # A modified checkout is allowed, but its actual source diff MUST be
     # identical at compile time and at flash time. Do not discard edits.
     # HEAD includes both staged and unstaged changes (unlike git diff alone).
-    $lines=@(& git -C $root diff --no-ext-diff --no-color --binary HEAD --)
+    $lines=@(& git -C $root diff --no-ext-diff --no-color --binary HEAD -- . $excludeGeneratedBinary)
     if($LASTEXITCODE -ne 0) {
         Fail 'Could not compute tracked source diff against HEAD.'
     }
@@ -111,7 +117,7 @@ function Get-Tracked-Source-Fingerprint {
 
 function Show-Tracked-Source-State {
     Assert-J2R9-Checkout
-    $changes=@(& git -C $root status --short --untracked-files=no)
+    $changes=@(& git -C $root status --short --untracked-files=no -- . $excludeGeneratedBinary)
     if($LASTEXITCODE -ne 0) {
         Fail 'Unable to examine tracked Git changes.'
     }
@@ -127,6 +133,7 @@ function Show-Tracked-Source-State {
     }
     $fingerprint=Get-Tracked-Source-Fingerprint
     Write-Host "Source diff SHA256: $fingerprint"
+    Write-Host 'Generated firmware output is excluded from source diff, but binary SHA256 remains checked.'
     return $fingerprint
 }
 
@@ -217,7 +224,7 @@ function Build-Stage2 {
     $hash=Get-Verified-Binary-Hash
     $sourceAfter=Get-Tracked-Source-Fingerprint
     if($sourceBefore -ne $sourceAfter) {
-        Fail 'Tracked source files changed DURING compilation; rebuild to ensure consistency.'
+        Fail 'Tracked source inputs changed DURING compilation; run SourceState to inspect changes before retrying.'
     }
     $record=[ordered]@{
         branch=$requiredBranch
