@@ -48,7 +48,7 @@ ASCII bytes, not NUL-terminated. WAIT for ACK before reading, then read
 exactly length+1 bytes from $C0B5. $C0B3 bit7 indicates data ready.
 Directory enumeration is now a complete, case-insensitively sorted folder
 snapshot (not page-local and not raw FAT order): folders first, then .MOD files.
-The .MOD filename ordering matches the existing J2R11 jukebox's case-insensitive
+The MOD filename ordering matches the existing J2R11 jukebox's case-insensitive
 sort, including across 12-entry Apple pages; chosen paths still resolve to
 their correct playlist index. The Apple browser owns its own catalog and does
 not alias the live jukebox catalog or FAT handles. The directory scan is
@@ -114,3 +114,24 @@ bytewise FPGA SDRAM signatures. Signed Stage1 and FPGA flash untouched.
 CI covers Yosys synthesis, Icarus both M1+M2 benches, MCU mocked FAT/SPI
 integration, existing HDMI PCM and DOC regressions. It does not prove
 Gowin place/route, native BL616 SDK build or electrical bus timing.
+
+
+### Large ProTracker / Amiga MOD collections (M2 update)
+
+- MCU console directory snapshots now hold up to **512** entries, sorted once
+  after a **single** FatFS directory pass (formerly 256 entries and two passes).
+  The console has 48-entry pages and a **15-second** bounded scan wait instead
+  of 2 seconds, so a ~500-file subfolder is 11 pages rather than a false
+  empty result or truncated 256-file list.
+- Both naming conventions are accepted consistently by the console picker,
+  the J2R11 jukebox, direct HxCMOD file selection and the Apple mailbox:
+  `SONG.MOD` and classic Amiga `MOD.SONG` (case-insensitive). HxCMOD still
+  validates the file header and pattern structure rather than trusting names.
+- The console emits `PICK DIR: 0:/... raw=N dirs=N mods=N other=N
+  prefix=N long=N rc=N` after each scan. Error status differentiates
+  unsupported files, a genuine empty folder, FatFS failure, a timed-out scan
+  and a folder exceeding 512 visible entries. Apple mailbox also logs its
+  own independent catalog errors.
+- This changes BL616 Stage 2 only; the slot-3 FPGA media mailbox ABI, SPI6
+  stereo audio, and Floppy Emu's independent slot-6 ProDOS boot path do not
+  change. Hardware listing/playback must be verified after flashing.
