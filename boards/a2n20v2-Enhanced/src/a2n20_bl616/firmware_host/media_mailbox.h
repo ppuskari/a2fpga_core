@@ -36,11 +36,14 @@
 #define MEDIA_CMD_M2_RESUME    0x27u
 #define MEDIA_CMD_M2_SOURCE    0x28u
 #define MEDIA_CMD_M2_STATUS    0x29u
+/* Current MOD filename: reply [1+n, active, basename ASCII n], n <= 63. */
+#define MEDIA_CMD_M2_NOWPLAY   0x2Au
 #define MEDIA_RESULT_M2_EOF    0xD0u
 #define MEDIA_RESULT_M2_BAD_PATH 0xE6u
 #define MEDIA_RESULT_M2_FS     0xE7u
 #define MEDIA_RESULT_M2_OLD_FPGA 0xE8u
 #define MEDIA_RESULT_M2_NOT_OPEN 0xE9u
+#define MEDIA_RESULT_M2_RETRY    0xEAu /* concurrent now-playing snapshot */
 
 
 #define MEDIA_RESULT_OK         0x00u
