@@ -6,6 +6,7 @@ on:
       - petar/mod-jukebox-j1-20261121
       - petar/mod-jukebox-j2-largefile-20261121
       - petar/mod-j2r3-8ch-gain-20261121
+      - petar/media-m2-bidir-fat-picker-20261122
   pull_request:
   workflow_dispatch:
 jobs:
@@ -24,6 +25,15 @@ jobs:
         run: |
           iverilog -g2012 -s tb_media_mailbox_slot3 -o /tmp/m1 boards/a2n20v2-Enhanced/hdl/media_mailbox_slot3.sv boards/a2n20v2-Enhanced/tests/tb_media_mailbox_slot3.sv
           vvp /tmp/m1
+      - name: Verify M2 bidirectional Apple reply FIFO and unchanged M1 ABI
+        run: |
+          iverilog -g2012 -s tb_media_mailbox_m2 -o /tmp/m2             boards/a2n20v2-Enhanced/hdl/media_mailbox_slot3.sv             boards/a2n20v2-Enhanced/tests/tb_media_mailbox_m2.sv
+          vvp /tmp/m2
+          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
+          grep -q 'case FSOP_MEDIA_LIST_OPEN:' "$MCU/disk.c"
+          grep -q 'case FSOP_MEDIA_LIST_NEXT:' "$MCU/disk.c"
+          grep -q 'case FSOP_MEDIA_LIST_CLOSE:' "$MCU/disk.c"
+          grep -q 'mod_audio_jukebox_start_from_file(path)' "$MCU/media_mailbox.c"
       - name: Preserve BL616 stereo PCM HDMI stream on SPACE6
         run: |
           iverilog -g2012 -s tb_mcu_stereo_pcm_bridge -o /tmp/pcm boards/a2n20v2-Enhanced/hdl/mcu_stereo_pcm_bridge.sv boards/a2n20v2-Enhanced/tests/tb_mcu_stereo_pcm_bridge.sv
