@@ -114,6 +114,24 @@ jobs:
           assert "VerifyReadback" in s and "CheckRuntime" in s
           print("PASS J2R8 PowerShell wrapper: Stage2-only, no Stage1 path")
           PY
+      - name: J2R9 PowerShell MCU Stage2 helper smoke
+        run: |
+          # Detached PR HEAD and earlier J2R8 smoke used a temporary branch.
+          git checkout -B petar/mod-j2r9-bulk-spi-cheer-20261121 HEAD
+          pwsh -NoProfile -File ./J2R9.ps1 Help
+          pwsh -NoProfile -File ./J2R9.ps1 SourceState > /tmp/j2r9_source.txt
+          grep -q 'Git tracked files are clean' /tmp/j2r9_source.txt
+          grep -q 'Source diff SHA256' /tmp/j2r9_source.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('J2R9.ps1').read_text()
+          assert "petar/mod-j2r9-bulk-spi-cheer-20261121" in p
+          assert "'MOD SPI=BULK512'" in p
+          assert "$flashArgs=@('--stage2', $firmware" in p
+          assert "'--skip-verify'" in p and "'0x40000'" in p
+          assert "--stage1" not in p
+          print("PASS J2R9 PowerShell: J2R9 source / bulk signature / Stage2 only")
+          PY
       - name: J2R9 real SPI driver parity (bulk512 versus legacy)
         run: |
           SPI=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware
