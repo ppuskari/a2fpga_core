@@ -118,7 +118,7 @@ jobs:
           # Verify the actual hardware default is 8KiB retained per voice
           # but each blocking bytewise SDRAM miss is 2KiB or less.
           grep -q 'set(MOD_STORE_FETCH_BYTES 2048 CACHE STRING' "$MCU/CMakeLists.txt"
-          grep -q 'MOD SMP WIN=%ux%uB' "$MCU/mcu_mod_audio.c"
+          grep -q 'MOD SMP WIN=4x2048B' "$MCU/mcu_mod_audio.c"
       - name: Smoke-test J2R8 Stage2-only PowerShell helper
         run: |
           pwsh -NoProfile -File ./J2R8.ps1 Help
