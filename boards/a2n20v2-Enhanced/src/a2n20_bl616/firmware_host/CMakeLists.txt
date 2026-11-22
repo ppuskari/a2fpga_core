@@ -26,6 +26,13 @@ if(NOT FPGA_SPI_MOD_BULK_XFER MATCHES "^[01]$")
     message(FATAL_ERROR "FPGA_SPI_MOD_BULK_XFER must be 0 or 1")
 endif()
 sdk_add_compile_definitions(-DFPGA_SPI_MOD_BULK_XFER=${FPGA_SPI_MOD_BULK_XFER})
+# J2R9A physical safety default. Uninterrupted 512B SDRAM bursts failed the
+# real J2R9 FPGA pattern sentinel readback. Do not enable on user hardware.
+set(FPGA_SPI_MOD_BULK_SDRAM 0 CACHE STRING "0=proven bytewise SDRAM, 1=EXPERIMENTAL full-speed SDRAM")
+if(NOT FPGA_SPI_MOD_BULK_SDRAM MATCHES "^[01]$")
+    message(FATAL_ERROR "FPGA_SPI_MOD_BULK_SDRAM must be 0 or 1")
+endif()
+sdk_add_compile_definitions(-DFPGA_SPI_MOD_BULK_SDRAM=${FPGA_SPI_MOD_BULK_SDRAM})
 # DIAGNOSTIC: intercept the SDK's exception_entry (it only printf's the fault to a
 # UART we can't see) so __wrap_exception_entry can paint mcause/mepc on the overlay.
 sdk_add_link_options(-Wl,--wrap=exception_entry)

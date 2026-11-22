@@ -26,6 +26,7 @@ static uint32_t s_addr,s_len,s_pos;
 static unsigned s_space,s_read;
 static bool s_cs;
 static uint64_t s_calls,s_large_calls,s_chunks,s_hold_us;
+static uint64_t s_sdram_large_calls,s_pcm_large_calls,s_unrelated_large_calls;
 static uint32_t s_max_len;
 static struct bflb_spi_config_s s_config;
 
@@ -113,6 +114,11 @@ int bflb_spi_poll_exchange(struct bflb_device_s *d,const uint8_t *tx,
     if(n>1u)++s_large_calls;
     if(n>s_max_len)s_max_len=n;
     for(uint32_t i=0;i<n;i++)rx[i]=wire_byte(tx[i]);
+    if(n>1u) {
+        if(s_space==FPGA_SPACE_SDRAM) ++s_sdram_large_calls;
+        else if(s_space==FPGA_SPACE_PCM) ++s_pcm_large_calls;
+        else ++s_unrelated_large_calls;
+    }
     return 0;
 }
 void fpga_screen_clear(void) {}
@@ -151,20 +157,32 @@ int main(void)
     MUST(memcmp(&s_local[0x100u],extra,sizeof extra)==0);
     MUST(s_large_calls==before);
     MUST(!s_cs);
-#if FPGA_SPI_MOD_BULK_XFER
-    MUST(s_large_calls>0u && s_max_len==520u);
-    MUST(s_hold_us>=3u);
+    MUST(s_unrelated_large_calls==0u);
+#if FPGA_SPI_MOD_BULK_XFER && !FPGA_SPI_MOD_BULK_SDRAM
+    MUST(s_pcm_large_calls==2u); /* exactly two 512B PCM payloads */
+    MUST(s_sdram_large_calls==0u);
+    MUST(s_large_calls==2u && s_max_len==519u);
+    MUST(s_hold_us==6u);
+#elif FPGA_SPI_MOD_BULK_XFER && FPGA_SPI_MOD_BULK_SDRAM
+    /* Retain a simulation-only check of the failed physical transport mode
+     * so the mock's inability to model real FPGA latency stays explicit. */
+    MUST(s_pcm_large_calls==2u && s_sdram_large_calls>0u);
+    MUST(s_large_calls>2u && s_max_len==520u);
+    MUST(s_hold_us>=6u);
 #else
     MUST(s_large_calls==0u && s_max_len==1u);
 #endif
-    printf("PASS J2R9 SPI %s: byte-exact SDRAM, PCM, dummy, chunks, fallback; "
-           "%llu SPI calls, %llu long, %llu CS frames\n",
-#if FPGA_SPI_MOD_BULK_XFER
-           "BULK",
+    printf("PASS J2R9a SPI %s: byte-exact SDRAM, PCM, dummy, chunks, fallback; "
+           "%llu calls, %llu PCM bursts, %llu SDRAM bursts, %llu CS frames\n",
+#if FPGA_SPI_MOD_BULK_XFER && !FPGA_SPI_MOD_BULK_SDRAM
+           "PCM-ONLY",
+#elif FPGA_SPI_MOD_BULK_XFER && FPGA_SPI_MOD_BULK_SDRAM
+           "BULK-ALL-LAB",
 #else
            "LEGACY",
 #endif
-           (unsigned long long)s_calls,(unsigned long long)s_large_calls,
+           (unsigned long long)s_calls,(unsigned long long)s_pcm_large_calls,
+           (unsigned long long)s_sdram_large_calls,
            (unsigned long long)s_chunks);
     return 0;
 }
