@@ -239,8 +239,16 @@ matching SDK heap_3 serialization but without `pvPortMalloc()`'s
 fatal out-of-memory hook. Low-heap conditions now return an M2 FAT
 browse error instead of disabling interrupts; this preserves the
 USB keyboard and error reporting. A–Z ordering, `DIR_SEEK`, and
-forward/backward page behavior remain unchanged. The MCU console
-jukebox and HxCMOD engine remain untouched.
+forward/backward page behavior remain unchanged.
+
+The shared MCU jukebox catalog's `juke_strdup` now also uses the
+same scheduler-protected libc allocation strategy, returning NULL
+on low heap instead of invoking the fatal FreeRTOS hook. It retains
+the same path sorting, directory scan, file selection, and playback
+logic; the only behavior change is a recoverable failure when out
+of memory. The jukebox host test forces allocation failure and
+verifies it can recover for a subsequent scan. HxCMOD decoding,
+HDMI PCM, DOC/SSI paths and the FPGA bitstream are untouched.
 
 The M2 host integration test now enumerates 506 entries, starts the
 selected-file jukebox while the catalog is still active, confirms the
