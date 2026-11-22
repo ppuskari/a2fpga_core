@@ -17,6 +17,7 @@
 #include "fpga_spi.h"
 #include "osd_console.h"
 #include "mcu_mod_audio.h"
+#include "mcu_mod_now_playing.h"
 #include "disk.h"
 #include <ctype.h>
 #include "media_mailbox.h"
@@ -34,6 +35,7 @@
 #define MB_REPLY_RESET_ADDR     0x800031u
 #define M2_PATH_MAX             128u
 #define M2_ENTRY_MAX             63u
+#define M2_NOWPLAY_MAX           63u
 #define AM_DIR_BIT              0x10u
 #define MB_RX_CHUNK            32u
 #define MB_F_READY             (1u<<0)
@@ -155,6 +157,33 @@ static uint8_t m2_play_or_start(bool jukebox)
     return accepted ? MEDIA_RESULT_OK:MEDIA_RESULT_M2_BAD_PATH;
 }
 
+/* Read exactly the same generation-stable identity already published for
+ * the MCU MOD console. No FatFS calls, extra HxCMOD work or SPI6 audio
+ * interference. The response is a bounded M2 FIFO frame, never a guess
+ * from the currently selected Apple-side directory entry. */
+static uint8_t m2_now_playing(void)
+{
+    mod_now_playing_t now;
+    if(!mod_now_playing_snapshot(&now))
+        return MEDIA_RESULT_M2_RETRY;
+    const char *basename=now.path;
+    if(now.active) {
+        const char *slash=strrchr(now.path,'/');
+        if(slash)basename=slash+1;
+    }
+    size_t n=0u;
+    if(now.active)
+        while(n<M2_NOWPLAY_MAX && basename[n])++n;
+    m2_reply_reset();
+    m2_reply_byte((uint8_t)(n+1u)); /* 1 active byte + n filename bytes */
+    m2_reply_byte(now.active?1u:0u);
+    for(size_t i=0;i<n;i++) {
+        const unsigned char c=(unsigned char)basename[i];
+        m2_reply_byte(c>=32u && c<=126u ? c:(uint8_t)'?');
+    }
+    return MEDIA_RESULT_OK;
+}
+
 static void mb_log_status(void)
 {
     if(!s_info.online){
@@ -242,6 +271,8 @@ static uint8_t mb_handle_cmd(uint8_t cmd)
         m2_reply_byte((uint8_t)(total>>8));
         return MEDIA_RESULT_OK;
     }
+    case MEDIA_CMD_M2_NOWPLAY:
+        return s_m2_hw ? m2_now_playing():MEDIA_RESULT_M2_OLD_FPGA;
     case MEDIA_CMD_REPLAY_LAST:
         return mod_audio_replay_last()?MEDIA_RESULT_OK:
                MEDIA_RESULT_NO_SONG;
