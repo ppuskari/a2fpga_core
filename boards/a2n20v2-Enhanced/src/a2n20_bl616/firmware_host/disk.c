@@ -1154,7 +1154,9 @@ void disk_get_hdd_info(int u, disk_info_t *out)
 
 bool disk_backend_is_usb(void)
 {
-    return g_msc_class != NULL;   /* mirrors the active-backend choice */
+    /* USB presence does NOT imply the USB drive is selected: STORAGE may
+     * explicitly choose SD while a USB stick remains connected. */
+    return disk_io_backend_is_usb();
 }
 
 bool disk_remount_pending(void)
