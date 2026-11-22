@@ -27,6 +27,8 @@ bool mod_audio_previous(void);
 void mod_audio_set_play_once(bool once);
 bool mod_audio_play_once(void);
 unsigned mod_audio_jukebox_count(void);
+/* 1-based last successfully started jukebox track; survives Stop, not reboot. */
+unsigned mod_audio_jukebox_last_track(void);
 /* Menu-only snapshot of the asynchronous playlist scan. The generation
  * increments on queue/scan/completion/clear to prompt UI repaint. */
 typedef enum {
