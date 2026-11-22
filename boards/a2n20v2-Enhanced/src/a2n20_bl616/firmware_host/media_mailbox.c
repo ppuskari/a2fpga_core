@@ -111,31 +111,56 @@ static const char *m2_path(void)
  * Each filename is allocated only once; at most 512 visible entries.
  * A larger folder fails OPEN instead of silently showing a partial list.
  */
-/* Both Apple directory catalog and MCU jukebox are resident after J.
- * The old M2 browser allocated a heap string for each of ~506 filenames;
- * the Jukebox then malloc'd another ~506 paths and could trigger the fatal
- * FreeRTOS malloc hook (which disables interrupts, freezing USB HID).
+/* The M2 Apple directory remains resident when J starts the jukebox,
+ * whose MOD thread allocates another ~506 full-path strings. Previously M2
+ * allocated 506 separate browser strings with pvPortMalloc(). If the
+ * combined heap is exhausted, FreeRTOS' malloc hook disables interrupts
+ * permanently, freezing USB HID too.
  *
- * Use compact packed names in fixed BL616 BSS, 2-byte offsets and a
- * 24-KiB arena. 506 normal ProTracker filenames fit comfortably; if users
- * populate a folder with 512 exceptionally long 63-byte filenames, fail
- * the scan gracefully as MEDIA_RESULT_M2_FS instead of exhausting heap.
- * No per-filename malloc/free or extra FPGA/register changes. */
-#define M2_NAME_POOL_SIZE (24u*1024u)
+ * Keep names packed into a few 2-KiB chunks allocated as needed. Unlike
+ * a 32-KiB fixed BSS table, the typical 506-file directory consumes only
+ * its real string bytes plus small chunk padding. Use the *same libc
+ * malloc/free* behind FreeRTOS heap_3, protected by its scheduler lock, but
+ * don't call the fatal pvPortMalloc hook when no space remains: complete
+ * the scan with an FS result instead. This leaves the console's jukebox
+ * allocator and the working HxCMOD audio implementation untouched.
+ *
+ * 20 chunks cover even 512 names of maximum legal length 63 bytes plus
+ * per-chunk alignment waste. No name is allowed across chunk boundaries. */
+#define M2_CHUNK_BYTES 2048u
+#define M2_CHUNK_LIMIT 20u
 typedef struct {
-    uint16_t name_offset;
+    char *name;
     bool is_dir;
 } m2_browser_entry_t;
 static m2_browser_entry_t s_m2_catalog[M2_SORT_MAX];
-static char s_m2_name_pool[M2_NAME_POOL_SIZE];
-static unsigned s_m2_name_used, s_m2_catalog_count, s_m2_catalog_next;
-static const char *m2_catalog_name(const m2_browser_entry_t *entry)
+static char *s_m2_chunks[M2_CHUNK_LIMIT];
+static unsigned s_m2_chunk_count,s_m2_chunk_used;
+static unsigned s_m2_catalog_count,s_m2_catalog_next;
+
+/* heap_3 wraps exactly libc malloc/free under vTaskSuspendAll; direct use
+ * with the same scheduler lock permits OOM to be a recoverable error. */
+static void *m2_try_alloc(size_t n)
 {
-    return &s_m2_name_pool[entry->name_offset];
+    vTaskSuspendAll();
+    void *result=malloc(n);
+    (void)xTaskResumeAll();
+    return result;
+}
+static void m2_try_free(void *ptr)
+{
+    vTaskSuspendAll();
+    free(ptr);
+    (void)xTaskResumeAll();
 }
 static void m2_catalog_clear(void)
 {
-    s_m2_name_used=0u;
+    for(unsigned i=0;i<s_m2_chunk_count;i++) {
+        m2_try_free(s_m2_chunks[i]);
+        s_m2_chunks[i]=NULL;
+    }
+    s_m2_chunk_count=0u;
+    s_m2_chunk_used=0u;
     s_m2_catalog_count=0u;
     s_m2_catalog_next=0u;
     s_m2_directory_open=false;
@@ -154,7 +179,7 @@ static int m2_catalog_cmp(const void *a,const void *b)
     const m2_browser_entry_t *x=(const m2_browser_entry_t *)a;
     const m2_browser_entry_t *y=(const m2_browser_entry_t *)b;
     if(x->is_dir!=y->is_dir)return x->is_dir ? -1:1;
-    return m2_name_icmp(m2_catalog_name(x),m2_catalog_name(y));
+    return m2_name_icmp(x->name,y->name);
 }
 static bool m2_visible(const char *name,uint8_t attr)
 {
@@ -272,18 +297,30 @@ static void m2_scan_consume_entry(void)
         s_m2_scan_finishing=true;
         return;
     }
-    if(len+1u>M2_NAME_POOL_SIZE-s_m2_name_used) {
-        osd_log("M2 FAT DIR NAME POOL FULL: /%s entries=%u bytes=%u",
-                s_m2_scan_path,s_m2_catalog_count,s_m2_name_used);
-        s_m2_scan_failed=true;
-        s_m2_scan_finishing=true;
-        return;
+    if(s_m2_chunk_count==0u ||
+       s_m2_chunk_used+len+1u>M2_CHUNK_BYTES) {
+        if(s_m2_chunk_count>=M2_CHUNK_LIMIT) {
+            osd_log("M2 FAT DIR NAME CHUNK LIMIT: /%s entries=%u",
+                    s_m2_scan_path,s_m2_catalog_count);
+            s_m2_scan_failed=true;
+            s_m2_scan_finishing=true;
+            return;
+        }
+        char *chunk=(char *)m2_try_alloc(M2_CHUNK_BYTES);
+        if(!chunk) {
+            osd_log("M2 FAT DIR LOW HEAP: /%s entries=%u",
+                    s_m2_scan_path,s_m2_catalog_count);
+            s_m2_scan_failed=true;
+            s_m2_scan_finishing=true;
+            return;
+        }
+        s_m2_chunks[s_m2_chunk_count++]=chunk;
+        s_m2_chunk_used=0u;
     }
     m2_browser_entry_t *entry=&s_m2_catalog[s_m2_catalog_count++];
-    /* len <= M2_ENTRY_MAX, checked by m2_visible() above. */
-    entry->name_offset=(uint16_t)s_m2_name_used;
-    memcpy(&s_m2_name_pool[s_m2_name_used],s_m2_fs_job.name,len+1u);
-    s_m2_name_used+=(unsigned)len+1u;
+    entry->name=s_m2_chunks[s_m2_chunk_count-1u]+s_m2_chunk_used;
+    memcpy(entry->name,s_m2_fs_job.name,len+1u);
+    s_m2_chunk_used+=(unsigned)len+1u;
     entry->is_dir=(s_m2_fs_job.attr&AM_DIR_BIT)!=0u;
 }
 
@@ -388,7 +425,7 @@ static uint8_t m2_dir_next(void)
     if(s_m2_catalog_next>=s_m2_catalog_count)
         return MEDIA_RESULT_M2_EOF;
     const m2_browser_entry_t *entry=&s_m2_catalog[s_m2_catalog_next++];
-    const char *name=m2_catalog_name(entry);
+    const char *name=entry->name;
     const size_t n=strlen(name);
     m2_reply_reset();
     m2_reply_byte((uint8_t)(n+1u));
