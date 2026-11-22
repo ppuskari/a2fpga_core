@@ -143,3 +143,30 @@ Gowin place/route, native BL616 SDK build or electrical bus timing.
 - This changes BL616 Stage 2 only; the slot-3 FPGA media mailbox ABI, SPI6
   stereo audio, and Floppy Emu's independent slot-6 ProDOS boot path do not
   change. Hardware listing/playback must be verified after flashing.
+
+### Asynchronous Apple II directory scanning (E1 timeout fix)
+
+Large FAT folders (e.g., 506 ProTracker MODs) formerly blocked the MCU
+mailbox service inside `MEDIA_CMD_M2_OPEN ($22)` until the complete
+directory was read, allocated, and alphabetized. The Apple II's bounded
+ACK poll expired with local error `$E1`. The MCU console uses a different,
+longer wait, explaining why the same SD card worked from the console.
+
+In this revision, `M2_OPEN` validates and captures the path, then ACKs
+without calling FatFS. The mailbox task opens the isolated media DIR
+and reads **four entries per service pass**. Meanwhile, `M2_NEXT ($23)`
+returns `M2_RETRY ($EA)` without putting a record into the reply FIFO.
+After EOF, it closes the DIR, performs a case-insensitive whole-folder sort,
+and enables `NEXT` on the snapshot. The Apple II retries `$EA`
+for up to 8192 requests before returning a bounded failure; actual filesystem
+errors return `$E7`. This does not modify SPI7 register mappings or the
+independent SPI6 HDMI PCM path.
+
+Backward paging uses new `M2_SEEK ($2B)`: send `M2_ARM ($21)`, write
+the two-byte little-endian entry offset via `$C0B5`, and issue `$2B`.
+It changes only the in-memory catalog cursor, not the SD/FatFS directory
+handle or HxCMOD playlist. The Apple ProDOS picker computes
+`offset = page_number * 12` with 16-bit arithmetic and fetches the
+next 12 records. Both the BL616 Stage 2 and updated `A2MEDIA.SYSTEM`
+are required for this async/seek feature. The slot-6 Floppy Emu is
+unaffected.
