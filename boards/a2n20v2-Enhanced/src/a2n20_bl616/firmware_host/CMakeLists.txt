@@ -40,6 +40,14 @@ if(NOT MOD_STORE_FETCH_BYTES MATCHES "^(2048|4096|8192)$")
     message(FATAL_ERROR "MOD_STORE_FETCH_BYTES must be 2048, 4096 or 8192")
 endif()
 sdk_add_compile_definitions(-DMOD_STORE_FETCH_BYTES=${MOD_STORE_FETCH_BYTES})
+# J2R10: speech/audio debug counters and periodic P10 console reports cost
+# MCU cycles and shared FPGA-SPI OSD bandwidth even when MOD is playing.
+# Preserve SSI speech engine, FIFO/error semantics and A3 mode selection.
+set(SSI263_DIAG_COUNTERS 0 CACHE STRING "0=quiet SSI speech telemetry, 1=R10/R11 diagnostic reports")
+if(NOT SSI263_DIAG_COUNTERS MATCHES "^[01]$")
+    message(FATAL_ERROR "SSI263_DIAG_COUNTERS must be 0 or 1")
+endif()
+sdk_add_compile_definitions(-DSSI263_DIAG_COUNTERS=${SSI263_DIAG_COUNTERS})
 # DIAGNOSTIC: intercept the SDK's exception_entry (it only printf's the fault to a
 # UART we can't see) so __wrap_exception_entry can paint mcause/mepc on the overlay.
 sdk_add_link_options(-Wl,--wrap=exception_entry)
