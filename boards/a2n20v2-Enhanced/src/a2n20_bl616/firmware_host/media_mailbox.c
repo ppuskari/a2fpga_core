@@ -159,7 +159,7 @@ static bool m2_visible(const char *name,uint8_t attr)
  * its first successful NEXT then returns the first alphabetized entry.
  * This requires no changes to the physical FPGA SPI7 mailbox protocol. */
 #define M2_SCAN_STEP_ENTRIES 4u
-static bool s_m2_scan_active, s_m2_scan_failed;
+static bool s_m2_scan_active, s_m2_scan_opened, s_m2_scan_failed;
 static char s_m2_scan_path[M2_PATH_MAX];
 static unsigned s_m2_scan_raw, s_m2_scan_filtered, s_m2_scan_long;
 
@@ -167,13 +167,16 @@ static void m2_scan_finish(bool complete)
 {
     fs_req_t req;
     memset(&req,0,sizeof(req));
-    req.op=FSOP_MEDIA_LIST_CLOSE;
-    const int close_fr=disk_fs_request(&req);
-    if(close_fr!=0) {
-        osd_log("M2 FAT DIR CLOSE FAIL: /%s FR=%d",
-                s_m2_scan_path,close_fr);
-        complete=false;
+    if(s_m2_scan_opened) {
+        req.op=FSOP_MEDIA_LIST_CLOSE;
+        const int close_fr=disk_fs_request(&req);
+        if(close_fr!=0) {
+            osd_log("M2 FAT DIR CLOSE FAIL: /%s FR=%d",
+                    s_m2_scan_path,close_fr);
+            complete=false;
+        }
     }
+    s_m2_scan_opened=false;
     s_m2_scan_active=false;
     if(!complete) {
         s_m2_scan_failed=true;
@@ -193,13 +196,14 @@ static void m2_scan_finish(bool complete)
 
 static void m2_scan_cancel(void)
 {
-    if(s_m2_scan_active) {
+    if(s_m2_scan_active && s_m2_scan_opened) {
         fs_req_t req;
         memset(&req,0,sizeof(req));
         req.op=FSOP_MEDIA_LIST_CLOSE;
         (void)disk_fs_request(&req);
-        s_m2_scan_active=false;
     }
+    s_m2_scan_opened=false;
+    s_m2_scan_active=false;
     m2_catalog_clear();
     s_m2_scan_failed=false;
 }
@@ -216,16 +220,10 @@ static uint8_t m2_dir_open(void)
     /* Capture the pathname before any subsequent ARM rewrites s_m2_req. */
     snprintf(s_m2_scan_path,sizeof(s_m2_scan_path),"%s",path);
     s_m2_scan_raw=s_m2_scan_filtered=s_m2_scan_long=0u;
-    fs_req_t req;
-    memset(&req,0,sizeof(req));
-    req.op=FSOP_MEDIA_LIST_OPEN;
-    req.path=s_m2_scan_path;
-    const int fr=disk_fs_request(&req);
-    if(fr!=0) {
-        osd_log("M2 FAT DIR OPEN FAIL: /%s FR=%d",s_m2_scan_path,fr);
-        s_m2_scan_failed=true;
-        return MEDIA_RESULT_M2_FS;
-    }
+    /* The disk task could be busy scanning the console's 500-file folder.
+     * Defer even f_opendir() until AFTER the Apple M2_OPEN ACK, so this
+     * command never waits on FatFS or returns the Apple-side $E1 timeout. */
+    s_m2_scan_opened=false;
     s_m2_scan_active=true;
     return MEDIA_RESULT_OK;
 }
@@ -236,6 +234,22 @@ static uint8_t m2_dir_open(void)
 static void m2_scan_step(void)
 {
     if(!s_m2_scan_active)return;
+    if(!s_m2_scan_opened) {
+        fs_req_t openreq;
+        memset(&openreq,0,sizeof(openreq));
+        openreq.op=FSOP_MEDIA_LIST_OPEN;
+        openreq.path=s_m2_scan_path;
+        const int open_fr=disk_fs_request(&openreq);
+        if(open_fr!=0) {
+            osd_log("M2 FAT DIR OPEN FAIL: /%s FR=%d",
+                    s_m2_scan_path,open_fr);
+            s_m2_scan_active=false;
+            s_m2_scan_failed=true;
+            m2_catalog_clear();
+            return;
+        }
+        s_m2_scan_opened=true;
+    }
     for(unsigned step=0;step<M2_SCAN_STEP_ENTRIES;step++) {
         fs_req_t req;
         memset(&req,0,sizeof(req));
