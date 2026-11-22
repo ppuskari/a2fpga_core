@@ -214,3 +214,37 @@ Compare `OPEN`, `READ`, and `SORT` when navigating into a 506-file folder.
 The measured values and raw entry count identify the actual bottleneck
 without guessing. This diagnostic does not affect the FPGA bitstream,
 Floppy Emu, or MOD audio path.
+
+### Apple IIgs J command and MCU-wide freeze: double catalog memory
+
+Hardware report after both IIe and ROM 3 IIgs folder traversal work:
+**J** (jukebox start at the highlighted file) in `ProTracker/1` with
+~506 entries may apparently halt the Apple app **and MCU USB keyboard**,
+although starting the jukebox from the console works. The MCU
+`vApplicationMallocFailedHook()` permanently disables interrupts and
+halts when heap allocations fail, a credible explanation (not yet
+confirmed without a fault marker). A prolonged SD scan is a second
+possibility.
+
+The M2 Apple FAT browser previously kept **one `pvPortMalloc` string per
+entry** in a 512-pointer catalog; unlike the MCU console picker, this
+catalog stays allocated while `mod_audio_jukebox_start_from_file()`
+starts the independent MOD-thread playlist scan and allocates hundreds
+of complete filenames. On this M2 branch the Apple catalog is now a
+**fixed-size BSS array**, with no per-filename dynamic allocations or
+`vPortFree` calls, reducing heap fragmentation and malloc-failure risk
+while preserving 512-entry capacity, A–Z ordering, `DIR_SEEK`, and
+normal forward/backward paging. It costs ~33 KiB fixed MCU BSS; check
+the actual Stage 2 build/linker memory use before flashing. The
+console jukebox and HxCMOD engine remain unchanged.
+
+The M2 host integration test now enumerates 506 entries, starts the
+selected-file jukebox while the catalog is still active, confirms the
+directory remains usable, and asserts **zero M2 browser heap allocations**.
+Hardware must confirm whether the interrupted keyboard symptom is
+resolved. If the MCU still freezes, inspect the existing fatal diagnostic
+marker (DebugOverlay): `ED E1 E1 E1 ED` means malloc-failure hook,
+`ED E2 <task initials> ED` stack-overflow hook, `EF` is a CPU exception;
+absent those, investigate scheduling / SD scan progress. The `$E1`
+printed by the Apple app is a separate **mailbox ACK** error code and
+does not itself mean FreeRTOS heap exhaustion.
