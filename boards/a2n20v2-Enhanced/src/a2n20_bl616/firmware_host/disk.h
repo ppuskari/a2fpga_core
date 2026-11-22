@@ -117,6 +117,15 @@ typedef struct {
 
 int  disk_fs_request(fs_req_t *r);          /* returns FRESULT */
 
+/* Nonblocking FS broker for the Apple M2 FAT catalog builder. Submit returns
+ * false when the single broker slot is busy; poll returns false until the
+ * disk thread has executed the request. Keep *r and any path/buffer pointers
+ * valid until poll succeeds. Only the submitting thread may poll its request.
+ * The caller MUST eventually poll completion before reusing *r. */
+bool disk_fs_try_submit(fs_req_t *r);
+bool disk_fs_try_complete(fs_req_t *r, int *result);
+
+
 /* True if the path (volume-root relative) is one of the currently mounted
  * disk/HDD images — network services must not overwrite those. */
 bool disk_path_mounted(const char *path);
