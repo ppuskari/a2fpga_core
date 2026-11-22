@@ -361,6 +361,7 @@ static bool  s_pick_fpga;                      /* FPGA bitstream picker mode */
  * other pickers retain their preexisting 64-entry view. */
 #define MOD_PICK_PAGE_SIZE 48
 static int   s_pick_page, s_pick_total;
+static int   s_pick_fs_error;  /* 0=none, 255=timeout, else FatFS FRESULT */
 static bool  s_pick_mod;                       /* runtime .MOD music picker */
 static bool  s_pick_juke_start;                /* choose playlist starting track */
 static char  s_pick_path[SETTINGS_NAME_LEN];   /* current subdir ("" = root) */
@@ -373,6 +374,7 @@ static void picker_load(void)
 {
     s_pick_count = 0;
     s_pick_total = 0;
+    s_pick_fs_error = 255; /* overwritten when scan finishes */
     disk_list_begin(s_pick_path, s_pick_exts);
     for (int waited = 0; waited < 2000; waited += 20) {
         int n = disk_list_poll_page(s_pick_ents,
@@ -381,10 +383,17 @@ static void picker_load(void)
                 &s_pick_total);
         if (n >= 0) {
             s_pick_count = n;
+            s_pick_fs_error=0;
+            break;
+        }
+        if(n < -1) {
+            s_pick_fs_error=-n-2;
             break;
         }
         usb_osal_msleep(20);
     }
+    if(s_pick_fs_error==255)
+        osd_log("PICK DIR TIMEOUT: /%s (2000ms)",s_pick_path);
 }
 
 static void picker_choose(int id)
@@ -558,8 +567,15 @@ static void picker_build(void)
         m->action=picker_choose;
         m->id=-7;
     }
-    if (!s_pick_count)
+    if (s_pick_fs_error) {
+        char fs_error[22];
+        snprintf(fs_error,sizeof fs_error,"ERROR %d",s_pick_fs_error);
+        mi_add(MI_INFO,s_pick_fs_error==255 ?
+               "DIRECTORY SCAN TIMEOUT" : "FAT DIRECTORY READ FAILED",
+               fs_error);
+    } else if (!s_pick_count) {
         mi_add(MI_INFO, "NO MATCHING IMAGES OR FOLDERS", "");
+    }
 }
 
 static const menu_screen_t SCR_PICKER = { "CHOOSE FILE", picker_build };
