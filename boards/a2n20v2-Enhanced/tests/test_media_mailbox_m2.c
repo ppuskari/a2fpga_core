@@ -65,11 +65,13 @@ int disk_fs_request(fs_req_t *r)
     case FSOP_MEDIA_LIST_OPEN:
         open_calls++;
         snprintf(last_open,sizeof last_open,"%s",r->path);
+        if(!strcmp(r->path,"BROKEN"))return 5; /* mock FatFS FR_NO_PATH */
         media_dir_open=true;fs_cursor=0;return 0;
     case FSOP_MEDIA_LIST_CLOSE:
         close_calls++;media_dir_open=false;return 0;
     case FSOP_MEDIA_LIST_NEXT:
         if(!media_dir_open)return -1;
+        if(!strcmp(last_open,"READFAIL"))return 1; /* mock FR_DISK_ERR */
         r->name[0]=0;
         if(stress_mode) {
             if(fs_cursor<28u) {
@@ -219,6 +221,11 @@ int main(void)
     CHECK(command(MEDIA_CMD_M2_RESUME)==MEDIA_RESULT_OK);
     path_cmd("../danger",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_M2_BAD_PATH);
     CHECK(open_calls==2); /* no disk requests for traversal */
+    path_cmd("BROKEN",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_M2_FS);
+    CHECK(open_calls==3 && !media_dir_open);
+    path_cmd("READFAIL",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_M2_FS);
+    CHECK(open_calls==4 && close_calls==3 && !media_dir_open);
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_NOT_OPEN);
     CHECK(command(MEDIA_CMD_STOP)==MEDIA_RESULT_OK && stop_calls==1);
     CHECK(command(MEDIA_CMD_PING)==MEDIA_RESULT_PONG);
     printf("PASS M2 real MCU mailbox: globally sorted FAT catalog across 3 pages, file play, start-file\n");
