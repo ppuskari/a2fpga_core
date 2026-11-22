@@ -70,7 +70,7 @@ if(-not $GowinCli -or -not (Test-Path -LiteralPath $GowinCli -PathType Leaf)) {
 }
 $run=if($Action -eq 'Synthesize'){'run syn'}else{'run all'}
 $cmds="open_project $project`n$run`nexit`n"
-Write-Host "Gowin $Action: $GowinCli" -ForegroundColor Cyan
+Write-Host "Gowin ${Action}: $GowinCli" -ForegroundColor Cyan
 Push-Location $board
 try {
     $cmds | & $GowinCli
