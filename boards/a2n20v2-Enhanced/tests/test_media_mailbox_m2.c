@@ -310,6 +310,7 @@ int main(void)
     /* 506 files are the user's real-world folder size: OPEN must ACK
      * immediately, and 127 bounded steps must build one globally sorted
      * catalog without needing a long 6502 command timeout. */
+    const unsigned chunks_before_large_scan=m2_chunk_allocations;
     stress_mode=2;
     path_cmd("PROTRACKER/1",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
     CHECK(open_calls==2 && close_calls==2 && s_m2_scan_active &&
@@ -319,7 +320,8 @@ int main(void)
     CHECK(s_m2_catalog_count==506 && !s_m2_scan_active &&
           s_m2_directory_open && close_calls==3);
     CHECK(s_m2_chunk_count>0 && s_m2_chunk_count<20);
-    CHECK(m2_chunk_allocations==s_m2_chunk_count);
+    CHECK(m2_chunk_allocations-chunks_before_large_scan==
+          s_m2_chunk_count);
     CHECK(m2_dynamic_allocations==0); /* no fatal pvPortMalloc per file */
     /* J from Apple must be accepted with the 506-entry browser still
      * resident. It must not modify/reclaim the browser catalog. */
