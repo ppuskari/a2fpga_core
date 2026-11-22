@@ -52,15 +52,25 @@ int main(void)
     check(!strcmp(mod_jukebox_track(0),"B.MOD"),"case-insensitive root sort 0");
     check(!strcmp(mod_jukebox_track(1),"c.mod"),"case-insensitive root sort 1");
     check(!mod_jukebox_truncated(),"root not truncated");
+    check(mod_jukebox_find("c.mod")==1,"resume selected final root track");
+    check(mod_jukebox_find("C.MOD")==1,"case-insensitive saved path");
+    check(mod_jukebox_find("B.mod")==0,"starting file at index zero");
+    check(mod_jukebox_find("notfound.mod")==-1,"missing file never falls back");
+    check(mod_jukebox_find("../c.mod")==-1,"no substring fallback");
+    check(mod_jukebox_find(NULL)==-1,"null path never matches");
     check(mod_jukebox_scan("",true),"recursive tree scan");
     check(mod_jukebox_count()==4,"tree has four MOD files");
     check(!strcmp(mod_jukebox_track(0),"A/1.mod"),"nested alphabetic sort 0");
     check(!strcmp(mod_jukebox_track(1),"A/Z/last.mod"),"nested alphabetic sort 1");
     check(!strcmp(mod_jukebox_track(2),"B.MOD"),"nested alphabetic sort 2");
     check(!strcmp(mod_jukebox_track(3),"c.mod"),"nested alphabetic sort 3");
+    check(mod_jukebox_find("A/Z/LAST.MOD")==1,"subdirectory path lookup");
+    check(mod_jukebox_find("c.mod")==3,"selected recursive last track");
+    check(mod_jukebox_find("A/missing.mod")==-1,"no silent track zero");
+    check(mod_jukebox_find("c.mo")==-1,"no prefix match");
     check(!mod_jukebox_scan("../escape",true),"reject parent traversal");
     mod_jukebox_clear();
     check(mod_jukebox_count()==0,"clear playlist releases tracks");
-    puts("PASS J1: root + recursive FAT playlist, sorted, safe paths");
+    puts("PASS J2R11: sorted FAT jukebox, exact 4CH/8CH start-at-file lookup and missing handling");
     return 0;
 }
