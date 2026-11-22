@@ -57,8 +57,11 @@ static volatile mod_pcm_status_t s_state=MOD_PCM_IDLE;
 /* J1 control mailbox: producer(s) publish directory and mode as a seqlock;
  * only the MOD task performs scanning, allocation and all HxCMOD calls. */
 static char s_juke_path[MOD_PATH_CAP];
+/* Atomic with s_juke_path under the existing request seqlock. Empty means
+ * original "begin at sorted index zero" behavior. */
+static char s_juke_start_file[MOD_PATH_CAP];
 static volatile uint32_t s_juke_seq, s_juke_seen, s_juke_recursive;
-static volatile uint32_t s_juke_count_pub, s_nav, s_once;
+static volatile uint32_t s_juke_count_pub, s_nav, s_once, s_resume;
 static volatile uint32_t s_juke_generation;
 static volatile mod_jukebox_scan_state_t s_juke_scan_state=MOD_JUKE_IDLE;
 static void juke_state(mod_jukebox_scan_state_t state)
@@ -66,7 +69,8 @@ static void juke_state(mod_jukebox_scan_state_t state)
     __atomic_store_n(&s_juke_scan_state,state,__ATOMIC_RELEASE);
     __atomic_add_fetch(&s_juke_generation,1u,__ATOMIC_RELEASE);
 }
-static void juke_publish(const char *dir,bool recursive)
+static bool valid_path(const char *path); /* reused by file-start picker */
+static void juke_publish(const char *dir,bool recursive,const char *start_file)
 {
     /* Avoid two producers corrupting the request buffer. */
     uint32_t old;
@@ -82,17 +86,21 @@ static void juke_publish(const char *dir,bool recursive)
     }
     memset(s_juke_path,0,sizeof(s_juke_path));
     memcpy(s_juke_path,dir,strlen(dir)+1u);
+    memset(s_juke_start_file,0,sizeof(s_juke_start_file));
+    if(start_file)memcpy(s_juke_start_file,start_file,strlen(start_file)+1u);
     s_juke_recursive=recursive?1u:0u;
     /* Publish QUEUED before unlocking the request seqlock: the MOD task
      * must not publish SCANNING/READY and then lose it to a late QUEUED. */
     juke_state(MOD_JUKE_QUEUED);
     __atomic_store_n(&s_juke_seq,old+2u,__ATOMIC_RELEASE);
 }
-static bool take_juke(char out[MOD_PATH_CAP],bool *recursive)
+static bool take_juke(char out[MOD_PATH_CAP],bool *recursive,
+                      char start_file[MOD_PATH_CAP])
 {
     uint32_t a=__atomic_load_n(&s_juke_seq,__ATOMIC_ACQUIRE);
     if(!a || (a&1u) || a==s_juke_seen)return false;
     memcpy(out,s_juke_path,MOD_PATH_CAP);
+    memcpy(start_file,s_juke_start_file,MOD_PATH_CAP);
     const bool r=s_juke_recursive!=0;
     uint32_t end=__atomic_load_n(&s_juke_seq,__ATOMIC_ACQUIRE);
     if(a!=end || (end&1u))return false;
@@ -104,13 +112,38 @@ bool mod_audio_jukebox_start(const char *dir,bool recursive)
 {
     if(!dir || strlen(dir)>=MOD_PATH_CAP || strstr(dir,"..") ||
        dir[0]=='/' || strchr(dir,':') || strchr(dir,'\\'))return false;
-    juke_publish(dir,recursive);
+    juke_publish(dir,recursive,NULL);
+    return true;
+}
+/* Scan only the selected MOD's parent folder; begin at its sorted index
+ * and finish at the end of that folder (never silently wrap to track 1).
+ * This requires no FLASH writes: user can choose a restart point any day. */
+bool mod_audio_jukebox_start_from_file(const char *file)
+{
+    if(!valid_path(file))return false;
+    char dir[MOD_PATH_CAP];
+    const char *slash=strrchr(file,'/');
+    const size_t len=slash ? (size_t)(slash-file):0u;
+    if(len>=sizeof(dir))return false;
+    memcpy(dir,file,len);
+    dir[len]=0;
+    juke_publish(dir,false,file);
     return true;
 }
 void mod_audio_jukebox_from_last(bool recursive)
 {
     /* Sentinel 0x01 is not a valid user directory name. */
-    juke_publish("\001",recursive);
+    juke_publish("\001",recursive,NULL);
+}
+bool mod_audio_jukebox_resume(void)
+{
+    /* Same-session shortcut; no flash wear, restarts last heard track at
+     * its beginning. After MCU reboot use picker "START AT FILE". */
+    if(!__atomic_load_n(&s_juke_count_pub,__ATOMIC_ACQUIRE) ||
+       s_state==MOD_PCM_PLAYING || s_state==MOD_PCM_LOADING)
+        return false;
+    __atomic_store_n(&s_resume,1u,__ATOMIC_RELEASE);
+    return true;
 }
 bool mod_audio_next(void)
 {
@@ -366,6 +399,7 @@ static bool player_load(const char *path)
      * accidental stale/8KiB-page builds. */
     osd_log("MOD SMP WIN=4x2048B");
     osd_log("MOD LOG=QUIET1HZ");
+    osd_log("MOD JUKE=STARTFILE");
 #else
     osd_log("MOD SMP WIN=%ux%uB",
             (unsigned)MOD_STORE_WINDOWS,(unsigned)MOD_STORE_FETCH_BYTES);
@@ -466,6 +500,7 @@ static bool playlist_play(unsigned *idx,unsigned start)
 void mod_audio_task(void *arg)
 {
     char requested[MOD_PATH_CAP],jukedir[MOD_PATH_CAP];
+    char juke_start_file[MOD_PATH_CAP];
     bool playing=false,draining=false,juke_active=false,recursive=false;
     unsigned juke_index=0;
     uint32_t blocks=0,window=0;
@@ -475,7 +510,8 @@ void mod_audio_task(void *arg)
     osd_log("MCU MOD: DIRECT HxCMOD->HDMI READY");
     for(;;) {
         const bool selected=take_pending(requested);
-        const bool jukebox=take_juke(jukedir,&recursive);
+        const bool jukebox=take_juke(jukedir,&recursive,juke_start_file);
+        const bool resume=__atomic_exchange_n(&s_resume,0u,__ATOMIC_ACQ_REL)!=0u;
         const bool replay=__atomic_exchange_n(&s_replay,0u,__ATOMIC_ACQ_REL)!=0u;
         const uint32_t nav=__atomic_exchange_n(&s_nav,0u,__ATOMIC_ACQ_REL);
         const bool stop=__atomic_exchange_n(&s_stop,0u,__ATOMIC_ACQ_REL)!=0u;
@@ -507,9 +543,22 @@ void mod_audio_task(void *arg)
             if(mod_jukebox_scan(jukedir,recursive)) {
                 __atomic_store_n(&s_juke_count_pub,mod_jukebox_count(),__ATOMIC_RELEASE);
                 juke_state(MOD_JUKE_READY);
-                juke_index=0;
-                juke_active=playlist_play(&juke_index,0);
-                playing=juke_active;
+                int first=0;
+                if(juke_start_file[0])
+                    first=mod_jukebox_find(juke_start_file);
+                if(first<0) {
+                    /* Filesystem may have changed since the user picked
+                     * a track. Never silently restart at the first MOD. */
+                    juke_active=false;
+                    playing=false;
+                    s_state=MOD_PCM_STOPPED;
+                    juke_state(MOD_JUKE_START_MISSING);
+                    osd_log("MCU JUKE: START MOD NOT FOUND");
+                } else {
+                    juke_index=(unsigned)first;
+                    juke_active=playlist_play(&juke_index,(unsigned)first);
+                    playing=juke_active;
+                }
             }else {
                 juke_state(MOD_JUKE_EMPTY);
                 s_state=MOD_PCM_STOPPED;
@@ -525,6 +574,11 @@ void mod_audio_task(void *arg)
             __atomic_store_n(&s_juke_count_pub,0u,__ATOMIC_RELEASE);
             juke_state(MOD_JUKE_IDLE);
             playing=start_song(requested,0u,0u);
+            blocks=window=0;
+        }else if(resume && mod_jukebox_count() && !playing) {
+            draining=false;
+            juke_active=playlist_play(&juke_index,juke_index);
+            playing=juke_active;
             blocks=window=0;
         }else if(nav && mod_jukebox_count()) {
             unsigned target;
