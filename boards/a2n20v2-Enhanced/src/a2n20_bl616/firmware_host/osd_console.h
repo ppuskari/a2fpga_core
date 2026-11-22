@@ -20,6 +20,8 @@
 #include <stdint.h>
 
 void osd_log(const char *fmt, ...);   /* append one status line (thread-safe) */
+/* MCU menu thread: one buffered FPGA OSD refresh per second, if visible. */
+void osd_console_service(void);
 void osd_console_show(void);          /* take over the screen, show the log */
 void osd_console_hide(void);          /* return the screen to the Apple II */
 void osd_console_hide_if_idle(uint32_t timeout_us); /* auto-dismiss boot console */
