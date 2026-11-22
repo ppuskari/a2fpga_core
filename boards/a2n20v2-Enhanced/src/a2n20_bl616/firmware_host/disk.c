@@ -1253,6 +1253,36 @@ int disk_fs_request(fs_req_t *r)
     return timed_out ? -1 : result;
 }
 
+/* M2 Apple browsing cannot block SPI7's command/ACK service while a slow
+ * SD sector streams through the FPGA register tunnel. Reuse the same broker
+ * as synchronous disk_fs_request(), but allow the mailbox task to submit and
+ * check ONE persistent request without waiting for the disk thread.
+ * The common FS_CLAIM/PEND/DONE/IDLE states serialize all FS producers. */
+bool disk_fs_try_submit(fs_req_t *r)
+{
+    int expected=FS_IDLE;
+    if(!r || !__atomic_compare_exchange_n(&g_fs_state,&expected,FS_CLAIM,
+                                           false,__ATOMIC_ACQ_REL,
+                                           __ATOMIC_ACQUIRE))
+        return false;
+    r->out=0u;
+    g_fs_req=r;
+    __atomic_store_n(&g_fs_state,FS_PEND,__ATOMIC_RELEASE);
+    return true;
+}
+
+bool disk_fs_try_complete(fs_req_t *r, int *result)
+{
+    if(!r || __atomic_load_n(&g_fs_state,__ATOMIC_ACQUIRE)!=FS_DONE ||
+       g_fs_req!=r)
+        return false;
+    const int fr=g_fs_fr;
+    g_fs_req=NULL;
+    __atomic_store_n(&g_fs_state,FS_IDLE,__ATOMIC_RELEASE);
+    if(result)*result=fr;
+    return true;
+}
+
 bool disk_path_mounted(const char *path)
 {
     char full[SETTINGS_NAME_LEN + 4];
