@@ -175,6 +175,15 @@ static void complete_scan(void)
         m2_scan_step();
     }
 }
+/* Send the same raw 16-bit absolute index as the Apple 6502 page-seek. */
+static uint8_t seek_catalog(unsigned offset)
+{
+    CHECK(command(MEDIA_CMD_M2_ARM)==MEDIA_RESULT_OK);
+    CHECK(upload_count+2u<=sizeof upload);
+    upload[(upload_head+upload_count++)%256u]=(uint8_t)offset;
+    upload[(upload_head+upload_count++)%256u]=(uint8_t)(offset>>8);
+    return command(MEDIA_CMD_M2_SEEK);
+}
 int main(void)
 {
     CHECK(command(MEDIA_CMD_PING)==MEDIA_RESULT_PONG);
@@ -259,6 +268,17 @@ int main(void)
                   !memcmp(response+2,"TRACK505.MOD",12));
         }
     }
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_EOF);
+    /* Jump backward 41 pages in O(1), without opening or scanning FAT. */
+    CHECK(seek_catalog(492u)==MEDIA_RESULT_OK);
+    CHECK(open_calls==3 && close_calls==3);
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_OK);
+    CHECK(response_count==14 && response[0]==13 &&
+          !memcmp(response+2,"TRACK492.MOD",12));
+    CHECK(seek_catalog(505u)==MEDIA_RESULT_OK);
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_OK);
+    CHECK(!memcmp(response+2,"TRACK505.MOD",12));
+    CHECK(seek_catalog(507u)==MEDIA_RESULT_M2_BAD_PATH);
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_EOF);
     CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
     CHECK(close_calls==3);
