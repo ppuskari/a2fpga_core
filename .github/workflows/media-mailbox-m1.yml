@@ -114,6 +114,20 @@ jobs:
           assert "VerifyReadback" in s and "CheckRuntime" in s
           print("PASS J2R8 PowerShell wrapper: Stage2-only, no Stage1 path")
           PY
+      - name: J2R9 real SPI driver parity (bulk512 versus legacy)
+        run: |
+          SPI=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware
+          MOCK=boards/a2n20v2-Enhanced/tests/j2r9_spi_mock
+          TEST=boards/a2n20v2-Enhanced/tests/test_fpga_spi_j2r9_bulk.c
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 -DFPGA_SPI_MOD_BULK_XFER=1 \
+            -I"$MOCK" -I"$SPI" "$TEST" "$SPI/fpga_spi.c" -o /tmp/j2r9_bulk
+          /tmp/j2r9_bulk
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 -DFPGA_SPI_MOD_BULK_XFER=0 \
+            -I"$MOCK" -I"$SPI" "$TEST" "$SPI/fpga_spi.c" -o /tmp/j2r9_legacy
+          /tmp/j2r9_legacy
+          # Only host build enables bulk; device-mode build defaults to bytewise.
+          grep -q 'FPGA_SPI_MOD_BULK_XFER 1 CACHE STRING' boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/CMakeLists.txt
+          grep -q 'MOD SPI=BULK512' boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/mcu_mod_audio.c
       - name: Check ROMless slot3 address, preserve other hardware routes
         run: |
           python3 - <<'PY'
