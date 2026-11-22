@@ -33,6 +33,13 @@ if(NOT FPGA_SPI_MOD_BULK_SDRAM MATCHES "^[01]$")
     message(FATAL_ERROR "FPGA_SPI_MOD_BULK_SDRAM must be 0 or 1")
 endif()
 sdk_add_compile_definitions(-DFPGA_SPI_MOD_BULK_SDRAM=${FPGA_SPI_MOD_BULK_SDRAM})
+# J2R9B: keep 8KiB total per-voice SRAM but fetch only 2KiB at a time.
+# 4096 and 8192 allow controlled A/B builds with no source modification.
+set(MOD_STORE_FETCH_BYTES 2048 CACHE STRING "Bytes per blocking sample SPI miss")
+if(NOT MOD_STORE_FETCH_BYTES MATCHES "^(2048|4096|8192)$")
+    message(FATAL_ERROR "MOD_STORE_FETCH_BYTES must be 2048, 4096 or 8192")
+endif()
+sdk_add_compile_definitions(-DMOD_STORE_FETCH_BYTES=${MOD_STORE_FETCH_BYTES})
 # DIAGNOSTIC: intercept the SDK's exception_entry (it only printf's the fault to a
 # UART we can't see) so __wrap_exception_entry can paint mcause/mepc on the overlay.
 sdk_add_link_options(-Wl,--wrap=exception_entry)

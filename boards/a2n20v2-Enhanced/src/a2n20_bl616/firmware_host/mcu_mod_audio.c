@@ -361,6 +361,14 @@ static bool player_load(const char *path)
             (unsigned long)MOD_PATTERN_CACHE_BYTES,
             (unsigned long)fmt.prefix_bytes);
     osd_log("MOD SMP CACHE=8x%uB", (unsigned)MOD_STORE_PAGE);
+#if MOD_STORE_PAGE==8192u && MOD_STORE_FETCH_BYTES==2048u
+    /* Fixed binary signature allows guarded Stage2 wrapper to reject
+     * accidental stale/8KiB-page builds. */
+    osd_log("MOD SMP WIN=4x2048B");
+#else
+    osd_log("MOD SMP WIN=%ux%uB",
+            (unsigned)MOD_STORE_WINDOWS,(unsigned)MOD_STORE_FETCH_BYTES);
+#endif
 #if FPGA_SPI_MOD_BULK_XFER && !FPGA_SPI_MOD_BULK_SDRAM
     osd_log("MOD SPI=PCM512 SDRAM=BYTE");
 #elif FPGA_SPI_MOD_BULK_XFER && FPGA_SPI_MOD_BULK_SDRAM
@@ -606,7 +614,7 @@ void mod_audio_task(void *arg)
                                 (unsigned long)s_min_level);
                         osd_log("SMP SPI B=%lu PG=%u",
                                 (unsigned long)mod_store_read_bytes(),
-                                (unsigned)MOD_STORE_PAGE);
+                                (unsigned)MOD_STORE_FETCH_BYTES);
                         osd_log("PF=%lu B=%lu E=%lu",
                                 (unsigned long)mod_patterns_fetch_count(),
                                 (unsigned long)mod_patterns_read_bytes(),

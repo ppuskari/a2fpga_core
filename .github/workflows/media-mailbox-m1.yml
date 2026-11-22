@@ -86,6 +86,39 @@ jobs:
             "$MCU/mcu_mod_format.c" "$MCU/mcu_mod_sample_store.c" \
             "$MCU/third_party/hxcmod/hxcmod.c" -o /tmp/mod_j2_large_4k
           /tmp/mod_j2_large_4k
+      - name: J2R9B MCU Stage2 PowerShell helper smoke
+        run: |
+          git checkout -B petar/mod-j2r9b-2k-sample-subpages-20261122 HEAD
+          pwsh -NoProfile -File ./J2R9B.ps1 Help
+          pwsh -NoProfile -File ./J2R9B.ps1 SourceState > /tmp/j2r9b_source.txt
+          grep -q 'Git tracked files are clean' /tmp/j2r9b_source.txt
+          grep -q 'Source diff SHA256' /tmp/j2r9b_source.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('J2R9B.ps1').read_text()
+          assert "petar/mod-j2r9b-2k-sample-subpages-20261122" in p
+          assert "'MOD SMP WIN=4x2048B'" in p
+          assert "'MOD SPI=PCM512 SDRAM=BYTE'" in p
+          assert "$flashArgs=@('--stage2', $firmware" in p
+          assert "'--skip-verify'" in p and "'0x40000'" in p
+          assert "--stage1" not in p
+          print("PASS J2R9B guarded Stage2: 2KiB windows, PCM-only bulk")
+          PY
+      - name: J2R9B per-voice PCM window retention and latency regression
+        run: |
+          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
+          for bytes in 2048 4096 8192; do
+            gcc -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O2 \
+              -DMOD_STORE_FETCH_BYTES=${bytes}u -DHXCMOD_MAXCHANNELS=8 \
+              -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware \
+              boards/a2n20v2-Enhanced/tests/test_mcu_mod_sample_windows.c \
+              "$MCU/mcu_mod_sample_store.c" -o /tmp/j2r9b_window_${bytes}
+            /tmp/j2r9b_window_${bytes}
+          done
+          # Verify the actual hardware default is 8KiB retained per voice
+          # but each blocking bytewise SDRAM miss is 2KiB or less.
+          grep -q 'set(MOD_STORE_FETCH_BYTES 2048 CACHE STRING' "$MCU/CMakeLists.txt"
+          grep -q 'MOD SMP WIN=4x2048B' "$MCU/mcu_mod_audio.c"
       - name: Smoke-test J2R8 Stage2-only PowerShell helper
         run: |
           pwsh -NoProfile -File ./J2R8.ps1 Help
