@@ -123,6 +123,14 @@ Gowin place/route, native BL616 SDK build or electrical bus timing.
   The console has 48-entry pages and a **15-second** bounded scan wait instead
   of 2 seconds, so a ~500-file subfolder is 11 pages rather than a false
   empty result or truncated 256-file list.
+- **Cached page navigation:** On first entry into a folder, the disk thread
+  builds one sorted catalog of up to 512 entries. The Previous/Next actions
+  now copy only 48 records from that in-memory snapshot using
+  `disk_list_poll_page`; they never call `disk_list_begin` on a normal
+  page change. Entering another folder, navigating to its parent, or reopening
+  the picker performs a new scan. If the snapshot is unexpectedly pending,
+  paging falls back to a fresh scan rather than showing stale results.
+  This removes the multi-second readdir+sort penalty on every page flip.
 - Both naming conventions are accepted consistently by the console picker,
   the J2R11 jukebox, direct HxCMOD file selection and the Apple mailbox:
   `SONG.MOD` and classic Amiga `MOD.SONG` (case-insensitive). HxCMOD still
