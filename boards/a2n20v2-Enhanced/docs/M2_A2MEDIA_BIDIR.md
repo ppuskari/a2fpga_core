@@ -153,14 +153,25 @@ ACK poll expired with local error `$E1`. The MCU console uses a different,
 longer wait, explaining why the same SD card worked from the console.
 
 In this revision, `M2_OPEN` validates and captures the path, then ACKs
-without calling FatFS. The mailbox task opens the isolated media DIR
-and reads **four entries per service pass**. Meanwhile, `M2_NEXT ($23)`
-returns `M2_RETRY ($EA)` without putting a record into the reply FIFO.
-After EOF, it closes the DIR, performs a case-insensitive whole-folder sort,
-and enables `NEXT` on the snapshot. The Apple II retries `$EA`
-for up to 8192 requests before returning a bounded failure; actual filesystem
-errors return `$E7`. This does not modify SPI7 register mappings or the
-independent SPI6 HDMI PCM path.
+without calling FatFS. Each `OPEN`, `NEXT` or `CLOSE` is submitted to the
+existing *disk-thread* FatFS broker through a **nonblocking** submit/poll
+interface. The MCU mailbox task never waits synchronously for SD I/O and
+continues servicing SPI7 commands during a slow sector read. The broker
+request has persistent storage until completion; `CLOSE` and replacement
+`OPEN` drain pending requests before disposing of an old directory handle.
+While the catalog is being built, `M2_NEXT ($23)` returns `M2_RETRY ($EA)`
+without a reply FIFO frame. After EOF it sorts the full catalog once.
+The Apple II retries `$EA` for up to 32768 command replies, returns
+`$EB` for an overall scan-wait limit, and reserves `$E1` for a *single
+command ACK failure*. Actual filesystem errors return `$E7`. This does
+not modify SPI7 register mappings or the independent SPI6 HDMI PCM path.
+
+**Root-cause correction:** The earlier four-file-per-pass M2 implementation
+still called synchronous `disk_fs_request()` four times *inside* the
+mailbox task. This caused $E1 on real IIe hardware even while the MCU
+console independently navigated the same SD library. Smaller chunk sizes
+would only reduce the likelihood of the timeout; the nonblocking FS broker
+eliminates disk I/O from the SPI7 ACK thread altogether.
 
 Backward paging uses new `M2_SEEK ($2B)`: send `M2_ARM ($21)`, write
 the two-byte little-endian entry offset via `$C0B5`, and issue `$2B`.
