@@ -170,3 +170,36 @@ handle or HxCMOD playlist. The Apple ProDOS picker computes
 next 12 records. Both the BL616 Stage 2 and updated `A2MEDIA.SYSTEM`
 are required for this async/seek feature. The slot-6 Floppy Emu is
 unaffected.
+
+
+### Console folder-list latency and timings
+
+The MCU console's `disk_list_begin` enumerates **only the currently
+selected FAT directory**: one `f_opendir`, one `f_readdir` stream through
+that folder's entries, and one in-memory qsort. It does **not** recursively
+walk each subfolder, unless the user explicitly requests **JUKEBOX: WITH
+SUBFOLDERS** (which uses the separate jukebox scanner). The console's
+Previous/Next 48-entry pages copy from its in-RAM catalog. Entering a
+different folder or navigating up performs another scan.
+
+A `/ProTracker` folder containing just 39 subdirectories should require far
+less directory work than a leaf folder with ~506 MODs. SD I/O can still be
+slow because the current `sdmm.c` implementation transfers each data byte
+through three BL616-to-FPGA SPI register operations (write XFER, poll
+STATUS, read XFER). A 512-byte sector therefore involves at least 1,536
+register operations, excluding command setup and waits. FatFS long
+filenames may occupy multiple 32-byte directory entries each.
+
+To distinguish transport cost from unexpected enumeration, the MCU now
+prints an additional diagnostic after each console folder scan:
+
+```
+PICK DIR: 0:/ProTracker raw=39 dirs=39 mods=0 other=0 prefix=0 long=0 rc=0
+PICK TIMING: /0:/ProTracker
+  OPEN=... READ=... SORT=... ms
+```
+
+Compare `OPEN`, `READ`, and `SORT` when navigating into a 506-file folder.
+The measured values and raw entry count identify the actual bottleneck
+without guessing. This diagnostic does not affect the FPGA bitstream,
+Floppy Emu, or MOD audio path.
