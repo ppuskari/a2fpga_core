@@ -114,6 +114,59 @@ jobs:
           assert "VerifyReadback" in s and "CheckRuntime" in s
           print("PASS J2R8 PowerShell wrapper: Stage2-only, no Stage1 path")
           PY
+      - name: J2R9 PowerShell MCU Stage2 helper smoke
+        run: |
+          # Detached PR HEAD and earlier J2R8 smoke used a temporary branch.
+          git checkout -B petar/mod-j2r9-bulk-spi-cheer-20261121 HEAD
+          pwsh -NoProfile -File ./J2R9.ps1 Help
+          pwsh -NoProfile -File ./J2R9.ps1 SourceState > /tmp/j2r9_source.txt
+          grep -q 'Git tracked files are clean' /tmp/j2r9_source.txt
+          grep -q 'Source diff SHA256' /tmp/j2r9_source.txt
+          # The repository checks in an output .bin; compiling overwrites it.
+          # A changed binary MUST NOT change the source fingerprint, because
+          # its SHA256 is checked separately in the build/flash manifest.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/build/build_out/a2n20_bl616_host_bl616.bin')
+          assert p.is_file(), 'tracked BL616 firmware fixture must exist'
+          p.write_bytes(p.read_bytes()+b'J2R9-CI-GENERATED')
+          PY
+          pwsh -NoProfile -File ./J2R9.ps1 SourceState > /tmp/j2r9_binary.txt
+          diff -u /tmp/j2r9_source.txt /tmp/j2r9_binary.txt
+          git restore -- boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/build/build_out/a2n20_bl616_host_bl616.bin
+          # Conversely, a real tracked source edit MUST alter the fingerprint.
+          printf '\n# J2R9 CI SOURCE CHANGE\n' >> J2R9.ps1
+          pwsh -NoProfile -File ./J2R9.ps1 SourceState > /tmp/j2r9_modified.txt
+          if diff -q /tmp/j2r9_source.txt /tmp/j2r9_modified.txt; then
+            echo "FAIL: actual source edit did not change source fingerprint"
+            exit 1
+          fi
+          git restore -- J2R9.ps1
+          git diff --exit-code
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('J2R9.ps1').read_text()
+          assert "petar/mod-j2r9-bulk-spi-cheer-20261121" in p
+          assert "'MOD SPI=BULK512'" in p
+          assert "$flashArgs=@('--stage2', $firmware" in p
+          assert "'--skip-verify'" in p and "'0x40000'" in p
+          assert "--stage1" not in p
+          print("PASS J2R9 PowerShell: J2R9 source / bulk signature / Stage2 only")
+          PY
+      - name: J2R9 real SPI driver parity (bulk512 versus legacy)
+        run: |
+          SPI=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware
+          MOCK=boards/a2n20v2-Enhanced/tests/j2r9_spi_mock
+          TEST=boards/a2n20v2-Enhanced/tests/test_fpga_spi_j2r9_bulk.c
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 -DFPGA_SPI_MOD_BULK_XFER=1 \
+            -I"$MOCK" -I"$SPI" "$TEST" "$SPI/fpga_spi.c" -o /tmp/j2r9_bulk
+          /tmp/j2r9_bulk
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 -DFPGA_SPI_MOD_BULK_XFER=0 \
+            -I"$MOCK" -I"$SPI" "$TEST" "$SPI/fpga_spi.c" -o /tmp/j2r9_legacy
+          /tmp/j2r9_legacy
+          # Only host build enables bulk; device-mode build defaults to bytewise.
+          grep -q 'FPGA_SPI_MOD_BULK_XFER 1 CACHE STRING' boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/CMakeLists.txt
+          grep -q 'MOD SPI=BULK512' boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/mcu_mod_audio.c
       - name: Check ROMless slot3 address, preserve other hardware routes
         run: |
           python3 - <<'PY'

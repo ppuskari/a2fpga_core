@@ -361,6 +361,11 @@ static bool player_load(const char *path)
             (unsigned long)MOD_PATTERN_CACHE_BYTES,
             (unsigned long)fmt.prefix_bytes);
     osd_log("MOD SMP CACHE=8x%uB", (unsigned)MOD_STORE_PAGE);
+#if FPGA_SPI_MOD_BULK_XFER
+    osd_log("MOD SPI=BULK512");
+#else
+    osd_log("MOD SPI=BYTEWISE");
+#endif
     osd_log("MOD %uCH PATS=%u HDR=%lu",
             (unsigned)fmt.channels,(unsigned)fmt.pattern_count,
             (unsigned long)fmt.header_bytes);

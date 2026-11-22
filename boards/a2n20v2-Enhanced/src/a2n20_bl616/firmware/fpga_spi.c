@@ -8,8 +8,9 @@
  *   GPIO3 = MOSI (SPI0_MOSI, MCU→FPGA)
  *
  * CS# is driven via GPIO (not the SPI peripheral) so that multi-byte
- * transactions stay framed while each byte is a separate SPI frame.
- * This matches FPGA Companion's approach (mcu_hw.c).
+ * transactions remain framed. J2R9 can send XFER header + payload in
+ * bulk without toggling CS# between bytes. Registers stay bytewise and
+ * all existing non-MOD SPI traffic uses the original implementation.
  */
 
 #include <string.h>
@@ -76,6 +77,20 @@ static inline void spi_lock_give(void) {}
 #define XFER_CHUNK_MAX 512
 #define XFER_HDR_LEN   7   /* opcode + sub0 + addr[3] + len[2] */
 #define XFER_DUMMY_LEN 1
+
+/* J2R9 experiment: enable bulk HxCMOD SDRAM reads/writes and HDMI PCM
+ * payload writes ONLY in the USB-host MCU. The device firmware defaults to
+ * the known-good bytewise protocol. A/B fallback: compile the host with
+ * -DFPGA_SPI_MOD_BULK_XFER=0 instead of 1. All register access, overlays,
+ * media mailbox, W5100, disk and other XFER spaces remain legacy bytewise.
+ * The FPGA bitstream / SPI protocol and clock rate are unchanged. */
+#ifndef FPGA_SPI_MOD_BULK_XFER
+#define FPGA_SPI_MOD_BULK_XFER 0
+#endif
+#if FPGA_SPI_MOD_BULK_XFER != 0 && FPGA_SPI_MOD_BULK_XFER != 1
+#error "FPGA_SPI_MOD_BULK_XFER must be 0 or 1"
+#endif
+#define FPGA_SPI_BULK_CS_HOLD_US 3u
 
 static struct bflb_device_s *spi0;
 static struct bflb_device_s *gpio_dev;
@@ -175,6 +190,28 @@ static inline void build_xfer_header(uint8_t space, uint32_t addr, uint16_t chun
     spi_tx_scratch[6] = (uint8_t)((chunk >> 8) & 0xFF);
 }
 
+/* Use the bulk path only for samples/patterns staged in SDRAM and for
+ * direct PCM-to-HDMI FIFO streaming. The shared SPI mutex stays held for
+ * each *whole* public transfer, exactly as in J2R8. */
+static inline bool mod_bulk_write(uint8_t space)
+{
+#if FPGA_SPI_MOD_BULK_XFER
+    return space == FPGA_SPACE_SDRAM || space == FPGA_SPACE_PCM;
+#else
+    (void)space;
+    return false;
+#endif
+}
+static inline bool mod_bulk_read(uint8_t space)
+{
+#if FPGA_SPI_MOD_BULK_XFER
+    return space == FPGA_SPACE_SDRAM;
+#else
+    (void)space;
+    return false;
+#endif
+}
+
 void fpga_spi_xfer_write(uint8_t space, uint32_t addr, const uint8_t *data, uint16_t len)
 {
     uint16_t remaining = len;
@@ -187,8 +224,18 @@ void fpga_spi_xfer_write(uint8_t space, uint32_t addr, const uint8_t *data, uint
         build_xfer_header(space, cur_addr, chunk, 0);  /* DIR=0 (write) */
         memcpy(&spi_tx_scratch[XFER_HDR_LEN], src, chunk);
         cs_assert();
-        for (uint16_t i = 0; i < XFER_HDR_LEN + chunk; i++)
-            spi_xchg_byte(spi_tx_scratch[i]);
+        if (mod_bulk_write(space)) {
+            /* One SPI driver invocation per 512-byte chunk instead of 519
+             * separate one-byte calls. RX must remain non-NULL on BL616. */
+            bflb_spi_poll_exchange(spi0, spi_tx_scratch, spi_rx_scratch,
+                                   (uint32_t)(XFER_HDR_LEN + chunk));
+            /* Allow FPGA's SCLK->54MHz CDC to accept final received byte
+             * before CS# is released (same principle as REG writes). */
+            bflb_mtimer_delay_us(FPGA_SPI_BULK_CS_HOLD_US);
+        } else {
+            for (uint16_t i = 0; i < XFER_HDR_LEN + chunk; i++)
+                spi_xchg_byte(spi_tx_scratch[i]);
+        }
         cs_deassert();
         cur_addr += chunk;
         src      += chunk;
@@ -208,14 +255,23 @@ void fpga_spi_xfer_read(uint8_t space, uint32_t addr, uint8_t *data, uint16_t le
         uint16_t chunk = (remaining > XFER_CHUNK_MAX) ? XFER_CHUNK_MAX : remaining;
         build_xfer_header(space, cur_addr, chunk, 1);  /* DIR=1 (read) */
         cs_assert();
-        /* Send header */
-        for (uint16_t i = 0; i < XFER_HDR_LEN; i++)
-            spi_xchg_byte(spi_tx_scratch[i]);
-        /* Dummy byte */
-        spi_xchg_byte(0xFF);
-        /* Read payload */
-        for (uint16_t i = 0; i < chunk; i++)
-            dst[i] = spi_xchg_byte(0xFF);
+        if (mod_bulk_read(space)) {
+            /* Header, mandatory read dummy and payload are one continuous
+             * CS# frame. Never copy the header/dummy RX bytes to dst. */
+            memset(&spi_tx_scratch[XFER_HDR_LEN], 0xFF,
+                   XFER_DUMMY_LEN + chunk);
+            bflb_spi_poll_exchange(spi0, spi_tx_scratch, spi_rx_scratch,
+                                   (uint32_t)(XFER_HDR_LEN + XFER_DUMMY_LEN + chunk));
+            memcpy(dst, &spi_rx_scratch[XFER_HDR_LEN + XFER_DUMMY_LEN],chunk);
+            bflb_mtimer_delay_us(FPGA_SPI_BULK_CS_HOLD_US);
+        } else {
+            /* Known-good bytewise path: keep for other subsystems and A/B. */
+            for (uint16_t i = 0; i < XFER_HDR_LEN; i++)
+                spi_xchg_byte(spi_tx_scratch[i]);
+            spi_xchg_byte(0xFF);
+            for (uint16_t i = 0; i < chunk; i++)
+                dst[i] = spi_xchg_byte(0xFF);
+        }
         cs_deassert();
         cur_addr += chunk;
         dst      += chunk;
