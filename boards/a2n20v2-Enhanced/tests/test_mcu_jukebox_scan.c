@@ -84,6 +84,14 @@ int main(void)
     check(!mod_jukebox_scan("../escape",true),"reject parent traversal");
     mod_jukebox_clear();
     check(mod_jukebox_count()==0,"clear playlist releases tracks");
-    puts("PASS J2R11: sorted FAT jukebox, exact start-file lookup and missing handling");
+    reject_malloc=true;
+    check(!mod_jukebox_scan("",false),
+          "recoverable jukebox OOM must fail without fatal FreeRTOS hook");
+    reject_malloc=false;
+    check(mod_jukebox_count()==0,"failed OOM scan leaves no playlist");
+    check(mod_jukebox_scan("",false),"scan recovers after low-heap condition");
+    check(mod_jukebox_count()==3,"recovered playlist contains all MODs");
+    mod_jukebox_clear();
+    puts("PASS J2R11: sorted FAT jukebox, exact start-file lookup and recoverable OOM");
     return 0;
 }
