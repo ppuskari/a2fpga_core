@@ -22,7 +22,8 @@ static unsigned upload_head,upload_count,response_count;
 static uint8_t fake_cmd,fake_seq,fake_ack,fake_result;
 static bool pending;
 static bool fake_hw=true,fake_usb;
-static bool media_dir_open, stress_mode;
+static bool media_dir_open;
+static unsigned stress_mode;
 static unsigned fs_cursor,open_calls,close_calls,play_calls,juke_calls,stop_calls;
 static char last_open[128],last_play[128],last_juke[128];
 static bool now_playing_active=true, now_snapshot_valid=true;
@@ -74,8 +75,10 @@ int disk_fs_request(fs_req_t *r)
         if(!strcmp(last_open,"READFAIL"))return 1; /* mock FR_DISK_ERR */
         r->name[0]=0;
         if(stress_mode) {
-            if(fs_cursor<28u) {
-                snprintf(r->name,sizeof r->name,"TRACK%03u.MOD",27u-fs_cursor);
+            const unsigned total=stress_mode==2u?506u:28u;
+            if(fs_cursor<total) {
+                snprintf(r->name,sizeof r->name,"TRACK%03u.MOD",
+                         total-1u-fs_cursor);
                 r->attr=0;
             }
             fs_cursor++;
@@ -162,6 +165,16 @@ static void path_cmd(const char *path,uint8_t cmd,uint8_t expected)
     send_bytes(path,true);
     CHECK(command(cmd)==expected);
 }
+/* Exercise exactly the same 4-entry-per-pass work done by the MCU task.
+ * An OPEN must ACK before any scan, and NEXT must report RETRY until ready. */
+static void complete_scan(void)
+{
+    unsigned passes=0u;
+    while(s_m2_scan_active) {
+        CHECK(++passes<200u);
+        m2_scan_step();
+    }
+}
 int main(void)
 {
     CHECK(command(MEDIA_CMD_PING)==MEDIA_RESULT_PONG);
@@ -185,7 +198,13 @@ int main(void)
     CHECK(response_count==6 && response[0]==5 && response[1]==MOD_PCM_PLAYING &&
           response[2]==3 && response[4]==41);
     path_cmd("MODS",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
-    CHECK(!media_dir_open && open_calls==1 && close_calls==1 && !strcmp(last_open,"MODS"));
+    CHECK(media_dir_open && s_m2_scan_active && close_calls==0 &&
+          open_calls==1 && !strcmp(last_open,"MODS"));
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_RETRY);
+    CHECK(response_count==6); /* RETRY must not overwrite prior STATUS FIFO */
+    complete_scan();
+    CHECK(s_m2_directory_open && !s_m2_scan_failed &&
+          !media_dir_open && close_calls==1);
     CHECK(command(MEDIA_CMD_M2_NEXT)==0);
     CHECK(response_count==7 && response[0]==6 && response[1]==1 &&
           !memcmp(response+2,"ALBUM",5));
@@ -206,7 +225,10 @@ int main(void)
      * regardless of the page size (12), without rescanning between pages. */
     stress_mode=true;
     path_cmd("MODS",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
-    CHECK(open_calls==2 && close_calls==2 && !media_dir_open);
+    CHECK(open_calls==2 && close_calls==1 && media_dir_open);
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_RETRY);
+    complete_scan();
+    CHECK(close_calls==2 && !media_dir_open);
     for(unsigned i=0;i<28u;i++) {
         char expected[32];
         snprintf(expected,sizeof expected,"TRACK%03u.MOD",i);
@@ -217,22 +239,57 @@ int main(void)
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_EOF);
     CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
     CHECK(close_calls==2);
-    stress_mode=false;
+    /* 506 files are the user's real-world folder size: OPEN must ACK
+     * immediately, and 127 bounded steps must build one globally sorted
+     * catalog without needing a long 6502 command timeout. */
+    stress_mode=2;
+    path_cmd("PROTRACKER/1",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
+    CHECK(open_calls==3 && close_calls==2 && s_m2_scan_active);
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_RETRY);
+    complete_scan();
+    CHECK(s_m2_catalog_count==506 && !s_m2_scan_active &&
+          s_m2_directory_open && close_calls==3);
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_OK);
+    CHECK(response_count==14 && response[0]==13 && response[1]==0 &&
+          !memcmp(response+2,"TRACK000.MOD",12));
+    for(unsigned i=1;i<506u;i++) {
+        CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_OK);
+        if(i==505u) {
+            CHECK(response_count==14 && response[0]==13 &&
+                  !memcmp(response+2,"TRACK505.MOD",12));
+        }
+    }
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_EOF);
+    CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
+    CHECK(close_calls==3);
+    stress_mode=0;
     path_cmd("MODS/CHEER.MOD",MEDIA_CMD_M2_PLAY,MEDIA_RESULT_OK);
     CHECK(play_calls==1 && !strcmp(last_play,"MODS/CHEER.MOD"));
     path_cmd("MODS/3edges.mod",MEDIA_CMD_M2_START,MEDIA_RESULT_OK);
     CHECK(juke_calls==1 && !strcmp(last_juke,"MODS/3edges.mod"));
     CHECK(command(MEDIA_CMD_M2_RESUME)==MEDIA_RESULT_OK);
     path_cmd("../danger",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_M2_BAD_PATH);
-    CHECK(open_calls==2); /* no disk requests for traversal */
+    CHECK(open_calls==3); /* no disk requests for traversal */
     path_cmd("BROKEN",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_M2_FS);
-    CHECK(open_calls==3 && !media_dir_open);
-    path_cmd("READFAIL",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_M2_FS);
-    CHECK(open_calls==4 && close_calls==3 && !media_dir_open);
+    CHECK(open_calls==4 && !media_dir_open);
+    path_cmd("READFAIL",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
+    CHECK(open_calls==5 && close_calls==3 && media_dir_open);
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_RETRY);
+    complete_scan();
+    CHECK(close_calls==4 && !media_dir_open && s_m2_scan_failed);
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_FS);
+    CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_NOT_OPEN);
+    /* Cancel a still-scanning directory, then reopen without stale entries. */
+    path_cmd("MODS",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
+    CHECK(s_m2_scan_active && media_dir_open);
+    CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
+    CHECK(!s_m2_scan_active && !media_dir_open &&
+          command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_NOT_OPEN);
+    CHECK(close_calls==5);
     CHECK(command(MEDIA_CMD_STOP)==MEDIA_RESULT_OK && stop_calls==1);
     CHECK(command(MEDIA_CMD_PING)==MEDIA_RESULT_PONG);
-    printf("PASS M2 real MCU mailbox: globally sorted FAT catalog across 3 pages, file play, start-file\n");
+    printf("PASS M2 MCU mailbox: async OPEN/RETRY, 506-file sorted catalog, cancellation, file play\n");
     printf("PASS M2 protocol: M1 compatibility, live now-playing frame, source/status, path validation\n");
     return 0;
 }
