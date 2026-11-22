@@ -23,7 +23,12 @@
 module ssi263_hybrid_bridge #(
     parameter integer PCM_DEPTH=2048,
     parameter integer START_WATERMARK=512,
-    parameter integer EVENT_DEPTH=256
+    parameter integer EVENT_DEPTH=256,
+    // J2R10: disable two nonessential 16-bit SSI underrun/overrun
+    // statistics counters in the Enhanced physical build, retaining
+    // event-overflow fault detection and the exact status register ABI.
+    // Default ON for old RTL simulation testbenches.
+    parameter bit ENABLE_PERF_COUNTERS=1'b1
 )(
     input wire clk_i,
     input wire reset_n_i,
@@ -219,7 +224,7 @@ module ssi263_hybrid_bridge #(
                             pcm_mem[pcm_wrptr_r[PCM_AW-1:0]]<=
                                 {spi_wr_data_i,pcm_lo_r};
                             pcm_wrptr_r<=pcm_wrptr_r+1'b1;
-                        end else if(overrun_r!=16'hffff)
+                        end else if(ENABLE_PERF_COUNTERS && overrun_r!=16'hffff)
                             overrun_r<=overrun_r+1'b1;
                     end
                 end
@@ -242,7 +247,7 @@ module ssi263_hybrid_bridge #(
                             speech_pcm_o<=0;
                             if(playing_r && pcm_count_w==0)begin
                                 playing_r<=0;
-                                if(underrun_r!=16'hffff)
+                                if(ENABLE_PERF_COUNTERS && underrun_r!=16'hffff)
                                     underrun_r<=underrun_r+1'b1;
                             end else if(pcm_count_w>=START_WATERMARK)
                                 playing_r<=1;
