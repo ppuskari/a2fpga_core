@@ -85,7 +85,9 @@ int main(void)
     CHECK(spi_reads==8u*resident+1u);
     const uint32_t cached_at=13u;
     CHECK(read_at(cached_at,0u)==value_at(cached_at));
-    CHECK(spi_reads==8u*resident+1u);
+    /* With a single 8KiB window the new page evicts page zero;
+     * multi-window builds retain page zero. */
+    CHECK(spi_reads==8u*resident+(resident==1u?2u:1u));
     const uint32_t evicted_at=(uint32_t)(resident-1u)*MOD_STORE_FETCH_BYTES+23u;
     CHECK(read_at(evicted_at,0u)==value_at(evicted_at));
     CHECK(spi_reads==8u*resident+2u);
