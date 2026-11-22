@@ -27,6 +27,13 @@
 #include "ssi263_hybrid.h"
 #include "ssi263_digital_idle.h"
 
+/* J2R10: remove nonessential R10/R11 speech profiling and steady P10 logs.
+ * Audio synthesis, event FIFO sequencing, overflow checks and ACK paths
+ * remain active. Explicitly opt in when revisiting SSI263 development. */
+#ifndef SSI263_DIAG_COUNTERS
+#define SSI263_DIAG_COUNTERS 0
+#endif
+
 #define SSI_PCM_SPACE      4u
 #define SSI_EVENTS_SPACE   5u
 #define SSI_STATUS_ADDR    0x800000u
@@ -133,8 +140,10 @@ void ssi263_hybrid_task(void *arg)
         return;
     }
     const unsigned pcm_hz=44100u/pcm_rate_div;
+#if SSI263_DIAG_COUNTERS
     const uint32_t block_budget_us=(uint32_t)
           ((uint64_t)BLOCK_SAMPLES*1000000u*pcm_rate_div/44100u);
+#endif
     ssi263 *chip=ssi263_new(&params,ssi263_default_rom(),(real)pcm_hz);
     if(!chip) {
         osd_log("P10 SSI263: MODEL INIT FAILED");
@@ -143,26 +152,34 @@ void ssi263_hybrid_task(void *arg)
     }
     uint16_t expect_seq=0;
     bool seq_valid=false,active=false,fault=false;
+#if SSI263_DIAG_COUNTERS
     uint32_t total_blocks=0,slow_blocks=0,late_events=0,last_report_ms=0;
     uint32_t prev_blocks=0,peak_model_us=0,peak_spi_us=0;
     uint32_t over_budget_blocks=0,prev_over_budget=0;
     uint32_t report_interval_ms=10000u;
+#endif
     ssi263_digital_idle idle;
     ssi263_digital_idle_init(&idle,pcm_hz,SSI263_IDLE_QUIET_MS);
+#if SSI263_DIAG_COUNTERS
     uint32_t prev_skipped_blocks=0u;
+#endif
 
     ring_reset();
     (void)read_status(); /* re-read after reset/rate selection for capability */
     bool pcm_suspend_supported=(status_buf[26]==SSI_SUSPEND_CAP);
     bool pcm_suspended=false;
     uint64_t suspend_begin_us=0;
+#if SSI263_DIAG_COUNTERS
     uint32_t pcm_pause_count=0,pcm_resume_count=0,pcm_pause_failures=0;
+#endif
+#if SSI263_DIAG_COUNTERS
     osd_log("P10 SSI263: Pico C hybrid online");
     osd_log("P10 SOURCE=%uHZ DIV=%u",pcm_hz,pcm_rate_div);
     osd_log("P10 R10: NATIVE ATTACK, NO CARRIER");
     osd_log("P10 R11: SPI PCM PAUSE CAP=%u",(unsigned)pcm_suspend_supported);
     osd_log("P10 R10: IDLE SKIP AFTER 2500MS");
     osd_log("P10 R8: FAST VOICED COS LUT512");
+#endif
     for(;;) {
         if(!read_status()) {
             active=false;seq_valid=false;fault=true;
@@ -180,13 +197,17 @@ void ssi263_hybrid_task(void *arg)
              * leave the event FIFO intact and retry; no first phoneme lost. */
             if(pcm_suspended) {
                 if(!set_pcm_suspend(false)) {
+#if SSI263_DIAG_COUNTERS
                     ++pcm_pause_failures;
+#endif
                     osd_log("P10 R11: PCM RESUME ACK FAILED");
                     vTaskDelay(pdMS_TO_TICKS(2));
                     continue;
                 }
                 pcm_suspended=false;
+#if SSI263_DIAG_COUNTERS
                 ++pcm_resume_count;
+#endif
                 uint64_t now_us=bflb_mtimer_get_time_us();
                 if(now_us>suspend_begin_us) {
                     /* Lazy virtual-time catchup. The model was already
@@ -205,7 +226,9 @@ void ssi263_hybrid_task(void *arg)
                 uint32_t stamp=read32(e+4);
                 if(seq_valid && seq!=expect_seq) {
                     fault=true;
+#if SSI263_DIAG_COUNTERS
                     ++late_events;
+#endif
                 }
                 expect_seq=(uint16_t)(seq+1u);
                 seq_valid=true;
@@ -238,7 +261,9 @@ void ssi263_hybrid_task(void *arg)
         const unsigned free_space=(unsigned)read16(status_buf+6);
         if(active && !pcm_suspended && buffered<TARGET_BUFFER &&
            free_space>=BLOCK_SAMPLES) {
+#if SSI263_DIAG_COUNTERS
             uint64_t begin=bflb_mtimer_get_time_us();
+#endif
             if(ssi263_digital_idle_can_skip(&idle,ssi263_request(chip)!=0)) {
                 /* Software model time advances, but the costly per-sample
                  * filter/glottal/noise synthesis is skipped. No change to
@@ -264,8 +289,11 @@ void ssi263_hybrid_task(void *arg)
                 pcm_buf[j*2]=(uint8_t)v;
                 pcm_buf[j*2+1]=(uint8_t)(v>>8);
             }
+#if SSI263_DIAG_COUNTERS
             uint64_t end_model=bflb_mtimer_get_time_us();
+#endif
             fpga_spi_xfer_write(SSI_PCM_SPACE,0,pcm_buf,BLOCK_BYTES);
+#if SSI263_DIAG_COUNTERS
             uint64_t end_spi=bflb_mtimer_get_time_us();
             uint32_t model_us=(uint32_t)(end_model-begin);
             uint32_t spi_us=(uint32_t)(end_spi-end_model);
@@ -273,6 +301,7 @@ void ssi263_hybrid_task(void *arg)
             if(model_us>peak_model_us)peak_model_us=model_us;
             if(spi_us>peak_spi_us)peak_spi_us=spi_us;
             ++total_blocks;
+#endif
             /* Enter FPGA PCM suspension only after the same R10 2.5s
              * exact-zero/A-R qualification. The FPGA flushes queued
              * zeros and outputs silence without underrun accounting.
@@ -281,9 +310,13 @@ void ssi263_hybrid_task(void *arg)
                 if(set_pcm_suspend(true)) {
                     pcm_suspended=true;
                     suspend_begin_us=bflb_mtimer_get_time_us();
+#if SSI263_DIAG_COUNTERS
                     ++pcm_pause_count;
+#endif
                 } else {
+#if SSI263_DIAG_COUNTERS
                     ++pcm_pause_failures;
+#endif
                     osd_log("P10 R11: PCM PAUSE ACK FAILED");
                     /* A paused FPGA that cannot ACK is not safe for audio.
                      * Explicit ring reset clears suspend, so fall back
@@ -296,13 +329,16 @@ void ssi263_hybrid_task(void *arg)
             /* 128 samples: 2.902/5.805/11.610 ms at div 1/2/4.
              * Scale the prior 2.5 ms guard with the source rate so SLOW
              * means comparable headroom across all three modes. */
+#if SSI263_DIAG_COUNTERS
             if(total_us>2500u*pcm_rate_div)++slow_blocks;
             if(total_us>block_budget_us)++over_budget_blocks;
+#endif
         } else {
             // Yield voluntarily even under high-priority audio service;
             // leave USB/SD/virtual-disk network firmware responsive.
             vTaskDelay(pdMS_TO_TICKS(1));
         }
+#if SSI263_DIAG_COUNTERS
         uint32_t ms=(uint32_t)bflb_mtimer_get_time_ms();
         if((uint32_t)(ms-last_report_ms)>=report_interval_ms) {
             uint32_t elapsed_ms=(uint32_t)(ms-last_report_ms);
@@ -341,5 +377,6 @@ void ssi263_hybrid_task(void *arg)
             peak_model_us=0;
             peak_spi_us=0;
         }
+#endif
     }
 }
