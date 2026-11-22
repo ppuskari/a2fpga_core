@@ -89,6 +89,20 @@ jobs:
       - name: Smoke-test J2R8 Stage2-only PowerShell helper
         run: |
           pwsh -NoProfile -File ./J2R8.ps1 Help
+          # On pull_request checkout HEAD is detached. Give the helper the
+          # expected branch name in the throwaway CI workspace.
+          git checkout -B petar/mod-j2r8-16kpattern-8ksample-20261121 HEAD
+          pwsh -NoProfile -File ./J2R8.ps1 SourceState > /tmp/j2r8_clean.txt
+          grep -q 'Git tracked files are clean' /tmp/j2r8_clean.txt
+          printf '\n# CI-only tracked change\n' >> J2R8.ps1
+          pwsh -NoProfile -File ./J2R8.ps1 SourceState > /tmp/j2r8_dirty.txt
+          grep -q 'Source diff SHA256' /tmp/j2r8_dirty.txt
+          if cmp -s /tmp/j2r8_clean.txt /tmp/j2r8_dirty.txt; then
+            echo 'ERROR: modified tracked source did not change source-state output'
+            exit 1
+          fi
+          git restore J2R8.ps1
+          git diff --exit-code
           python3 - <<'PY'
           from pathlib import Path
           s=Path('J2R8.ps1').read_text()
