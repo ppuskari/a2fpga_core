@@ -18,6 +18,14 @@ sdk_add_compile_definitions(-DPBUF_POOL_SIZE=16 -DPBUF_POOL_BUFSIZE=1600)
 # Multi-threaded SPI access (overlay writers + W5100 bridge task) -> enable the
 # FreeRTOS mutex in the shared fpga_spi.c. The device build omits this (no FreeRTOS).
 sdk_add_compile_definitions(-DFPGA_SPI_THREADSAFE)
+# J2R9 MCU-only MOD SPI acceleration; no FPGA bitstream changes.
+# Change to 0 in a separate local source checkout for known-good bytewise A/B.
+# Do NOT enable this for the non-host/device-mode build.
+set(FPGA_SPI_MOD_BULK_XFER 1 CACHE STRING "MOD SDRAM/PCM bulk SPI: 1=on 0=legacy")
+if(NOT FPGA_SPI_MOD_BULK_XFER MATCHES "^[01]$")
+    message(FATAL_ERROR "FPGA_SPI_MOD_BULK_XFER must be 0 or 1")
+endif()
+sdk_add_compile_definitions(-DFPGA_SPI_MOD_BULK_XFER=${FPGA_SPI_MOD_BULK_XFER})
 # DIAGNOSTIC: intercept the SDK's exception_entry (it only printf's the fault to a
 # UART we can't see) so __wrap_exception_entry can paint mcause/mepc on the overlay.
 sdk_add_link_options(-Wl,--wrap=exception_entry)
