@@ -359,6 +359,23 @@ int main(void)
     CHECK(!s_m2_scan_active && !media_dir_open &&
           command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_NOT_OPEN);
     CHECK(close_calls==5);
+    /* A new folder selection while the SD worker still owns an OPEN request
+     * must never overwrite that pending request/path buffer. Drain old OPEN,
+     * close its directory and begin new catalog without delaying the ACK. */
+    const unsigned opens_before=open_calls,closes_before=close_calls;
+    path_cmd("PROTRACKER/1",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
+    m2_scan_step(); /* submit open; disk thread has not serviced it */
+    CHECK(open_calls==opens_before && s_m2_fs_stage==M2_FS_OPEN);
+    path_cmd("MODS",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
+    CHECK(s_m2_abort_requested && s_m2_restart_requested);
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_RETRY);
+    complete_scan();
+    CHECK(open_calls==opens_before+2 && close_calls==closes_before+2);
+    CHECK(!strcmp(last_open,"MODS") && s_m2_directory_open &&
+          s_m2_catalog_count==4);
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_OK);
+    CHECK(response[1]==1 && !memcmp(response+2,"ALBUM",5));
+    CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
     CHECK(command(MEDIA_CMD_STOP)==MEDIA_RESULT_OK && stop_calls==1);
     CHECK(command(MEDIA_CMD_PING)==MEDIA_RESULT_PONG);
     printf("PASS M2 MCU mailbox: async OPEN/RETRY, 506-file sorted catalog, cancellation, file play\n");
