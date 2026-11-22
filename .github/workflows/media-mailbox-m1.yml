@@ -122,6 +122,27 @@ jobs:
           pwsh -NoProfile -File ./J2R9.ps1 SourceState > /tmp/j2r9_source.txt
           grep -q 'Git tracked files are clean' /tmp/j2r9_source.txt
           grep -q 'Source diff SHA256' /tmp/j2r9_source.txt
+          # The repository checks in an output .bin; compiling overwrites it.
+          # A changed binary MUST NOT change the source fingerprint, because
+          # its SHA256 is checked separately in the build/flash manifest.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/build/build_out/a2n20_bl616_host_bl616.bin')
+          assert p.is_file(), 'tracked BL616 firmware fixture must exist'
+          p.write_bytes(p.read_bytes()+b'J2R9-CI-GENERATED')
+          PY
+          pwsh -NoProfile -File ./J2R9.ps1 SourceState > /tmp/j2r9_binary.txt
+          diff -u /tmp/j2r9_source.txt /tmp/j2r9_binary.txt
+          git restore -- boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/build/build_out/a2n20_bl616_host_bl616.bin
+          # Conversely, a real tracked source edit MUST alter the fingerprint.
+          printf '\n# J2R9 CI SOURCE CHANGE\n' >> J2R9.ps1
+          pwsh -NoProfile -File ./J2R9.ps1 SourceState > /tmp/j2r9_modified.txt
+          if diff -q /tmp/j2r9_source.txt /tmp/j2r9_modified.txt; then
+            echo "FAIL: actual source edit did not change source fingerprint"
+            exit 1
+          fi
+          git restore -- J2R9.ps1
+          git diff --exit-code
           python3 - <<'PY'
           from pathlib import Path
           p=Path('J2R9.ps1').read_text()
