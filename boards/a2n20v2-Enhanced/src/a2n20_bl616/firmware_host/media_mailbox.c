@@ -383,8 +383,11 @@ void media_mailbox_task(void *arg)
     (void)arg;
     for(;;){
         const bool online=mb_service_once();
-        if(online && !s_prev_online)
+        if(online && !s_prev_online) {
             osd_log("M1 ROMLESS MEDIA: SLOT3 SPI7 READY");
+            if(s_m2_hw)
+                osd_log("M2 FAT REPLY=YES");
+        }
         if(!online && s_prev_online)
             osd_log("M1 MEDIA: FPGA MAILBOX LOST");
         s_prev_online=online;
