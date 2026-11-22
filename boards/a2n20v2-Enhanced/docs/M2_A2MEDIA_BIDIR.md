@@ -230,13 +230,16 @@ The M2 Apple FAT browser previously kept **one `pvPortMalloc` string per
 entry** in a 512-pointer catalog; unlike the MCU console picker, this
 catalog stays allocated while `mod_audio_jukebox_start_from_file()`
 starts the independent MOD-thread playlist scan and allocates hundreds
-of complete filenames. On this M2 branch the Apple catalog is now a
-**fixed-size BSS array**, with no per-filename dynamic allocations or
-`vPortFree` calls, reducing heap fragmentation and malloc-failure risk
-while preserving 512-entry capacity, A–Z ordering, `DIR_SEEK`, and
-normal forward/backward paging. It costs ~33 KiB fixed MCU BSS; check
-the actual Stage 2 build/linker memory use before flashing. The
-console jukebox and HxCMOD engine remain unchanged.
+of complete filenames. On this M2 branch the Apple catalog is now **a compact 24-KiB
+static name pool plus 512 small index records**, with no per-filename
+heap allocations or `vPortFree` calls. It preserves A–Z ordering,
+`DIR_SEEK`, and normal forward/backward paging. The actual capacity
+is the smaller of 512 files and the 24-KiB name-pool budget: 506
+normal ProTracker names fit, but a pathological directory with
+hundreds of almost-63-character filenames returns a bounded
+filesystem error rather than calling the fatal malloc hook. Check
+Stage 2's actual linker/BSS use before flashing. The MCU console
+jukebox and HxCMOD engine remain unchanged.
 
 The M2 host integration test now enumerates 506 entries, starts the
 selected-file jukebox while the catalog is still active, confirms the
