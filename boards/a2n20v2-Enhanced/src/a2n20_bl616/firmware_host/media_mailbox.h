@@ -21,6 +21,27 @@
 #define MEDIA_CMD_BEGIN_TEST    0x10u
 #define MEDIA_CMD_END_TEST      0x11u
 #define MEDIA_CMD_ABORT_TEST    0x12u
+/* M2 extension: M1+Apple ABI remains protocol=1 for compatibility.
+ * CAPS returns 2 only when new M2 FPGA response FIFO is present.
+ * Apple write $C0B5 -> request FIFO; Apple read $C0B5 -> reply FIFO.
+ * Status $C0B3 bit7: REPLY_READY. Response is [payload_len,type,...].
+ * ARM, then push NUL-terminated ASCII relative path, then OPEN/PLAY/START. */
+#define MEDIA_CMD_M2_CAPS      0x20u
+#define MEDIA_CMD_M2_ARM       0x21u
+#define MEDIA_CMD_M2_OPEN      0x22u
+#define MEDIA_CMD_M2_NEXT      0x23u
+#define MEDIA_CMD_M2_CLOSE     0x24u
+#define MEDIA_CMD_M2_PLAY      0x25u
+#define MEDIA_CMD_M2_START     0x26u
+#define MEDIA_CMD_M2_RESUME    0x27u
+#define MEDIA_CMD_M2_SOURCE    0x28u
+#define MEDIA_CMD_M2_STATUS    0x29u
+#define MEDIA_RESULT_M2_EOF    0xD0u
+#define MEDIA_RESULT_M2_BAD_PATH 0xE6u
+#define MEDIA_RESULT_M2_FS     0xE7u
+#define MEDIA_RESULT_M2_OLD_FPGA 0xE8u
+#define MEDIA_RESULT_M2_NOT_OPEN 0xE9u
+
 
 #define MEDIA_RESULT_OK         0x00u
 #define MEDIA_RESULT_PONG       0xA5u
