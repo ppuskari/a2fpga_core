@@ -21,6 +21,12 @@ jobs:
           yosys -Q -T -p 'read_verilog -sv boards/a2n20v2-Enhanced/hdl/media_mailbox_slot3.sv; synth -top media_mailbox_slot3; stat' > /tmp/m1_yosys.log
           grep -q 'media_mailbox_slot3' /tmp/m1_yosys.log
           tail -n 38 /tmp/m1_yosys.log
+      - name: Verify committed SSI263 voice and die-derived parameter ROMs
+        run: |
+          python3 tools/generate_ssi263_voice.py --check
+          python3 tools/generate_ssi263_p8_roms.py --check
+          python3 tools/generate_ssi263_p9_nas_rom.py --check
+          python3 tools/generate_ssi263_p9_output_fir.py --check
       - name: Verify Apple IIe/IIgs ROMless slot3 SPI7 mailbox
         run: |
           iverilog -g2012 -s tb_media_mailbox_slot3 -o /tmp/m1 boards/a2n20v2-Enhanced/hdl/media_mailbox_slot3.sv boards/a2n20v2-Enhanced/tests/tb_media_mailbox_slot3.sv
