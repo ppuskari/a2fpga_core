@@ -17,6 +17,7 @@
 #include "fpga_sd.h"
 #include "fpga_screen.h"
 #include "disk.h"
+#include "mod_filename.h"
 #include "diskio_host.h"   /* SD/USB backend selection */
 #include "usb_osal.h"      /* usb_osal_msleep */
 #include "osd_console.h"   /* shared boot/status console */
@@ -1012,19 +1013,18 @@ void disk_poll(void)
                 const bool is_dir=(fno.fattrib & AM_DIR)!=0;
                 if(!is_dir) {
                     bool match=false;
-                    for(int e=0;g_list_exts[e] && !match;e++)
+                    for(int e=0;g_list_exts[e] && !match;e++) {
                         match=has_ext(fno.fname,g_list_exts[e]);
+                        if(!match && !strcmp(g_list_exts[e],"mod"))
+                            match=mod_filename_matches(fno.fname);
+                    }
                     if(!match) {
-                        /* Original Amiga trackers sometimes use MOD.SONGNAME.
-                         * Report their presence; do NOT offer unplayable files
-                         * until the MOD audio/jukebox loaders support them. */
-                        if((fno.fname[0]|0x20)=='m' &&
-                           (fno.fname[1]|0x20)=='o' &&
-                           (fno.fname[2]|0x20)=='d' &&
-                           fno.fname[3]=='.') ++mod_prefixes;
                         ++nonmods;
                         continue;
                     }
+                    if(!has_ext(fno.fname,"mod") &&
+                       mod_filename_matches(fno.fname))
+                        ++mod_prefixes;
                 }
                 if(strlen(fno.fname)>=sizeof(g_list_ents[0].name)) {
                     ++too_long;
