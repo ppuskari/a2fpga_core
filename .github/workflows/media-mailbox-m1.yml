@@ -101,6 +101,8 @@ jobs:
           assert "mod_audio_jukebox_start_from_file(full)" in menu
           assert "JUKEBOX START AT .MOD" in menu
           assert "RESUME LAST JUKEBOX TRACK" in menu
+          assert "LAST JUKE TRACK" in menu
+          assert "mod_audio_jukebox_last_track" in a
           assert "mod_jukebox_find(juke_start_file)" in a
           assert "juke_active=playlist_play(&juke_index,(unsigned)first)" in a
           assert "MOD_JUKE_START_MISSING" in a
