@@ -399,6 +399,35 @@ static void picker_load(void)
         osd_log("PICK DIR TIMEOUT: /%s (15000ms)",s_pick_path);
 }
 
+/* The disk thread already holds the full, alphabetically sorted snapshot
+ * in g_list_ents[0..g_list_count). Paging within the SAME folder must only
+ * copy 48 entries at offset page*48. Do not call disk_list_begin() here:
+ * doing so rereads and resorts all ~500 SD/FatFS entries on every keystroke.
+ *
+ * The only callers of disk_list_begin are picker_load() on initial entry,
+ * folder change, or explicit reopening of the picker. Other FatFS clients
+ * (MOD/jukebox/FTP/Apple M2 mailbox) have independent handles/catalogs. */
+static void picker_page_from_snapshot(void)
+{
+    int n = disk_list_poll_page(s_pick_ents, MOD_PICK_PAGE_SIZE,
+                               s_pick_page*MOD_PICK_PAGE_SIZE,
+                               &s_pick_total);
+    if (n >= 0) {
+        s_pick_count = n;
+        s_pick_fs_error = 0;
+        return;
+    }
+    if (n == -1) {
+        /* Snapshot was invalidated by another scan; recover by refreshing. */
+        picker_load();
+        return;
+    }
+    s_pick_count = 0;
+    s_pick_fs_error = -n-2;
+    osd_log("PICK PAGE CACHE ERROR: /%s page=%d err=%d",
+            s_pick_path,s_pick_page+1,s_pick_fs_error);
+}
+
 static void picker_choose(int id)
 {
     /* J1: choose the currently displayed folder, with or without children.
@@ -414,10 +443,17 @@ static void picker_choose(int id)
         return;
     }
     if(s_pick_mod && (id == -6 || id == -7)) {
+        const int previous_page=s_pick_page;
         if(id==-6 && s_pick_page>0)--s_pick_page;
         if(id==-7 && (s_pick_page+1)*MOD_PICK_PAGE_SIZE<s_pick_total)
             ++s_pick_page;
-        picker_load();
+        if(s_pick_page==previous_page)return;
+        /* A valid directory snapshot is already in MCU RAM. Only copy the
+         * requested slice; scanning 506 FAT entries again costs seconds. */
+        if(s_pick_fs_error==0)
+            picker_page_from_snapshot();
+        else
+            picker_load();
         s_cursor[s_depth]=0;
         s_scroll[s_depth]=0;
         screen_refresh();
