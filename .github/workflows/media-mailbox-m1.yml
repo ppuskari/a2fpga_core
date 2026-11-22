@@ -153,6 +153,23 @@ jobs:
           assert "--stage1" not in p
           print("PASS J2R9 PowerShell: J2R9 source / bulk signature / Stage2 only")
           PY
+      - name: J2R9A PowerShell Stage2 helper smoke
+        run: |
+          git checkout -B petar/mod-j2r9a-pcm-only-bulk-20261122 HEAD
+          pwsh -NoProfile -File ./J2R9A.ps1 Help
+          pwsh -NoProfile -File ./J2R9A.ps1 SourceState > /tmp/j2r9a_source.txt
+          grep -q 'Git tracked files are clean' /tmp/j2r9a_source.txt
+          grep -q 'Source diff SHA256' /tmp/j2r9a_source.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('J2R9A.ps1').read_text()
+          assert "petar/mod-j2r9a-pcm-only-bulk-20261122" in p
+          assert "'MOD SPI=PCM512 SDRAM=BYTE'" in p
+          assert "$flashArgs=@('--stage2', $firmware" in p
+          assert "'--skip-verify'" in p and "'0x40000'" in p
+          assert "--stage1" not in p
+          print("PASS J2R9A PowerShell: guarded PCM512 Stage2-only build")
+          PY
       - name: J2R9a real SPI transport tests (PCM-only, legacy, unsafe-lab)
         run: |
           SPI=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware
