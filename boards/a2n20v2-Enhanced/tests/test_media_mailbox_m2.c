@@ -38,7 +38,11 @@ bool mod_now_playing_snapshot(mod_now_playing_t *out)
     return true;
 }
 #define CHECK(v) do{ if(!(v)){fprintf(stderr,"FAIL M2 line %d: %s\n",__LINE__,#v);exit(1);} }while(0)
-void *pvPortMalloc(size_t n) {return malloc(n);}
+/* The M2 Apple browser MUST NOT consume dynamic heap per 506-folder
+ * catalog entry. Starting the jukebox simultaneously allocates ~506 paths
+ * in its own MOD task, otherwise triggering the BL616 fatal malloc hook. */
+static unsigned m2_dynamic_allocations;
+void *pvPortMalloc(size_t n) {m2_dynamic_allocations++;return malloc(n);}
 void vPortFree(void *p) {free(p);}
 void vTaskDelay(uint32_t ticks) {(void)ticks;}
 void osd_log(const char *fmt,...) {(void)fmt;}
@@ -293,6 +297,14 @@ int main(void)
     complete_scan();
     CHECK(s_m2_catalog_count==506 && !s_m2_scan_active &&
           s_m2_directory_open && close_calls==3);
+    CHECK(m2_dynamic_allocations==0); /* zero heap allocation across 506 files */
+    /* J from Apple must be accepted with the 506-entry browser still
+     * resident. It must not modify/reclaim the browser catalog. */
+    path_cmd("PROTRACKER/1/TRACK250.MOD",
+             MEDIA_CMD_M2_START,MEDIA_RESULT_OK);
+    CHECK(juke_calls==1 &&
+          !strcmp(last_juke,"PROTRACKER/1/TRACK250.MOD"));
+    CHECK(s_m2_catalog_count==506 && m2_dynamic_allocations==0);
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_OK);
     CHECK(response_count==14 && response[0]==13 && response[1]==0 &&
           !memcmp(response+2,"TRACK000.MOD",12));
@@ -321,7 +333,7 @@ int main(void)
     path_cmd("MODS/CHEER.MOD",MEDIA_CMD_M2_PLAY,MEDIA_RESULT_OK);
     CHECK(play_calls==1 && !strcmp(last_play,"MODS/CHEER.MOD"));
     path_cmd("MODS/3edges.mod",MEDIA_CMD_M2_START,MEDIA_RESULT_OK);
-    CHECK(juke_calls==1 && !strcmp(last_juke,"MODS/3edges.mod"));
+    CHECK(juke_calls==2 && !strcmp(last_juke,"MODS/3edges.mod"));
     CHECK(command(MEDIA_CMD_M2_RESUME)==MEDIA_RESULT_OK);
     path_cmd("../danger",MEDIA_CMD_M2_OPEN,MEDIA_RESULT_M2_BAD_PATH);
     CHECK(open_calls==3); /* no disk requests for traversal */
@@ -378,7 +390,8 @@ int main(void)
     CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
     CHECK(command(MEDIA_CMD_STOP)==MEDIA_RESULT_OK && stop_calls==1);
     CHECK(command(MEDIA_CMD_PING)==MEDIA_RESULT_PONG);
-    printf("PASS M2 MCU mailbox: async OPEN/RETRY, 506-file sorted catalog, cancellation, file play\n");
+    CHECK(m2_dynamic_allocations==0);
+    printf("PASS M2 MCU mailbox: 506-file sorted catalog without heap allocations, J startup, cancellation\n");
     printf("PASS M2 protocol: M1 compatibility, live now-playing frame, source/status, path validation\n");
     return 0;
 }
