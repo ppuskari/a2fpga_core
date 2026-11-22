@@ -9,6 +9,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ff.h"
@@ -130,7 +131,7 @@ static const char *const     *g_list_exts;
 static char                   g_list_path[SETTINGS_NAME_LEN + 4];
 static disk_list_ent_t        g_list_ents[DISK_LIST_MAX];
 static int                    g_list_count;
-static volatile FRESULT       g_list_fr;  /* FR_OK or precise FatFS scan error */
+static volatile int           g_list_fr;  /* FR_OK, FatFS error or 100=limit */
 
 /* Case-insensitive extension test ("dsk", "do", ...). */
 static bool has_ext(const char *name, const char *ext)
@@ -154,6 +155,16 @@ static int name_cmp(const char *a, const char *b)
         a++; b++;
     }
     return (*a & 0xff) - (*b & 0xff);
+}
+
+/* Global folder-first case-insensitive sort; MOD pages share one snapshot. */
+static int list_entry_cmp(const void *lhs, const void *rhs)
+{
+    const disk_list_ent_t *a = (const disk_list_ent_t *)lhs;
+    const disk_list_ent_t *b = (const disk_list_ent_t *)rhs;
+    if (a->is_dir != b->is_dir)
+        return a->is_dir ? -1 : 1;
+    return name_cmp(a->name, b->name);
 }
 
 /* Format + sector order from the filename extension. .2mg is resolved from its
@@ -968,76 +979,84 @@ void disk_poll(void)
          * this release path -- the FPGA may release on its own timer.) */
     }
 
-    /* Async directory listing for the menu (FatFS is not re-entrant, so the
-     * scan runs here, in the thread that owns the filesystem). Two passes so
-     * directories sort before files. */
+    /* Single-pass FatFS console picker scan: directory contents can be 500+
+     * modules, so read up to DISK_LIST_MAX and sort ONE snapshot afterwards.
+     * The old two-pass readdir() and 2-second menu timeout could report an
+     * empty folder while a slow SD scan was still in progress.
+     * All FatFS calls remain exclusively on the disk thread. */
     fs_service();
 
     if (g_list_req) {
-        unsigned raw_seen=0;
-        g_list_count = 0;
-        g_list_fr = FR_OK;
-        for (int pass = 0; pass < 2; pass++) {
-            DIR dir;
-            FILINFO fno;
-            FRESULT fr = f_opendir(&dir, g_list_path);
-            if (fr != FR_OK) {
-                g_list_fr = fr;
-                osd_log("PICK DIR OPEN FAIL: %s FR=%d",g_list_path,(int)fr);
-                break;
-            }
-            while (g_list_count < DISK_LIST_MAX) {
-                fr = f_readdir(&dir, &fno);
-                if (fr != FR_OK) {
-                    g_list_fr = fr;
+        unsigned raw_seen=0u, directories=0u, mod_files=0u;
+        unsigned nonmods=0u, mod_prefixes=0u, too_long=0u;
+        g_list_count=0;
+        g_list_fr=FR_OK;
+        DIR dir;
+        FILINFO fno;
+        FRESULT fr=f_opendir(&dir,g_list_path);
+        if(fr!=FR_OK) {
+            g_list_fr=(int)fr;
+            osd_log("PICK DIR OPEN FAIL: %s FR=%d",g_list_path,(int)fr);
+        } else {
+            for(;;) {
+                fr=f_readdir(&dir,&fno);
+                if(fr!=FR_OK) {
+                    g_list_fr=(int)fr;
                     osd_log("PICK DIR READ FAIL: %s FR=%d",g_list_path,(int)fr);
                     break;
                 }
-                if (fno.fname[0] == '\0')
-                    break;
+                if(!fno.fname[0])break; /* normal EOF */
                 ++raw_seen;
-                if (fno.fname[0] == '.' || fno.fname[0] == '_')
+                if(fno.fname[0]=='.' || fno.fname[0]=='_')
                     continue;
-                bool is_dir = (fno.fattrib & AM_DIR) != 0;
-                if ((pass == 0) != is_dir)
-                    continue;
-                if (!is_dir) {
-                    bool match = false;
-                    for (int e = 0; g_list_exts[e] && !match; e++)
-                        match = has_ext(fno.fname, g_list_exts[e]);
-                    if (!match)
+                const bool is_dir=(fno.fattrib & AM_DIR)!=0;
+                if(!is_dir) {
+                    bool match=false;
+                    for(int e=0;g_list_exts[e] && !match;e++)
+                        match=has_ext(fno.fname,g_list_exts[e]);
+                    if(!match) {
+                        /* Original Amiga trackers sometimes use MOD.SONGNAME.
+                         * Report their presence; do NOT offer unplayable files
+                         * until the MOD audio/jukebox loaders support them. */
+                        if((fno.fname[0]|0x20)=='m' &&
+                           (fno.fname[1]|0x20)=='o' &&
+                           (fno.fname[2]|0x20)=='d' &&
+                           fno.fname[3]=='.') ++mod_prefixes;
+                        ++nonmods;
                         continue;
+                    }
                 }
-                if (strlen(fno.fname) >= sizeof(g_list_ents[0].name))
-                    continue;   /* name too long to select later */
-                disk_list_ent_t *e = &g_list_ents[g_list_count++];
-                snprintf(e->name, sizeof(e->name), "%s", fno.fname);
-                e->is_dir = is_dir;
+                if(strlen(fno.fname)>=sizeof(g_list_ents[0].name)) {
+                    ++too_long;
+                    continue;
+                }
+                if(g_list_count>=DISK_LIST_MAX) {
+                    /* This is not an empty folder; report a distinct error.
+                     * No partial or falsely 'complete' pagination. */
+                    g_list_fr=100;
+                    osd_log("PICK DIR LIMIT: %s exceeds %u visible entries",
+                            g_list_path,(unsigned)DISK_LIST_MAX);
+                    break;
+                }
+                disk_list_ent_t *entry=&g_list_ents[g_list_count++];
+                snprintf(entry->name,sizeof(entry->name),"%s",fno.fname);
+                entry->is_dir=is_dir;
+                if(is_dir)++directories; else ++mod_files;
             }
             fr=f_closedir(&dir);
-            if (fr!=FR_OK && g_list_fr==FR_OK) {
-                g_list_fr=fr;
+            if(fr!=FR_OK && g_list_fr==FR_OK) {
+                g_list_fr=(int)fr;
                 osd_log("PICK DIR CLOSE FAIL: %s FR=%d",g_list_path,(int)fr);
             }
-            if(g_list_fr!=FR_OK)break;
         }
-        /* Alphabetize within each group (the two passes already put
-         * directories first). FAT returns creation order, which makes big
-         * game folders unnavigable. Insertion sort: n <= DISK_LIST_MAX. */
-        for (int i = 1; i < g_list_count; i++) {
-            disk_list_ent_t tmp = g_list_ents[i];
-            int j = i;
-            while (j > 0 && g_list_ents[j - 1].is_dir == tmp.is_dir &&
-                   name_cmp(g_list_ents[j - 1].name, tmp.name) > 0) {
-                g_list_ents[j] = g_list_ents[j - 1];
-                j--;
-            }
-            g_list_ents[j] = tmp;
-        }
-        if(g_list_fr==FR_OK && g_list_count==0)
-            osd_log("PICK DIR EMPTY: %s raw=%u",g_list_path,raw_seen);
-        g_list_req  = false;
-        g_list_done = true;
+        if(g_list_fr==FR_OK && g_list_count>1)
+            qsort(g_list_ents,(size_t)g_list_count,
+                  sizeof(g_list_ents[0]),list_entry_cmp);
+        osd_log("PICK DIR: %s raw=%u dirs=%u mods=%u other=%u prefix=%u long=%u rc=%d",
+                g_list_path,raw_seen,directories,mod_files,
+                nonmods,mod_prefixes,too_long,g_list_fr);
+        g_list_req=false;
+        g_list_done=true;
     }
 
     for (int v = 0; v < NDRV; v++)
@@ -1449,7 +1468,7 @@ void disk_list_begin(const char *path, const char *const *exts)
 int disk_list_poll_page(disk_list_ent_t *ents,int max,int offset,int *total)
 {
     if (!g_list_done)return -1;
-    /* -1 is pending, -2-FRESULT is a completed but failed scan. */
+    /* -1 is pending, -2-code is completed with error (100=over 512). */
     if(g_list_fr!=FR_OK)return -2-(int)g_list_fr;
     if(total)*total=g_list_count;
     if(offset<0 || max<0 || offset>g_list_count)return 0;
