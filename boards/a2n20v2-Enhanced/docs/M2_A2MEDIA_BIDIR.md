@@ -34,6 +34,7 @@ Space 6 audio PCM and the entire HxCMOD/gain/samples/A3 chain are unchanged.
 - $27 RESUME_JUKE: resume stopped playlist
 - $28 GET_SOURCE: reply [1,0=SD/1=USB]
 - $29 GET_STATUS: reply [5,state,lastLO,lastHI,totalLO,totalHI]
+- $2A GET_NOW_PLAYING: reply [1+n,active,basename ASCII n], n=0..63. The basename is read from the same generation-stable snapshot as the MCU console. Returns $EA if publication overlaps the snapshot; Apple retries at its next periodic poll. When inactive, reply [1,0]. No new FPGA registers are required.
 
 A pathname request is ARM, then NUL-terminated relative ASCII path bytes
 through Apple writes to $C0B5, then OPEN_DIR / PLAY_FILE / JUKE_START_FILE.
@@ -96,8 +97,8 @@ bytewise FPGA SDRAM signatures. Signed Stage1 and FPGA flash untouched.
 4. Browse SD root, enter folders and page through MOD files.
 5. RETURN on a MOD plays it alone; J starts jukebox from that file.
 6. Verify the selected song plays first and its sorted successor follows.
-7. Try S/N/P/R transport, B parent, F/G pages, I status, Q quit.
-8. Listen to CHEER.MOD while browsing: target zero UDR/ERR and no audible
+7. Try S/N/P/R transport, B parent, F=previous page, G=next page, I status, Q quit.
+8. Verify NOW PLAYING shows the actual MOD basename and changes automatically when jukebox advances (without keyboard input). Then listen to CHEER.MOD while browsing: target zero UDR/ERR and no audible
    interruptions, preserving the proven J2R11 gain and sample cache.
 9. IIgs native bus slot-3 behavior must be independently tested.
 
