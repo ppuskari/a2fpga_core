@@ -156,27 +156,49 @@ static uint8_t m2_dir_open(void)
 {
     const char *path=m2_path();
     s_m2_armed=false;
-    if(!path)return MEDIA_RESULT_M2_BAD_PATH;
+    if(!path) {
+        osd_log("M2 FAT DIR: invalid Apple path");
+        return MEDIA_RESULT_M2_BAD_PATH;
+    }
     m2_catalog_clear();
     fs_req_t r;
     memset(&r,0,sizeof(r));
     r.op=FSOP_MEDIA_LIST_OPEN;
     r.path=path;
-    if(disk_fs_request(&r)!=0)return MEDIA_RESULT_M2_FS;
+    const int opened=disk_fs_request(&r);
+    if(opened!=0) {
+        osd_log("M2 FAT DIR OPEN FAIL: /%s FR=%d",path,opened);
+        return MEDIA_RESULT_M2_FS;
+    }
 
     bool complete=false,failed=false;
+    unsigned raw_entries=0u,filtered=0u,too_long=0u;
     for(unsigned scanned=0;scanned<65536u;scanned++) {
         memset(&r,0,sizeof(r));
         r.op=FSOP_MEDIA_LIST_NEXT;
-        if(disk_fs_request(&r)!=0) {failed=true;break;}
+        const int fr=disk_fs_request(&r);
+        if(fr!=0) {
+            osd_log("M2 FAT DIR READ FAIL: /%s FR=%d",path,fr);
+            failed=true;break;
+        }
         if(!r.name[0]) {complete=true;break;}
-        if(!m2_visible(r.name,r.attr))continue;
+        raw_entries++;
+        if(!m2_visible(r.name,r.attr)) {filtered++;continue;}
         /* WorkPath is limited to 127 including NUL on the Apple side. */
         const size_t len=strlen(r.name);
-        if(strlen(path)+len+(path[0]?2u:1u)>127u)continue;
-        if(s_m2_catalog_count>=M2_SORT_MAX) {failed=true;break;}
+        if(strlen(path)+len+(path[0]?2u:1u)>127u) {
+            too_long++;continue;
+        }
+        if(s_m2_catalog_count>=M2_SORT_MAX) {
+            osd_log("M2 FAT DIR LIMIT: /%s max %u",path,M2_SORT_MAX);
+            failed=true;break;
+        }
         char *copy=(char *)pvPortMalloc(len+1u);
-        if(!copy) {failed=true;break;}
+        if(!copy) {
+            osd_log("M2 FAT DIR OOM: /%s entries=%u",path,
+                    s_m2_catalog_count);
+            failed=true;break;
+        }
         memcpy(copy,r.name,len+1u);
         m2_browser_entry_t *entry=&s_m2_catalog[s_m2_catalog_count++];
         entry->name=copy;
@@ -184,7 +206,11 @@ static uint8_t m2_dir_open(void)
     }
     memset(&r,0,sizeof(r));
     r.op=FSOP_MEDIA_LIST_CLOSE;
-    if(disk_fs_request(&r)!=0)failed=true;
+    const int close_fr=disk_fs_request(&r);
+    if(close_fr!=0) {
+        osd_log("M2 FAT DIR CLOSE FAIL: /%s FR=%d",path,close_fr);
+        failed=true;
+    }
     if(failed || !complete) {
         m2_catalog_clear();
         return MEDIA_RESULT_M2_FS;
@@ -192,6 +218,8 @@ static uint8_t m2_dir_open(void)
     if(s_m2_catalog_count>1u)
         qsort(s_m2_catalog,s_m2_catalog_count,
               sizeof(s_m2_catalog[0]),m2_catalog_cmp);
+    osd_log("M2 FAT DIR: /%s visible=%u raw=%u skip=%u long=%u",
+            path,s_m2_catalog_count,raw_entries,filtered,too_long);
     s_m2_directory_open=true;
     return MEDIA_RESULT_OK;
 }
