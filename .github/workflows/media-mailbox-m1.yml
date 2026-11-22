@@ -68,6 +68,26 @@ jobs:
             -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware \
             boards/a2n20v2-Enhanced/tests/test_media_mailbox_m2.c -o /tmp/m2_mcu
           /tmp/m2_mcu
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 -I"$MCU" boards/a2n20v2-Enhanced/tests/test_mcu_mod_filename.c -o /tmp/m2_filenames
+          /tmp/m2_filenames
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host")
+          disk=(root/"disk.c").read_text()
+          hdr=(root/"disk.h").read_text()
+          menu=(root/"menu.c").read_text()
+          assert "#define DISK_LIST_MAX 512" in hdr
+          # One FatFS enumerator per directory, followed by one global sort.
+          scan=disk.split("if (g_list_req) {",1)[1].split("for (int v = 0; v < NDRV; v++)",1)[0]
+          assert scan.count("f_opendir(&dir,g_list_path)") == 1
+          assert scan.count("f_readdir(&dir,&fno)") == 1
+          assert "qsort(g_list_ents" in scan
+          assert "mod_filename_matches(fno.fname)" in scan
+          assert "waited < 15000" in menu
+          assert "s_pick_page*MOD_PICK_PAGE_SIZE" in menu
+          assert "PICK DIR: %s raw=" in disk
+          print("PASS MCU MOD picker: single-pass sorted 512-entry catalog, 15s timeout")
+          PY
       - name: M2 guarded BL616 Stage2 helper smoke
         run: |
           git checkout -B petar/media-m2-bidir-fat-picker-20261122 HEAD
