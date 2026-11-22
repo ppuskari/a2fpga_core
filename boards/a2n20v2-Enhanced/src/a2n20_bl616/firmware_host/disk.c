@@ -130,6 +130,7 @@ static const char *const     *g_list_exts;
 static char                   g_list_path[SETTINGS_NAME_LEN + 4];
 static disk_list_ent_t        g_list_ents[DISK_LIST_MAX];
 static int                    g_list_count;
+static volatile FRESULT       g_list_fr;  /* FR_OK or precise FatFS scan error */
 
 /* Case-insensitive extension test ("dsk", "do", ...). */
 static bool has_ext(const char *name, const char *ext)
@@ -974,13 +975,24 @@ void disk_poll(void)
 
     if (g_list_req) {
         g_list_count = 0;
+        g_list_fr = FR_OK;
         for (int pass = 0; pass < 2; pass++) {
             DIR dir;
             FILINFO fno;
-            if (f_opendir(&dir, g_list_path) != FR_OK)
+            FRESULT fr = f_opendir(&dir, g_list_path);
+            if (fr != FR_OK) {
+                g_list_fr = fr;
+                osd_log("PICK DIR OPEN FAIL: %s FR=%d",g_list_path,(int)fr);
                 break;
+            }
             while (g_list_count < DISK_LIST_MAX) {
-                if (f_readdir(&dir, &fno) != FR_OK || fno.fname[0] == '\0')
+                fr = f_readdir(&dir, &fno);
+                if (fr != FR_OK) {
+                    g_list_fr = fr;
+                    osd_log("PICK DIR READ FAIL: %s FR=%d",g_list_path,(int)fr);
+                    break;
+                }
+                if (fno.fname[0] == '\0')
                     break;
                 if (fno.fname[0] == '.' || fno.fname[0] == '_')
                     continue;
@@ -1000,7 +1012,12 @@ void disk_poll(void)
                 snprintf(e->name, sizeof(e->name), "%s", fno.fname);
                 e->is_dir = is_dir;
             }
-            f_closedir(&dir);
+            fr=f_closedir(&dir);
+            if (fr!=FR_OK && g_list_fr==FR_OK) {
+                g_list_fr=fr;
+                osd_log("PICK DIR CLOSE FAIL: %s FR=%d",g_list_path,(int)fr);
+            }
+            if(g_list_fr!=FR_OK)break;
         }
         /* Alphabetize within each group (the two passes already put
          * directories first). FAT returns creation order, which makes big
@@ -1417,6 +1434,7 @@ static void fs_service(void)
 void disk_list_begin(const char *path, const char *const *exts)
 {
     g_list_done = false;
+    g_list_fr = FR_OK;
     g_list_exts = exts;
     snprintf(g_list_path, sizeof(g_list_path), "0:/%s", path ? path : "");
     g_list_req  = true;           /* serviced by the next disk_poll */
@@ -1425,6 +1443,8 @@ void disk_list_begin(const char *path, const char *const *exts)
 int disk_list_poll_page(disk_list_ent_t *ents,int max,int offset,int *total)
 {
     if (!g_list_done)return -1;
+    /* -1 is pending, -2-FRESULT is a completed but failed scan. */
+    if(g_list_fr!=FR_OK)return -2-(int)g_list_fr;
     if(total)*total=g_list_count;
     if(offset<0 || max<0 || offset>g_list_count)return 0;
     int available=g_list_count-offset;
