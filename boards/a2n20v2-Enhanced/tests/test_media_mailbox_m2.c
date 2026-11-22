@@ -24,7 +24,6 @@ static bool fake_hw=true,fake_usb;
 static bool media_dir_open;
 static unsigned fs_cursor,open_calls,close_calls,play_calls,juke_calls,stop_calls;
 static char last_open[128],last_play[128],last_juke[128];
-static unsigned test_failures;
 #define CHECK(v) do{ if(!(v)){fprintf(stderr,"FAIL M2 line %d: %s\n",__LINE__,#v);exit(1);} }while(0)
 void vTaskDelay(uint32_t ticks) {(void)ticks;}
 void osd_log(const char *fmt,...) {(void)fmt;}
