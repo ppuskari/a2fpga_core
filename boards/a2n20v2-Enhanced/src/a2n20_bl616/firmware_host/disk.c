@@ -988,6 +988,13 @@ void disk_poll(void)
     fs_service();
 
     if (g_list_req) {
+        /* Timing is instrumentation only. Record each stage so we can
+         * distinguish SD/FPGA SPI tunnel sector I/O from sorting overhead
+         * in 39-folder vs 506-MOD directories. Uint32 arithmetic tolerates
+         * the 32-bit microsecond counter wrapping mid-scan. */
+        const uint32_t scan_start_us=(uint32_t)bflb_mtimer_get_time_us();
+        uint32_t opendir_end_us=scan_start_us;
+        uint32_t readdir_end_us=scan_start_us;
         unsigned raw_seen=0u, directories=0u, mod_files=0u;
         unsigned nonmods=0u, mod_prefixes=0u, too_long=0u;
         g_list_count=0;
@@ -995,6 +1002,7 @@ void disk_poll(void)
         DIR dir;
         FILINFO fno;
         FRESULT fr=f_opendir(&dir,g_list_path);
+        opendir_end_us=(uint32_t)bflb_mtimer_get_time_us();
         if(fr!=FR_OK) {
             g_list_fr=(int)fr;
             osd_log("PICK DIR OPEN FAIL: %s FR=%d",g_list_path,(int)fr);
@@ -1049,12 +1057,19 @@ void disk_poll(void)
                 osd_log("PICK DIR CLOSE FAIL: %s FR=%d",g_list_path,(int)fr);
             }
         }
+        readdir_end_us=(uint32_t)bflb_mtimer_get_time_us();
         if(g_list_fr==FR_OK && g_list_count>1)
             qsort(g_list_ents,(size_t)g_list_count,
                   sizeof(g_list_ents[0]),list_entry_cmp);
+        const uint32_t sort_end_us=(uint32_t)bflb_mtimer_get_time_us();
         osd_log("PICK DIR: %s raw=%u dirs=%u mods=%u other=%u prefix=%u long=%u rc=%d",
                 g_list_path,raw_seen,directories,mod_files,
                 nonmods,mod_prefixes,too_long,g_list_fr);
+        osd_log("PICK TIMING: /%s",g_list_path);
+        osd_log("  OPEN=%lu READ=%lu SORT=%lu ms",
+                (unsigned long)((opendir_end_us-scan_start_us)/1000u),
+                (unsigned long)((readdir_end_us-opendir_end_us)/1000u),
+                (unsigned long)((sort_end_us-readdir_end_us)/1000u));
         g_list_req=false;
         g_list_done=true;
     }
