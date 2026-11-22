@@ -22,6 +22,7 @@
 #include "disk.h"
 #include <ctype.h>
 #include "media_mailbox.h"
+#include "mod_filename.h"
 
 #define MB_STATUS_ADDR         0x800000u
 #define MB_ACK_ADDR            0x800010u
@@ -147,10 +148,7 @@ static bool m2_visible(const char *name,uint8_t attr)
     if(n==0u || n>M2_ENTRY_MAX || name[0]=='.' ||
        strchr(name,'/') || strchr(name,'\\'))return false;
     if(attr&AM_DIR_BIT)return true;
-    return n>=5u && name[n-4]=='.' &&
-        tolower((unsigned char)name[n-3])=='m' &&
-        tolower((unsigned char)name[n-2])=='o' &&
-        tolower((unsigned char)name[n-1])=='d';
+    return mod_filename_matches(name);
 }
 static uint8_t m2_dir_open(void)
 {
