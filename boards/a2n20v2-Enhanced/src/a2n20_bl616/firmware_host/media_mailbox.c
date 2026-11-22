@@ -111,25 +111,31 @@ static const char *m2_path(void)
  * Each filename is allocated only once; at most 512 visible entries.
  * A larger folder fails OPEN instead of silently showing a partial list.
  */
-/* IMPORTANT: The M2 Apple browser and MCU jukebox have independent
- * catalogs, which coexist when the user presses J on ProTracker/1 with 506
- * files. The old M2 catalog allocated one heap string PER filename, and
- * the jukebox then allocated ~506 more full paths. Heap exhaustion fires
- * vApplicationMallocFailedHook, which DISABLES INTERRUPTS permanently;
- * even the USB keyboard becomes unresponsive.
+/* Both Apple directory catalog and MCU jukebox are resident after J.
+ * The old M2 browser allocated a heap string for each of ~506 filenames;
+ * the Jukebox then malloc'd another ~506 paths and could trigger the fatal
+ * FreeRTOS malloc hook (which disables interrupts, freezing USB HID).
  *
- * Keep the Apple browser catalog in fixed BL616 BSS storage. This costs
- * 512*(64+1) bytes, but removes 500+ heap allocations and heap-fragmentation
- * pressure without changing its ABI, ordering or retained paging behavior.
- * Jukebox memory remains independent and owned by its audio task. */
+ * Use compact packed names in fixed BL616 BSS, 2-byte offsets and a
+ * 24-KiB arena. 506 normal ProTracker filenames fit comfortably; if users
+ * populate a folder with 512 exceptionally long 63-byte filenames, fail
+ * the scan gracefully as MEDIA_RESULT_M2_FS instead of exhausting heap.
+ * No per-filename malloc/free or extra FPGA/register changes. */
+#define M2_NAME_POOL_SIZE (24u*1024u)
 typedef struct {
-    char name[M2_ENTRY_MAX+1u];
+    uint16_t name_offset;
     bool is_dir;
 } m2_browser_entry_t;
 static m2_browser_entry_t s_m2_catalog[M2_SORT_MAX];
-static unsigned s_m2_catalog_count, s_m2_catalog_next;
+static char s_m2_name_pool[M2_NAME_POOL_SIZE];
+static unsigned s_m2_name_used, s_m2_catalog_count, s_m2_catalog_next;
+static const char *m2_catalog_name(const m2_browser_entry_t *entry)
+{
+    return &s_m2_name_pool[entry->name_offset];
+}
 static void m2_catalog_clear(void)
 {
+    s_m2_name_used=0u;
     s_m2_catalog_count=0u;
     s_m2_catalog_next=0u;
     s_m2_directory_open=false;
@@ -148,7 +154,7 @@ static int m2_catalog_cmp(const void *a,const void *b)
     const m2_browser_entry_t *x=(const m2_browser_entry_t *)a;
     const m2_browser_entry_t *y=(const m2_browser_entry_t *)b;
     if(x->is_dir!=y->is_dir)return x->is_dir ? -1:1;
-    return m2_name_icmp(x->name,y->name);
+    return m2_name_icmp(m2_catalog_name(x),m2_catalog_name(y));
 }
 static bool m2_visible(const char *name,uint8_t attr)
 {
@@ -266,9 +272,18 @@ static void m2_scan_consume_entry(void)
         s_m2_scan_finishing=true;
         return;
     }
+    if(len+1u>M2_NAME_POOL_SIZE-s_m2_name_used) {
+        osd_log("M2 FAT DIR NAME POOL FULL: /%s entries=%u bytes=%u",
+                s_m2_scan_path,s_m2_catalog_count,s_m2_name_used);
+        s_m2_scan_failed=true;
+        s_m2_scan_finishing=true;
+        return;
+    }
     m2_browser_entry_t *entry=&s_m2_catalog[s_m2_catalog_count++];
-    /* len <= M2_ENTRY_MAX was checked by m2_visible() above. */
-    memcpy(entry->name,s_m2_fs_job.name,len+1u);
+    /* len <= M2_ENTRY_MAX, checked by m2_visible() above. */
+    entry->name_offset=(uint16_t)s_m2_name_used;
+    memcpy(&s_m2_name_pool[s_m2_name_used],s_m2_fs_job.name,len+1u);
+    s_m2_name_used+=(unsigned)len+1u;
     entry->is_dir=(s_m2_fs_job.attr&AM_DIR_BIT)!=0u;
 }
 
@@ -373,11 +388,12 @@ static uint8_t m2_dir_next(void)
     if(s_m2_catalog_next>=s_m2_catalog_count)
         return MEDIA_RESULT_M2_EOF;
     const m2_browser_entry_t *entry=&s_m2_catalog[s_m2_catalog_next++];
-    const size_t n=strlen(entry->name);
+    const char *name=m2_catalog_name(entry);
+    const size_t n=strlen(name);
     m2_reply_reset();
     m2_reply_byte((uint8_t)(n+1u));
     m2_reply_byte(entry->is_dir?1u:0u);
-    for(size_t i=0;i<n;i++)m2_reply_byte((uint8_t)entry->name[i]);
+    for(size_t i=0;i<n;i++)m2_reply_byte((uint8_t)name[i]);
     return MEDIA_RESULT_OK;
 }
 
