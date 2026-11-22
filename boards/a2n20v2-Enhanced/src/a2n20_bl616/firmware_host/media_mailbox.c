@@ -17,6 +17,8 @@
 #include "fpga_spi.h"
 #include "osd_console.h"
 #include "mcu_mod_audio.h"
+#include "disk.h"
+#include <ctype.h>
 #include "media_mailbox.h"
 
 #define MB_STATUS_ADDR         0x800000u
@@ -27,7 +29,12 @@
 #define MB_INJECT_CMD_ADDR     0x800020u
 #define MB_INJECT_BYTE_ADDR    0x800021u
 
-#define MB_STATUS_LEN          26u
+#define MB_STATUS_LEN          31u
+#define MB_REPLY_PUSH_ADDR      0x800030u
+#define MB_REPLY_RESET_ADDR     0x800031u
+#define M2_PATH_MAX             128u
+#define M2_ENTRY_MAX             63u
+#define AM_DIR_BIT              0x10u
 #define MB_RX_CHUNK            32u
 #define MB_F_READY             (1u<<0)
 #define MB_F_CMD_PENDING       (1u<<2)
@@ -69,6 +76,85 @@ static uint32_t mb_u32(const uint8_t *p)
     return (uint32_t)p[0] | ((uint32_t)p[1]<<8) |
            ((uint32_t)p[2]<<16) | ((uint32_t)p[3]<<24);
 }
+
+/* M2 request accumulator: active only after ARM ACK; disk task owns FatFS. */
+static bool s_m2_hw, s_m2_armed, s_m2_req_overflow, s_m2_directory_open;
+static uint8_t s_m2_req[M2_PATH_MAX];
+static unsigned s_m2_req_len;
+static void m2_reply_reset(void) { mb_write(MB_REPLY_RESET_ADDR,0xA5u); }
+static void m2_reply_byte(uint8_t b) { mb_write(MB_REPLY_PUSH_ADDR,b); }
+/* Relative paths only, including "" for FAT volume root. */
+static const char *m2_path(void)
+{
+    if(!s_m2_armed || s_m2_req_overflow || !s_m2_req_len ||
+       s_m2_req_len>=M2_PATH_MAX ||
+       s_m2_req[s_m2_req_len-1]!=0) return NULL;
+    for(unsigned i=0;i+1<s_m2_req_len;i++)
+        if(s_m2_req[i]<32u || s_m2_req[i]>126u)
+            return NULL;  /* embedded NUL/control chars */
+    const char *p=(const char *)s_m2_req;
+    if(p[0]=='/' || strstr(p,"..") || strchr(p,':') ||
+       strchr(p,'\\')) return NULL;
+    return p;
+}
+static uint8_t m2_dir_open(void)
+{
+    const char *path=m2_path();
+    s_m2_armed=false;
+    if(!path)return MEDIA_RESULT_M2_BAD_PATH;
+    fs_req_t r;
+    memset(&r,0,sizeof(r));
+    r.op=FSOP_MEDIA_LIST_OPEN;r.path=path;
+    const int result=disk_fs_request(&r);
+    s_m2_directory_open=(result==0);
+    return result==0 ? MEDIA_RESULT_OK:MEDIA_RESULT_M2_FS;
+}
+static uint8_t m2_dir_next(void)
+{
+    if(!s_m2_directory_open)return MEDIA_RESULT_M2_NOT_OPEN;
+    fs_req_t r;
+    for(unsigned i=0;i<4096u;i++) {
+        memset(&r,0,sizeof(r));r.op=FSOP_MEDIA_LIST_NEXT;
+        if(disk_fs_request(&r)!=0)return MEDIA_RESULT_M2_FS;
+        if(!r.name[0])return MEDIA_RESULT_M2_EOF;
+        const size_t n=strlen(r.name);
+        if(n>M2_ENTRY_MAX || n==0 || strchr(r.name,'/') ||
+           strchr(r.name,'\\') || r.name[0]=='.')continue;
+        const bool dir=(r.attr & AM_DIR_BIT)!=0u;
+        if(!dir) {
+            if(n<5u || r.name[n-4]!='.' ||
+               tolower((unsigned char)r.name[n-3])!='m' ||
+               tolower((unsigned char)r.name[n-2])!='o' ||
+               tolower((unsigned char)r.name[n-1])!='d')
+                continue;
+        }
+        m2_reply_reset();
+        // Reply frame [length=1+namebytes][kind:1=directory][name ASCII].
+        m2_reply_byte((uint8_t)(n+1u));
+        m2_reply_byte(dir ? 1u:0u);
+        for(size_t j=0;j<n;j++)m2_reply_byte((uint8_t)r.name[j]);
+        return MEDIA_RESULT_OK;
+    }
+    return MEDIA_RESULT_M2_FS;
+}
+static uint8_t m2_dir_close(void)
+{
+    fs_req_t r;
+    memset(&r,0,sizeof(r));r.op=FSOP_MEDIA_LIST_CLOSE;
+    const int result=disk_fs_request(&r);
+    s_m2_directory_open=false;
+    return result==0 ? MEDIA_RESULT_OK:MEDIA_RESULT_M2_FS;
+}
+static uint8_t m2_play_or_start(bool jukebox)
+{
+    const char *path=m2_path();
+    s_m2_armed=false;
+    if(!path)return MEDIA_RESULT_M2_BAD_PATH;
+    const bool accepted=jukebox ?
+          mod_audio_jukebox_start_from_file(path):mod_audio_choose(path);
+    return accepted ? MEDIA_RESULT_OK:MEDIA_RESULT_M2_BAD_PATH;
+}
+
 static void mb_log_status(void)
 {
     if(!s_info.online){
@@ -98,6 +184,13 @@ static void mb_drain(uint16_t remaining)
         if(s_test_active){
             for(uint16_t j=0;j<n;j++)s_xor^=s_rx[j];
             s_received+=(uint32_t)n;
+        } else if(s_m2_armed) {
+            for(uint16_t j=0;j<n;j++) {
+                if(s_m2_req_len<sizeof(s_m2_req))
+                    s_m2_req[s_m2_req_len++]=s_rx[j];
+                else
+                    s_m2_req_overflow=true;
+            }
         }
         remaining-=n;
     }
@@ -160,6 +253,7 @@ static bool mb_service_once(void)
         return false;
     }
     s_info.online=true;
+    s_m2_hw=(s[0x1d]==0x4du && s[0x1e]==0x32u);
     s_info.flags=s[3];
     s_info.command=s[4];
     s_info.free_bytes=mb_u16(s+6);
