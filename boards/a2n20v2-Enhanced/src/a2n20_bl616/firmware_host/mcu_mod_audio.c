@@ -365,6 +365,7 @@ static bool player_load(const char *path)
     /* Fixed binary signature allows guarded Stage2 wrapper to reject
      * accidental stale/8KiB-page builds. */
     osd_log("MOD SMP WIN=4x2048B");
+    osd_log("MOD LOG=QUIET1HZ");
 #else
     osd_log("MOD SMP WIN=%ux%uB",
             (unsigned)MOD_STORE_WINDOWS,(unsigned)MOD_STORE_FETCH_BYTES);
