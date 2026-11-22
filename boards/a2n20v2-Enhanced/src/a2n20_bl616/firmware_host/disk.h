@@ -95,6 +95,11 @@ typedef enum {
     FSOP_MOD_LIST_OPEN,
     FSOP_MOD_LIST_NEXT,
     FSOP_MOD_LIST_CLOSE,
+    /* M2 Apple FAT browser owns a third independent directory handle.
+     * Never alias FTP's or the HxCMOD jukebox's FatFS directory. */
+    FSOP_MEDIA_LIST_OPEN,
+    FSOP_MEDIA_LIST_NEXT,
+    FSOP_MEDIA_LIST_CLOSE,
 } fs_op_t;
 
 typedef struct {
