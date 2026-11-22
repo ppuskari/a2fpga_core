@@ -54,7 +54,7 @@ bool disk_remount_pending(void);
  * are always included (is_dir set); files are filtered by exts, a
  * NULL-terminated list of extensions (no dot, case-insensitive).
  * Directories sort before files; each group is sorted alphabetically. */
-#define DISK_LIST_MAX 256 /* full sorted snapshot; picker displays 48 per page */
+#define DISK_LIST_MAX 512 /* full sorted snapshot, up to 500+ MODs per folder */
 typedef struct {
     char name[80];   /* entry name within the directory (LFN; longer skipped) */
     bool is_dir;
