@@ -5,6 +5,7 @@
  * (case-insensitive) for deterministic NEXT/PREVIOUS behavior.
  */
 #include "mcu_mod_jukebox.h"
+#include "mod_filename.h"
 #include "disk.h"
 #include "osd_console.h"
 #include "FreeRTOS.h"
@@ -46,14 +47,6 @@ static bool safe_dir(const char *path)
        path[0]=='/' || strchr(path,':') || strchr(path,'\\'))
         return false;
     return true;
-}
-static bool is_mod(const char *s)
-{
-    size_t n=strlen(s);
-    return n>=5u && s[n-4]=='.' &&
-        tolower((unsigned char)s[n-3])=='m' &&
-        tolower((unsigned char)s[n-2])=='o' &&
-        tolower((unsigned char)s[n-1])=='d';
 }
 void mod_jukebox_clear(void)
 {
@@ -128,7 +121,7 @@ bool mod_jukebox_scan(const char *root,bool recursive)
                             tail++;
                         }else s_truncated=true;
                     }
-                }else if(is_mod(r.name)) {
+                }else if(mod_filename_matches(r.name)) {
                     if(s_count<MOD_JUKE_MAX_TRACKS) {
                         s_tracks[s_count]=juke_strdup(path);
                         if(!s_tracks[s_count]) {failed=true;break;}
