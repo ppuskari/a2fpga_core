@@ -361,8 +361,10 @@ static bool player_load(const char *path)
             (unsigned long)MOD_PATTERN_CACHE_BYTES,
             (unsigned long)fmt.prefix_bytes);
     osd_log("MOD SMP CACHE=8x%uB", (unsigned)MOD_STORE_PAGE);
-#if FPGA_SPI_MOD_BULK_XFER
-    osd_log("MOD SPI=BULK512");
+#if FPGA_SPI_MOD_BULK_XFER && !FPGA_SPI_MOD_BULK_SDRAM
+    osd_log("MOD SPI=PCM512 SDRAM=BYTE");
+#elif FPGA_SPI_MOD_BULK_XFER && FPGA_SPI_MOD_BULK_SDRAM
+    osd_log("MOD SPI=BULK512 SDRAM=RISK");
 #else
     osd_log("MOD SPI=BYTEWISE");
 #endif
