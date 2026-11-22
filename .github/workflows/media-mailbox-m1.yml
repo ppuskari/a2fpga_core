@@ -43,6 +43,10 @@ jobs:
             exit 1
           fi
           echo "PASS: full SSI263 and authentic SynthLAB ROM inventory, clean checkout"
+      - name: Windows PowerShell Enhanced ROM prep and offline verification
+        run: |
+          pwsh -NoProfile -File ./Build-M2-FPGA.ps1 Check
+          pwsh -NoProfile -File ./Build-M2-FPGA.ps1 Prepare -Offline
       - name: Verify Apple IIe/IIgs ROMless slot3 SPI7 mailbox
         run: |
           iverilog -g2012 -s tb_media_mailbox_slot3 -o /tmp/m1 boards/a2n20v2-Enhanced/hdl/media_mailbox_slot3.sv boards/a2n20v2-Enhanced/tests/tb_media_mailbox_slot3.sv
