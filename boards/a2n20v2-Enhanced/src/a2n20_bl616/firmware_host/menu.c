@@ -362,6 +362,7 @@ static bool  s_pick_fpga;                      /* FPGA bitstream picker mode */
 #define MOD_PICK_PAGE_SIZE 48
 static int   s_pick_page, s_pick_total;
 static bool  s_pick_mod;                       /* runtime .MOD music picker */
+static bool  s_pick_juke_start;                /* choose playlist starting track */
 static char  s_pick_path[SETTINGS_NAME_LEN];   /* current subdir ("" = root) */
 static char *s_pick_target;            /* settings field to write */
 static const char *const *s_pick_exts; /* NULL-terminated extension list */
@@ -390,7 +391,7 @@ static void picker_choose(int id)
 {
     /* J1: choose the currently displayed folder, with or without children.
      * The folder selection survives no global picker state mutations. */
-    if (s_pick_mod && (id == -4 || id == -5)) {
+    if (s_pick_mod && !s_pick_juke_start && (id == -4 || id == -5)) {
         /* screen_pop() clears s_status: publish the scan feedback AFTER
          * returning to the MOD player menu, not before it. */
         const bool accepted=mod_audio_jukebox_start(s_pick_path,id==-5);
@@ -454,6 +455,13 @@ static void picker_choose(int id)
             return;
         }
         if (s_pick_mod) {
+            if (s_pick_juke_start) {
+                const bool accepted=mod_audio_jukebox_start_from_file(full);
+                screen_pop(); /* publish status after screen stack transition */
+                set_status(accepted ? "JUKEBOX: SELECTED START QUEUED" :
+                                       "INVALID JUKEBOX START FILE");
+                return;
+            }
             if (mod_audio_choose(full))
                 set_status("SONG SELECTED - MCU LOADING");
             else
@@ -522,12 +530,17 @@ static void picker_build(void)
             m->action=picker_choose;
             m->id=-6;
         }
-        m = mi_add(MI_ACTION, "(JUKEBOX: THIS FOLDER)", "");
-        m->action = picker_choose;
-        m->id = -4;
-        m = mi_add(MI_ACTION, "(JUKEBOX: WITH SUBFOLDERS)", "");
-        m->action = picker_choose;
-        m->id = -5;
+        if (!s_pick_juke_start) {
+            m = mi_add(MI_ACTION, "(JUKEBOX: THIS FOLDER)", "");
+            m->action = picker_choose;
+            m->id = -4;
+            m = mi_add(MI_ACTION, "(JUKEBOX: WITH SUBFOLDERS)", "");
+            m->action = picker_choose;
+            m->id = -5;
+        } else {
+            mi_add(MI_INFO, "PICK THE FIRST MOD TO PLAY", "");
+            mi_add(MI_INFO, "CONTINUES THROUGH FOLDER", "");
+        }
     }
     for (int i = 0; i < s_pick_count; i++) {
         if (s_pick_ents[i].is_dir) {
@@ -557,6 +570,7 @@ static void picker_open(char *target, const char *const *exts,
     s_pick_fw        = false;
     s_pick_fpga      = false;
     s_pick_mod       = false;
+    s_pick_juke_start = false;
     s_pick_target    = target;
     s_pick_exts      = exts;
     s_pick_eject_bit = eject_bit;
@@ -1223,12 +1237,12 @@ static void audio_enter(int id)
 // HxCMOD renders standard ProTracker .MOD to stereo signed PCM in the BL616;
 // the FPGA only clocks HDMI. No DOC register programming or tracker mailbox.
 static const char *const k_mod_exts[] = {"mod",NULL};
-static void mod_library_open(int id)
+static void mod_library_open_mode(bool start_at_file)
 {
-    (void)id;
     s_pick_fw = false;
     s_pick_fpga = false;
     s_pick_mod = true;
+    s_pick_juke_start = start_at_file;
     s_pick_target = NULL;
     s_pick_exts = k_mod_exts;
     s_pick_eject_bit = 0;
@@ -1236,6 +1250,16 @@ static void mod_library_open(int id)
     s_pick_page=0;
     picker_load();
     screen_push(&SCR_PICKER);
+}
+static void mod_library_open(int id)
+{
+    (void)id;
+    mod_library_open_mode(false);
+}
+static void mod_library_start_at_file(int id)
+{
+    (void)id;
+    mod_library_open_mode(true);
 }
 static void mod_library_stop(int id)
 {
@@ -1254,6 +1278,13 @@ static void mod_library_juke_tree(int id)
     (void)id;
     mod_audio_jukebox_from_last(true);
     set_status("JUKEBOX LAST TREE: SCANNING");
+}
+static void mod_library_resume(int id)
+{
+    (void)id;
+    set_status(mod_audio_jukebox_resume() ?
+        "RESUME JUKEBOX TRACK REQUESTED" :
+        "NO STOPPED JUKEBOX TO RESUME");
 }
 static void mod_library_next(int id)
 {
@@ -1336,12 +1367,17 @@ static void mod_library_build(void)
         case MOD_JUKE_SCANNING: scan="SCANNING";break;
         case MOD_JUKE_READY: scan="READY";break;
         case MOD_JUKE_EMPTY: scan="NO MODS";break;
+        case MOD_JUKE_START_MISSING: scan="START MISSING";break;
         default:break;
         }
         mi_add(MI_INFO,"JUKEBOX SCAN",scan);
     }
     menu_item_t *m=mi_add(MI_SUBMENU,"BROWSE .MOD FILES","");
     m->action=mod_library_open;
+    m=mi_add(MI_SUBMENU,"JUKEBOX START AT .MOD","");
+    m->action=mod_library_start_at_file;
+    m=mi_add(MI_ACTION,"RESUME LAST JUKEBOX TRACK","");
+    m->action=mod_library_resume;
     m=mi_add(MI_ACTION,"JUKEBOX LAST FOLDER","");
     m->action=mod_library_juke_folder;
     m=mi_add(MI_ACTION,"JUKEBOX LAST FOLDER+SUBDIRS","");
@@ -1692,6 +1728,8 @@ void menu_input(uint16_t buttons)
                 set_status("JUKEBOX SCAN COMPLETE");break;
             case MOD_JUKE_EMPTY:
                 set_status("JUKEBOX SCAN: NO MODS");break;
+            case MOD_JUKE_START_MISSING:
+                set_status("START FILE NOT FOUND IN FOLDER");break;
             default: break;
             }
             screen_refresh();
