@@ -21,6 +21,16 @@ static void check(bool cond,const char *msg) {
 void *pvPortMalloc(size_t n){return malloc(n);}
 void vPortFree(void *p){free(p);}
 void osd_log(const char *fmt,...) {(void)fmt;}
+void vTaskSuspendAll(void) {}
+int xTaskResumeAll(void) {return 1;}
+
+/* Simulate real libc OOM without invoking the fatal FreeRTOS hook. */
+static bool reject_malloc;
+extern void *__real_malloc(size_t n);
+void *__wrap_malloc(size_t n)
+{
+    return reject_malloc ? NULL : __real_malloc(n);
+}
 
 int disk_fs_request(fs_req_t *r)
 {
