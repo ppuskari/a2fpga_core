@@ -172,7 +172,7 @@ function Get-Verified-Binary-Hash {
         Fail "Stage2 binary is unexpectedly small: $($bytes.Length) bytes."
     }
     $txt=[Text.Encoding]::ASCII.GetString($bytes)
-    foreach($marker in @('PCM RMAX=','MOD SMP CACHE=8x','MOD SMP WIN=','MOD MCU CACHE=','MOD SPI=PCM512 SDRAM=BYTE')) {
+    foreach($marker in @('PCM RMAX=','MOD SMP CACHE=8x','MOD SMP WIN=4x2048B','MOD MCU CACHE=','MOD SPI=PCM512 SDRAM=BYTE')) {
         if(-not $txt.Contains($marker)) {
             Fail "Expected J2R9B diagnostic '$marker' absent from Stage2 binary."
         }
