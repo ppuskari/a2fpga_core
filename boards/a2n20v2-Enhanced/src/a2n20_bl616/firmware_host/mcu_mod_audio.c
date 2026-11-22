@@ -10,6 +10,7 @@
 #include "mcu_mod_audio.h"
 #include "mcu_mod_jukebox.h"
 #include "mcu_mod_format.h"
+#include "mod_filename.h"
 #include "mcu_mod_sample_store.h"
 #include "mcu_mod_pattern_store.h"
 #include "mcu_mod_gain.h"
@@ -191,10 +192,7 @@ static bool valid_path(const char *path)
     size_t n=strlen(path);
     if(n<5u || n>=MOD_PATH_CAP || strstr(path,"..") ||
        path[0]=='/' || strchr(path,':') || strchr(path,'\\'))return false;
-    return path[n-4]=='.' &&
-           tolower((unsigned char)path[n-3])=='m' &&
-           tolower((unsigned char)path[n-2])=='o' &&
-           tolower((unsigned char)path[n-1])=='d';
+    return mod_filename_matches(path);
 }
 bool mod_audio_choose(const char *path)
 {
