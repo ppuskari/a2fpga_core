@@ -120,7 +120,7 @@ jobs:
           gcc -std=gnu11 -Wall -Wextra -Werror -fsyntax-only -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware -DHXCMOD_MAXCHANNELS=8 "$MCU/media_mailbox.c" "$MCU/mcu_mod_audio.c" "$MCU/mcu_mod_gain.c" "$MCU/mcu_mod_now_playing.c" "$MCU/mcu_mod_jukebox.c" "$MCU/mcu_mod_format.c" "$MCU/mcu_mod_sample_store.c" "$MCU/mcu_mod_pattern_store.c"
           gcc -std=gnu11 -O2 -I"$MCU/third_party/hxcmod" boards/a2n20v2-Enhanced/tests/test_mcu_hxcmod_pcm.c "$MCU/third_party/hxcmod/hxcmod.c" -o /tmp/hxcmod
           /tmp/hxcmod
-          gcc -std=gnu11 -Wall -Wextra -Werror -O2 -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" boards/a2n20v2-Enhanced/tests/test_mcu_jukebox_scan.c "$MCU/mcu_mod_jukebox.c" -o /tmp/juke
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" boards/a2n20v2-Enhanced/tests/test_mcu_jukebox_scan.c "$MCU/mcu_mod_jukebox.c" -Wl,--wrap=malloc -o /tmp/juke
           /tmp/juke
           gcc -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O2 -DHXCMOD_MAXCHANNELS=8 -I"$MCU" -I"$MCU/third_party/hxcmod" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware \
             boards/a2n20v2-Enhanced/tests/test_mcu_mod_large.c \
@@ -174,7 +174,7 @@ jobs:
           gcc -std=gnu11 -Wall -Wextra -Werror -O2 \
             -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" \
             boards/a2n20v2-Enhanced/tests/test_mcu_jukebox_scan.c \
-            "$MCU/mcu_mod_jukebox.c" -o /tmp/j2r11_juke
+            "$MCU/mcu_mod_jukebox.c" -Wl,--wrap=malloc -o /tmp/j2r11_juke
           /tmp/j2r11_juke
           python3 - <<'PY'
           from pathlib import Path
