@@ -86,6 +86,7 @@ int disk_fs_request(fs_req_t *r)
         case 1:snprintf(r->name,sizeof r->name,"ignore.mp3");r->attr=0;break;
         case 2:snprintf(r->name,sizeof r->name,"CHEER.MOD");r->attr=0;break;
         case 3:snprintf(r->name,sizeof r->name,"3edges.mod");r->attr=0;break;
+        case 4:snprintf(r->name,sizeof r->name,"MOD.alpha");r->attr=0;break;
         default:break;
         }
         return 0;
@@ -194,6 +195,9 @@ int main(void)
     CHECK(command(MEDIA_CMD_M2_NEXT)==0);
     CHECK(response_count==11 && response[0]==10 && response[1]==0 &&
           !memcmp(response+2,"CHEER.MOD",9));
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_OK);
+    CHECK(response_count==11 && response[0]==10 && response[1]==0 &&
+          !memcmp(response+2,"MOD.alpha",9));
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_M2_EOF);
     CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
     CHECK(!media_dir_open && close_calls==1);
