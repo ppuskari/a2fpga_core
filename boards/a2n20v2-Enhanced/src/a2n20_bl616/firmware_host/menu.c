@@ -357,7 +357,7 @@ static disk_list_ent_t s_pick_ents[64]; /* one menu page only */
 static int   s_pick_count;
 static bool  s_pick_fw;                        /* firmware picker mode */
 static bool  s_pick_fpga;                      /* FPGA bitstream picker mode */
-/* J2: a 256-entry directory snapshot is shown in 48-entry MOD pages;
+/* Full 512-entry directory snapshot, shown in 48-entry MOD pages;
  * other pickers retain their preexisting 64-entry view. */
 #define MOD_PICK_PAGE_SIZE 48
 static int   s_pick_page, s_pick_total;
@@ -376,7 +376,10 @@ static void picker_load(void)
     s_pick_total = 0;
     s_pick_fs_error = 255; /* overwritten when scan finishes */
     disk_list_begin(s_pick_path, s_pick_exts);
-    for (int waited = 0; waited < 2000; waited += 20) {
+    /* SD/FatFS scans of 500 LFNs may exceed 2s (especially via FPGA SD
+     * tunnel). Wait up to 15s for the full disk-thread snapshot; never
+     * mislabel an unfinished scan as an empty folder. */
+    for (int waited = 0; waited < 15000; waited += 20) {
         int n = disk_list_poll_page(s_pick_ents,
                 s_pick_mod ? MOD_PICK_PAGE_SIZE : 64,
                 s_pick_mod ? s_pick_page*MOD_PICK_PAGE_SIZE : 0,
@@ -393,7 +396,7 @@ static void picker_load(void)
         usb_osal_msleep(20);
     }
     if(s_pick_fs_error==255)
-        osd_log("PICK DIR TIMEOUT: /%s (2000ms)",s_pick_path);
+        osd_log("PICK DIR TIMEOUT: /%s (15000ms)",s_pick_path);
 }
 
 static void picker_choose(int id)
@@ -571,8 +574,9 @@ static void picker_build(void)
         char fs_error[22];
         snprintf(fs_error,sizeof fs_error,"ERROR %d",s_pick_fs_error);
         mi_add(MI_INFO,s_pick_fs_error==255 ?
-               "DIRECTORY SCAN TIMEOUT" : "FAT DIRECTORY READ FAILED",
-               fs_error);
+               "DIRECTORY SCAN TIMEOUT" :
+               s_pick_fs_error==100 ? "DIRECTORY LIMIT >512" :
+               "FAT DIRECTORY READ FAILED",fs_error);
     } else if (!s_pick_count) {
         mi_add(MI_INFO, "NO MATCHING IMAGES OR FOLDERS", "");
     }
