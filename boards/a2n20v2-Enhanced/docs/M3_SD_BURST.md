@@ -72,7 +72,15 @@ payload.
    portal reads* for this boot. The autonomous FPGA SD receive engine
    remains useful independently.
 6. Read the two trailing SD CRC bytes via the existing register path.
-   Write/stop/multi-sector protocol remains FatFS/ChaN's existing logic.
+   For an M3 accelerated sector, calculate CRC16-CCITT (polynomial 0x1021,
+   initial 0) over all 512 bytes and compare with the SD card's two
+   big-endian wire CRC bytes. On mismatch, **reject this sector** and
+   disable accelerated SD receiving for this mount; subsequent attempts
+   use the original M2 bytewise SD transfer. The CRC check is independently
+   selectable with `FPGA_SD_BURST_VALIDATE_CRC=0/1`, enabled by default.
+   This protects SD-card-to-FPGA transfers that a local FPGA buffer
+   cross-check alone cannot validate. Write/stop/multi-sector protocol
+   remains FatFS/ChaN's existing logic.
 
 Because `$6E bit0` retains its prior meaning, old MCU Stage2 also
 operates with the new FPGA bitstream with no new behavior. New M3 MCU
@@ -161,7 +169,8 @@ hardware sector integrity and latency checks pass.**
   must trigger fallback
 - Real `sdmm.c` with mocked FPGA registers/FatFS interfaces, including
   old FPGA capability fallback, short packet, successful 512B payload,
-  FPGA fault and 200ms timeout; no partial sectors
+  CRC16-corrupted sector and sticky fallback, FPGA fault and 200ms timeout;
+  no partial sectors
 - Static integration guards for connector mux, $6D legacy, FPGA project
   source list, runtime capability, firmware flags and M3 branch protection
 
