@@ -16,6 +16,9 @@ on:
       - 'boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/mcu_mod_gain.*'
       - 'boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/mcu_hdmi_meter.*'
       - 'boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/mcu_mod_audio.c'
+      - 'boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/disk.c'
+      - 'boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/menu.c'
+      - 'boards/a2n20v2-Enhanced/tests/test_m3_apple_first_boot.py'
       - 'boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/CMakeLists.txt'
       - 'boards/a2n20v2-Enhanced/tests/test_mcu_mod_gain.c'
       - 'boards/a2n20v2-Enhanced/tests/test_mcu_hdmi_meter.c'
@@ -64,6 +67,8 @@ jobs:
             "$ROOT/tests/test_mcu_hdmi_meter.c" \
             "$HOST/mcu_hdmi_meter.c" -lm -o /tmp/m3_meter_host
           /tmp/m3_meter_host
+      - name: Verify cold-boot Apple/IIgs video remains first, TAB opens console
+        run: python3 boards/a2n20v2-Enhanced/tests/test_m3_apple_first_boot.py
       - name: Verify independent BL616 +8dB gain and linked peak limiter
         run: |
           ROOT=boards/a2n20v2-Enhanced
