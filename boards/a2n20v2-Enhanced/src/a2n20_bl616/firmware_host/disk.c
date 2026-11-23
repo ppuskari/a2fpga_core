@@ -465,21 +465,10 @@ static void mount_hdd(int u)
 static volatile bool g_remount_req = true;
 static volatile bool g_remounting  = false;   /* disk_remount() running */
 
-/* Non-blocking console hide: disk_remount() schedules the "READY" screen to be
- * handed back to the Apple II after a readable delay, and disk_poll() performs
- * the hide when the time arrives. Doing this instead of msleep() keeps the 2 ms
- * disk task serving track loads throughout the delay — a blocking sleep here
- * freezes serving for the whole delay and hangs a boot that seeks into it.
- * 0 = nothing scheduled. */
-static uint32_t g_hide_console_at_us = 0;
-
-/* Nonblocking screen handoff: 1.5 s with mounted media, 180 s if USB/SD
- * fails. The steady P10 speech diagnostics must never trap Apple video. */
-static void schedule_console_hide(uint32_t delay_us)
-{
-    g_hide_console_at_us = (uint32_t)bflb_mtimer_get_time_us() + delay_us;
-    if (!g_hide_console_at_us) g_hide_console_at_us = 1;
-}
+/* M3 Apple-first startup: disk mounting never takes HDMI away from
+ * native Apple/IIgs video. All mount/error logs still enter the console
+ * ring and Telnet mirror; the operator explicitly presses TAB to view.
+ * No delayed hide timer can race a user-requested console/menu view. */
 
 void disk_request_remount(void)
 {
@@ -487,16 +476,11 @@ void disk_request_remount(void)
 }
 
 /* ---- Disk II (re)mount, logged to the shared OSD console -------------------
- * Mount status is appended to the boot console (osd_console). The console is
- * shown while we look for the image(s); on a successful mount we hide it so the
- * screen returns to the Apple II, and on failure we leave it up so the message
- * can be read. */
+ * Buffered logs remain available by TAB even if storage fails. The mount
+ * path does NOT select HDMI video or interfere with an already-active MCU
+ * console/menu view. Apple video is the cold-boot default in FPGA reset. */
 static void disk_remount(void)
 {
-    /* Arm the failure timeout BEFORE any mount early-return path. */
-    g_hide_console_at_us = 0;
-    osd_console_show();
-    schedule_console_hide(180000000u);
     osd_log("DISK II: SEARCHING FOR STORAGE...");
 
     /* Tear down the previous mount. */
@@ -569,13 +553,9 @@ static void disk_remount(void)
 
     if (n_mounted > 0) {
         osd_log("DISK II: READY - STARTING APPLE II");
-        /* Hand the screen back after a readable delay, WITHOUT blocking: a
-         * msleep here would freeze the 2 ms disk task and hang a boot that
-         * seeks during the delay (observed as a ~1.54 s poll gap). */
-        schedule_console_hide(1500000u);
     } else {
         osd_log("DISK II: NO DISK IMAGES ON VOLUME");
-        /* leave the console up so the message is visible */
+        /* TAB still reveals the full diagnostic ring, even on mount failure. */
     }
 }
 
@@ -894,13 +874,6 @@ void disk_poll(void)
         g_remounting  = true;
         disk_remount();
         g_remounting  = false;
-    }
-
-    /* Non-blocking console hide (scheduled by disk_remount on a good mount). */
-    if (g_hide_console_at_us &&
-        (int32_t)((uint32_t)bflb_mtimer_get_time_us() - g_hide_console_at_us) >= 0) {
-        g_hide_console_at_us = 0;
-        osd_console_hide();
     }
 
     /* Apple II reset release: the FPGA holds the Apple II in RESET from
