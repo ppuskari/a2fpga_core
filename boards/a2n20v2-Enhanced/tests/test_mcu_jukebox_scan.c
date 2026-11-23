@@ -15,6 +15,7 @@ static const ent_t sub[]={{"1.mod",0},{"Z",0x10},{NULL,0}};
 static const ent_t deep[]={{"last.mod",0},{NULL,0}};
 static const ent_t *cur;
 static size_t cursor;
+static bool stress_large, inject_read_error, empty_folder;
 static void check(bool cond,const char *msg) {
     if(!cond){fprintf(stderr,"FAIL JUKE: %s\n",msg);exit(1);}
 }
@@ -26,9 +27,11 @@ int xTaskResumeAll(void) {return 1;}
 
 /* Simulate real libc OOM without invoking the fatal FreeRTOS hook. */
 static bool reject_malloc;
+static unsigned alloc_calls;
 extern void *__real_malloc(size_t n);
 void *__wrap_malloc(size_t n)
 {
+    ++alloc_calls;
     return reject_malloc ? NULL : __real_malloc(n);
 }
 
@@ -39,11 +42,27 @@ int disk_fs_request(fs_req_t *r)
         if(!strcmp(r->path,""))cur=root;
         else if(!strcmp(r->path,"A"))cur=sub;
         else if(!strcmp(r->path,"A/Z"))cur=deep;
+        else if(!strcmp(r->path,"PROTRACKER/2"))cur=root;
+        else if(!strcmp(r->path,"EMPTY"))cur=deep;
         else return -1;
+        stress_large=!strcmp(r->path,"PROTRACKER/2");
+        empty_folder=!strcmp(r->path,"EMPTY");
         cursor=0;
         return 0;
     }
     if(r->op==FSOP_MOD_LIST_NEXT && cur) {
+        r->name[0]=0;
+        if(inject_read_error && cursor==12u)return 1; /* FR_DISK_ERR */
+        if(stress_large) {
+            if(cursor<500u) {
+                snprintf(r->name,sizeof r->name,"TRACK%03u.MOD",
+                         (unsigned)(499u-cursor));
+                r->attr=0;
+            }
+            cursor++;
+            return 0;
+        }
+        if(empty_folder)return 0;
         const ent_t *e=&cur[cursor];
         r->name[0]=0;
         if(e->name) {
@@ -88,9 +107,35 @@ int main(void)
     check(!mod_jukebox_scan("",false),
           "recoverable jukebox OOM must fail without fatal FreeRTOS hook");
     reject_malloc=false;
+    check(mod_jukebox_last_error(),"OOM distinguished from an empty directory");
     check(mod_jukebox_count()==0,"failed OOM scan leaves no playlist");
+    check(!mod_jukebox_scan("EMPTY",false),"empty folder returns false");
+    check(!mod_jukebox_last_error(),"empty folder is not a scan failure");
     check(mod_jukebox_scan("",false),"scan recovers after low-heap condition");
     check(mod_jukebox_count()==3,"recovered playlist contains all MODs");
+    mod_jukebox_clear();
+    const unsigned allocated_before=alloc_calls;
+    check(mod_jukebox_scan("PROTRACKER/2",false),
+          "500 MODs scan with directory already open in M2 Apple browser");
+    check(!mod_jukebox_last_error(),"500 MOD scan completed without error");
+    check(mod_jukebox_count()==500u,"all 500 MODs collected");
+    check(!strcmp(mod_jukebox_track(0),"PROTRACKER/2/TRACK000.MOD"),
+          "500 MOD catalog globally sorted ascending");
+    check(!strcmp(mod_jukebox_track(499),"PROTRACKER/2/TRACK499.MOD"),
+          "last MOD is present and seekable");
+    check(alloc_calls-allocated_before<24u,
+          "500 files use compact chunks rather than 500 malloc calls");
+    check(mod_jukebox_find("PROTRACKER/2/TRACK009.MOD")==9,
+          "selected 10th MOD position resolves correctly");
+    mod_jukebox_clear();
+    inject_read_error=true;
+    check(!mod_jukebox_scan("PROTRACKER/2",false),
+          "injected FatFS readdir error must not masquerade as no MODs");
+    check(mod_jukebox_last_error(),"FatFS failure code distinct from empty folder");
+    check(mod_jukebox_count()==0,"partial list discarded on failed read");
+    inject_read_error=false;
+    check(mod_jukebox_scan("PROTRACKER/2",false),
+          "directory scan can restart after genuine FatFS error");
     mod_jukebox_clear();
     puts("PASS J2R11: sorted FAT jukebox, exact start-file lookup and recoverable OOM");
     return 0;
