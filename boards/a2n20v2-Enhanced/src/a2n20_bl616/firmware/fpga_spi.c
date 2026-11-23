@@ -312,9 +312,11 @@ static uint8_t s_sd_portal_verify[FPGA_SD_BURST_WINDOW_SIZE];
 static void sd_portal_read_frame(uint16_t offset,uint8_t *dst,
                                  uint16_t n,bool bulk)
 {
+    /* Shared TX scratch belongs to the SPI mutex, including header setup.
+     * Other tasks are free to use PCM/SSI/OSD SPI between these frames. */
+    spi_lock_take();
     build_xfer_header(FPGA_SPACE_LOCAL,
                       FPGA_SD_BURST_WINDOW_ADDR+(uint32_t)offset,n,1);
-    spi_lock_take();
     cs_assert();
     if(bulk) {
         memset(&spi_tx_scratch[XFER_HDR_LEN],0xFF,
