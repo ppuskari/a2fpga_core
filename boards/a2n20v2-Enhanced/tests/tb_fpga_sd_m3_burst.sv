@@ -24,7 +24,8 @@ module tb_fpga_sd_m3_burst;
     endfunction
     // SD card drives its next bit before the rising edge where the
     // fpga_sd_spi samples it, with unique nontrivial data for every byte.
-    assign sd_miso = pattern(sd_bits/8)[7 - (sd_bits%8)];
+    wire [7:0] card_data = pattern(sd_bits/8);
+    assign sd_miso = card_data[7 - (sd_bits%8)];
     always @(posedge sd_clk) begin
         if (!sd_cs_n) sd_bits <= sd_bits+1;
     end
