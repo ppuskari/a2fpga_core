@@ -24,10 +24,16 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $root=$PSScriptRoot
-# Never produce an experimental FPGA bitstream from the golden M2 branch.
+# M3 production and its explicit isolated audio experiment may build FPGA.
+# All other branches fail closed. This exception exists ONLY on the
+# experimental branch; the production M3 helper is not modified.
 $branch=(& git -C $root branch --show-current | Out-String).Trim()
-if($LASTEXITCODE -ne 0 -or $branch -ne 'petar/m3-sd-sector-burst-20261123') {
-    throw "M3 FPGA must be built from petar/m3-sd-sector-burst-20261123, not '$branch'."
+$allowedFpgaBranches=@(
+    'petar/m3-sd-sector-burst-20261123',
+    'petar/m3-mb-timing-prodos-suite-20261123'
+)
+if($LASTEXITCODE -ne 0 -or $branch -notin $allowedFpgaBranches) {
+    throw "M3 FPGA build requires an approved M3 branch; current '$branch'."
 }
 $board=Join-Path $root 'boards\a2n20v2-Enhanced'
 $project='a2n20v2_enhanced.gprj'
