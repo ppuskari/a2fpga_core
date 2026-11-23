@@ -14,6 +14,7 @@
 #include "mcu_mod_sample_store.h"
 #include "mcu_mod_pattern_store.h"
 #include "mcu_mod_gain.h"
+#include "mcu_hdmi_meter.h"
 #include "mcu_mod_now_playing.h"
 #include "third_party/hxcmod/hxcmod.h"
 #include "fpga_spi.h"
@@ -509,6 +510,14 @@ void mod_audio_task(void *arg)
     bool playing=false,draining=false,juke_active=false,recursive=false;
     unsigned juke_index=0;
     uint32_t blocks=0,window=0;
+    // Optional HDMI status: 9 bytes per second while MOD is playing,
+    // one OSD line alongside the existing ~8.9s telemetry batch.
+    // Sampling is skipped when an urgent PCM FIFO refill is pending.
+    uint8_t hdmi_pkt[HDMI_METER_BYTES];
+    uint16_t hdmi_hold_l=0u, hdmi_hold_r=0u;
+    uint8_t hdmi_clip_or=0u;
+    unsigned hdmi_samples=0u;
+    uint64_t next_hdmi_meter_ms=0u;
     (void)arg;
     s_state=MOD_PCM_IDLE;
     mod_now_playing_clear();
@@ -688,9 +697,54 @@ void mod_audio_task(void *arg)
                         osd_log("PH=%lu EV=%lu",
                                 (unsigned long)mod_patterns_cache_hits(),
                                 (unsigned long)mod_patterns_evictions());
+                    if(hdmi_samples) {
+                        // Integer log conversion occurs only once per
+                        // ~8.9s report, never in HxCMOD/PCM audio rendering.
+                        const unsigned dl=hdmi_meter_attenuation_db10(hdmi_hold_l);
+                        const unsigned dr=hdmi_meter_attenuation_db10(hdmi_hold_r);
+                        if(dl!=HDMI_METER_SILENT_DB10 &&
+                           dr!=HDMI_METER_SILENT_DB10) {
+                            osd_log("HDMI CLIP=%02X L=-%u.%u R=-%u.%u",
+                                    (unsigned)hdmi_clip_or,
+                                    dl/10u,dl%10u,dr/10u,dr%10u);
+                        }else {
+                            osd_log("HDMI CLIP=%02X PK=%u/%u",
+                                    (unsigned)hdmi_clip_or,
+                                    (unsigned)hdmi_hold_l,
+                                    (unsigned)hdmi_hold_r);
+                        }
+                    }
+                    hdmi_hold_l=hdmi_hold_r=0u;
+                    hdmi_clip_or=0u;
+                    hdmi_samples=0u;
                     window=0;
                 }
             }
+        }
+        // Do not add SPI transactions to time-critical FIFO replenishment.
+        // A single 9-byte, mutex-protected read per 1000ms costs <0.006%
+        // of the ~176kB/s PCM payload and never modifies sound or timings.
+        // The optional 'HM' magic means old M3 FPGA images remain compatible.
+        if(playing && !fast_refill) {
+            const uint64_t now_ms=bflb_mtimer_get_time_ms();
+            if(now_ms >= next_hdmi_meter_ms) {
+                next_hdmi_meter_ms=now_ms+1000u;
+                hdmi_meter_snapshot_t sample;
+                fpga_spi_xfer_read(PCM_SPACE,HDMI_METER_ADDR,
+                                   hdmi_pkt,HDMI_METER_BYTES);
+                if(hdmi_meter_parse(hdmi_pkt,&sample)) {
+                    if(sample.peak_l>hdmi_hold_l)hdmi_hold_l=sample.peak_l;
+                    if(sample.peak_r>hdmi_hold_r)hdmi_hold_r=sample.peak_r;
+                    hdmi_clip_or|=sample.clip_history;
+                    hdmi_samples++;
+                }
+            }
+        }
+        if(!playing) {
+            next_hdmi_meter_ms=0u;
+            hdmi_hold_l=hdmi_hold_r=0u;
+            hdmi_clip_or=0u;
+            hdmi_samples=0u;
         }
         if(fast_refill) {
             taskYIELD();
