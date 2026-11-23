@@ -21,6 +21,8 @@ extern volatile struct usbh_msc *g_msc_class;
 
 /* Select which medium backs the FatFS volume: true = USB stick, false = SD. */
 void disk_io_set_backend_usb(bool usb);
+/* Actual mounted FatFS backend, not merely whether USB hardware is present. */
+bool disk_io_backend_is_usb(void);
 
 /* USB stick geometry (0 if no stick) — for mount-failure diagnostics. */
 unsigned long disk_usb_block_count(void);

@@ -9,6 +9,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ff.h"
@@ -16,6 +17,7 @@
 #include "fpga_sd.h"
 #include "fpga_screen.h"
 #include "disk.h"
+#include "mod_filename.h"
 #include "diskio_host.h"   /* SD/USB backend selection */
 #include "usb_osal.h"      /* usb_osal_msleep */
 #include "osd_console.h"   /* shared boot/status console */
@@ -130,6 +132,7 @@ static const char *const     *g_list_exts;
 static char                   g_list_path[SETTINGS_NAME_LEN + 4];
 static disk_list_ent_t        g_list_ents[DISK_LIST_MAX];
 static int                    g_list_count;
+static volatile int           g_list_fr;  /* FR_OK, FatFS error or 100=limit */
 
 /* Case-insensitive extension test ("dsk", "do", ...). */
 static bool has_ext(const char *name, const char *ext)
@@ -153,6 +156,16 @@ static int name_cmp(const char *a, const char *b)
         a++; b++;
     }
     return (*a & 0xff) - (*b & 0xff);
+}
+
+/* Global folder-first case-insensitive sort; MOD pages share one snapshot. */
+static int list_entry_cmp(const void *lhs, const void *rhs)
+{
+    const disk_list_ent_t *a = (const disk_list_ent_t *)lhs;
+    const disk_list_ent_t *b = (const disk_list_ent_t *)rhs;
+    if (a->is_dir != b->is_dir)
+        return a->is_dir ? -1 : 1;
+    return name_cmp(a->name, b->name);
 }
 
 /* Format + sector order from the filename extension. .2mg is resolved from its
@@ -967,56 +980,98 @@ void disk_poll(void)
          * this release path -- the FPGA may release on its own timer.) */
     }
 
-    /* Async directory listing for the menu (FatFS is not re-entrant, so the
-     * scan runs here, in the thread that owns the filesystem). Two passes so
-     * directories sort before files. */
+    /* Single-pass FatFS console picker scan: directory contents can be 500+
+     * modules, so read up to DISK_LIST_MAX and sort ONE snapshot afterwards.
+     * The old two-pass readdir() and 2-second menu timeout could report an
+     * empty folder while a slow SD scan was still in progress.
+     * All FatFS calls remain exclusively on the disk thread. */
     fs_service();
 
     if (g_list_req) {
-        g_list_count = 0;
-        for (int pass = 0; pass < 2; pass++) {
-            DIR dir;
-            FILINFO fno;
-            if (f_opendir(&dir, g_list_path) != FR_OK)
-                break;
-            while (g_list_count < DISK_LIST_MAX) {
-                if (f_readdir(&dir, &fno) != FR_OK || fno.fname[0] == '\0')
+        /* Timing is instrumentation only. Record each stage so we can
+         * distinguish SD/FPGA SPI tunnel sector I/O from sorting overhead
+         * in 39-folder vs 506-MOD directories. Uint32 arithmetic tolerates
+         * the 32-bit microsecond counter wrapping mid-scan. */
+        const uint32_t scan_start_us=(uint32_t)bflb_mtimer_get_time_us();
+        uint32_t opendir_end_us=scan_start_us;
+        uint32_t readdir_end_us=scan_start_us;
+        unsigned raw_seen=0u, directories=0u, mod_files=0u;
+        unsigned nonmods=0u, mod_prefixes=0u, too_long=0u;
+        g_list_count=0;
+        g_list_fr=FR_OK;
+        DIR dir;
+        FILINFO fno;
+        FRESULT fr=f_opendir(&dir,g_list_path);
+        opendir_end_us=(uint32_t)bflb_mtimer_get_time_us();
+        if(fr!=FR_OK) {
+            g_list_fr=(int)fr;
+            osd_log("PICK DIR OPEN FAIL: %s FR=%d",g_list_path,(int)fr);
+        } else {
+            for(;;) {
+                fr=f_readdir(&dir,&fno);
+                if(fr!=FR_OK) {
+                    g_list_fr=(int)fr;
+                    osd_log("PICK DIR READ FAIL: %s FR=%d",g_list_path,(int)fr);
                     break;
-                if (fno.fname[0] == '.' || fno.fname[0] == '_')
-                    continue;
-                bool is_dir = (fno.fattrib & AM_DIR) != 0;
-                if ((pass == 0) != is_dir)
-                    continue;
-                if (!is_dir) {
-                    bool match = false;
-                    for (int e = 0; g_list_exts[e] && !match; e++)
-                        match = has_ext(fno.fname, g_list_exts[e]);
-                    if (!match)
-                        continue;
                 }
-                if (strlen(fno.fname) >= sizeof(g_list_ents[0].name))
-                    continue;   /* name too long to select later */
-                disk_list_ent_t *e = &g_list_ents[g_list_count++];
-                snprintf(e->name, sizeof(e->name), "%s", fno.fname);
-                e->is_dir = is_dir;
+                if(!fno.fname[0])break; /* normal EOF */
+                ++raw_seen;
+                if(fno.fname[0]=='.' || fno.fname[0]=='_')
+                    continue;
+                const bool is_dir=(fno.fattrib & AM_DIR)!=0;
+                if(!is_dir) {
+                    bool match=false;
+                    for(int e=0;g_list_exts[e] && !match;e++) {
+                        match=has_ext(fno.fname,g_list_exts[e]);
+                        if(!match && !strcmp(g_list_exts[e],"mod"))
+                            match=mod_filename_matches(fno.fname);
+                    }
+                    if(!match) {
+                        ++nonmods;
+                        continue;
+                    }
+                    if(!has_ext(fno.fname,"mod") &&
+                       mod_filename_matches(fno.fname))
+                        ++mod_prefixes;
+                }
+                if(strlen(fno.fname)>=sizeof(g_list_ents[0].name)) {
+                    ++too_long;
+                    continue;
+                }
+                if(g_list_count>=DISK_LIST_MAX) {
+                    /* This is not an empty folder; report a distinct error.
+                     * No partial or falsely 'complete' pagination. */
+                    g_list_fr=100;
+                    osd_log("PICK DIR LIMIT: %s exceeds %u visible entries",
+                            g_list_path,(unsigned)DISK_LIST_MAX);
+                    break;
+                }
+                disk_list_ent_t *entry=&g_list_ents[g_list_count++];
+                snprintf(entry->name,sizeof(entry->name),"%s",fno.fname);
+                entry->is_dir=is_dir;
+                if(is_dir)++directories; else ++mod_files;
             }
-            f_closedir(&dir);
-        }
-        /* Alphabetize within each group (the two passes already put
-         * directories first). FAT returns creation order, which makes big
-         * game folders unnavigable. Insertion sort: n <= DISK_LIST_MAX. */
-        for (int i = 1; i < g_list_count; i++) {
-            disk_list_ent_t tmp = g_list_ents[i];
-            int j = i;
-            while (j > 0 && g_list_ents[j - 1].is_dir == tmp.is_dir &&
-                   name_cmp(g_list_ents[j - 1].name, tmp.name) > 0) {
-                g_list_ents[j] = g_list_ents[j - 1];
-                j--;
+            fr=f_closedir(&dir);
+            if(fr!=FR_OK && g_list_fr==FR_OK) {
+                g_list_fr=(int)fr;
+                osd_log("PICK DIR CLOSE FAIL: %s FR=%d",g_list_path,(int)fr);
             }
-            g_list_ents[j] = tmp;
         }
-        g_list_req  = false;
-        g_list_done = true;
+        readdir_end_us=(uint32_t)bflb_mtimer_get_time_us();
+        if(g_list_fr==FR_OK && g_list_count>1)
+            qsort(g_list_ents,(size_t)g_list_count,
+                  sizeof(g_list_ents[0]),list_entry_cmp);
+        const uint32_t sort_end_us=(uint32_t)bflb_mtimer_get_time_us();
+        osd_log("PICK DIR: %s raw=%u dirs=%u mods=%u other=%u prefix=%u long=%u rc=%d",
+                g_list_path,raw_seen,directories,mod_files,
+                nonmods,mod_prefixes,too_long,g_list_fr);
+        osd_log("PICK TIMING: /%s",g_list_path);
+        osd_log("  OPEN=%lu READ=%lu SORT=%lu ms",
+                (unsigned long)((opendir_end_us-scan_start_us)/1000u),
+                (unsigned long)((readdir_end_us-opendir_end_us)/1000u),
+                (unsigned long)((sort_end_us-readdir_end_us)/1000u));
+        g_list_req=false;
+        g_list_done=true;
     }
 
     for (int v = 0; v < NDRV; v++)
@@ -1133,7 +1188,9 @@ void disk_get_hdd_info(int u, disk_info_t *out)
 
 bool disk_backend_is_usb(void)
 {
-    return g_msc_class != NULL;   /* mirrors the active-backend choice */
+    /* USB presence does NOT imply the USB drive is selected: STORAGE may
+     * explicitly choose SD while a USB stick remains connected. */
+    return disk_io_backend_is_usb();
 }
 
 bool disk_remount_pending(void)
@@ -1159,6 +1216,9 @@ static bool               g_mod_fil_open;
 /* Dedicated jukebox enumerator, separate from FTP's g_fs_dir. */
 static DIR                g_mod_dir;
 static bool               g_mod_dir_open;
+/* M2: exclusive Apple UI folder cursor; disk task remains FatFS owner. */
+static DIR                g_media_dir;
+static bool               g_media_dir_open;
 
 int disk_fs_request(fs_req_t *r)
 {
@@ -1191,6 +1251,36 @@ int disk_fs_request(fs_req_t *r)
     g_fs_req=NULL;
     __atomic_store_n(&g_fs_state,FS_IDLE,__ATOMIC_RELEASE);
     return timed_out ? -1 : result;
+}
+
+/* M2 Apple browsing cannot block SPI7's command/ACK service while a slow
+ * SD sector streams through the FPGA register tunnel. Reuse the same broker
+ * as synchronous disk_fs_request(), but allow the mailbox task to submit and
+ * check ONE persistent request without waiting for the disk thread.
+ * The common FS_CLAIM/PEND/DONE/IDLE states serialize all FS producers. */
+bool disk_fs_try_submit(fs_req_t *r)
+{
+    int expected=FS_IDLE;
+    if(!r || !__atomic_compare_exchange_n(&g_fs_state,&expected,FS_CLAIM,
+                                           false,__ATOMIC_ACQ_REL,
+                                           __ATOMIC_ACQUIRE))
+        return false;
+    r->out=0u;
+    g_fs_req=r;
+    __atomic_store_n(&g_fs_state,FS_PEND,__ATOMIC_RELEASE);
+    return true;
+}
+
+bool disk_fs_try_complete(fs_req_t *r, int *result)
+{
+    if(!r || __atomic_load_n(&g_fs_state,__ATOMIC_ACQUIRE)!=FS_DONE ||
+       g_fs_req!=r)
+        return false;
+    const int fr=g_fs_fr;
+    g_fs_req=NULL;
+    __atomic_store_n(&g_fs_state,FS_IDLE,__ATOMIC_RELEASE);
+    if(result)*result=fr;
+    return true;
 }
 
 bool disk_path_mounted(const char *path)
@@ -1277,6 +1367,38 @@ static void fs_service(void)
         if(g_mod_dir_open) {
             fr=f_closedir(&g_mod_dir);
             g_mod_dir_open=false;
+        }
+        break;
+    case FSOP_MEDIA_LIST_OPEN:
+        if(g_media_dir_open) {
+            f_closedir(&g_media_dir);
+            g_media_dir_open=false;
+        }
+        if(!r->path || strlen(r->path)+4u>=sizeof(full) ||
+           strstr(r->path,"..") || r->path[0]=='/' ||
+           strchr(r->path,':') || strchr(r->path,'\\')) {
+            fr=FR_INVALID_NAME;
+            break;
+        }
+        snprintf(full,sizeof(full),"0:/%s",r->path);
+        fr=f_opendir(&g_media_dir,full);
+        g_media_dir_open=(fr==FR_OK);
+        break;
+    case FSOP_MEDIA_LIST_NEXT: {
+        FILINFO fno;
+        r->name[0]=0;
+        fr=g_media_dir_open ? f_readdir(&g_media_dir,&fno) : FR_NOT_ENABLED;
+        if(fr==FR_OK && fno.fname[0]) {
+            snprintf(r->name,sizeof(r->name),"%s",fno.fname);
+            r->attr=fno.fattrib;
+            r->size=(uint32_t)fno.fsize;
+        }
+        break;
+    }
+    case FSOP_MEDIA_LIST_CLOSE:
+        if(g_media_dir_open) {
+            fr=f_closedir(&g_media_dir);
+            g_media_dir_open=false;
         }
         break;
     case FSOP_OPEN_R:
@@ -1382,6 +1504,7 @@ static void fs_service(void)
 void disk_list_begin(const char *path, const char *const *exts)
 {
     g_list_done = false;
+    g_list_fr = FR_OK;
     g_list_exts = exts;
     snprintf(g_list_path, sizeof(g_list_path), "0:/%s", path ? path : "");
     g_list_req  = true;           /* serviced by the next disk_poll */
@@ -1390,6 +1513,8 @@ void disk_list_begin(const char *path, const char *const *exts)
 int disk_list_poll_page(disk_list_ent_t *ents,int max,int offset,int *total)
 {
     if (!g_list_done)return -1;
+    /* -1 is pending, -2-code is completed with error (100=over 512). */
+    if(g_list_fr!=FR_OK)return -2-(int)g_list_fr;
     if(total)*total=g_list_count;
     if(offset<0 || max<0 || offset>g_list_count)return 0;
     int available=g_list_count-offset;

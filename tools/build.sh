@@ -49,6 +49,26 @@ echo ">> Board:   $board"
 echo ">> Project: $gprj"
 echo ">> Stage:   $stage"
 
+# Enhanced board: generate/verify the complete SSI263 and SynthLAB ROM
+# inventory before Gowin can infer any $readmemh-backed block RAM.
+if [[ "$board" == "a2n20v2-Enhanced" ]]; then
+    if [[ "${DRY_RUN:-}" == "1" ]]; then
+        echo ">> (DRY RUN) would prepare/verify SSI263 + SynthLAB piano ROM assets."
+    else
+        python3 "$REPO/tools/prepare_enhanced_assets.py" || {
+            echo "!! Missing or corrupt SSI263/SynthLAB ROM: aborting Gowin build."
+            exit 5
+        }
+        # Separate read-only preflight before starting gw_sh. This checks all
+        # seven $readmemh dependencies, their generator hashes and project
+        # references, and never downloads or regenerates an asset.
+        python3 "$REPO/tools/prepare_enhanced_assets.py" --check || {
+            echo "!! Enhanced FPGA seven-ROM preflight failed: synthesis blocked."
+            exit 5
+        }
+    fi
+fi
+
 if [[ "${DRY_RUN:-}" == "1" ]]; then
     echo "-- DRY RUN -- would run from $bdir:"
     echo "   printf 'open_project %s\\n%s\\nexit\\n' '$gprj' '$run' | '$GW_SH'"

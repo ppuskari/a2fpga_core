@@ -6,6 +6,7 @@ on:
       - petar/mod-jukebox-j1-20261121
       - petar/mod-jukebox-j2-largefile-20261121
       - petar/mod-j2r3-8ch-gain-20261121
+      - petar/media-m2-bidir-fat-picker-20261122
   pull_request:
   workflow_dispatch:
 jobs:
@@ -20,10 +21,91 @@ jobs:
           yosys -Q -T -p 'read_verilog -sv boards/a2n20v2-Enhanced/hdl/media_mailbox_slot3.sv; synth -top media_mailbox_slot3; stat' > /tmp/m1_yosys.log
           grep -q 'media_mailbox_slot3' /tmp/m1_yosys.log
           tail -n 38 /tmp/m1_yosys.log
+      - name: Verify committed SSI263 voice and die-derived parameter ROMs
+        run: |
+          python3 tools/generate_ssi263_voice.py --check
+          python3 tools/generate_ssi263_p8_roms.py --check
+          python3 tools/generate_ssi263_p9_nas_rom.py --check
+          python3 tools/generate_ssi263_p9_output_fir.py --check
+      - name: Prove clean Enhanced checkout prepares authentic piano and SSI263 without manual steps
+        run: |
+          python3 tools/prepare_enhanced_assets.py
+          python3 tools/prepare_enhanced_assets.py --check
+          test -s boards/a2n20v2-Enhanced/hdl/piano_multisustain.mem
+          test -s boards/a2n20v2-Enhanced/hdl/ssi263_voice.mem
+          bash -n tools/build.sh
+          if git ls-files --error-unmatch boards/a2n20v2-Enhanced/hdl/piano_multisustain.mem >/dev/null 2>&1; then
+            echo "Apple SynthLAB PCM must stay local, not tracked in public Git"
+            exit 1
+          fi
+          if ! git ls-files --error-unmatch boards/a2n20v2-Enhanced/hdl/ssi263_voice.mem >/dev/null 2>&1; then
+            echo "Deterministic SSI voice bank must be tracked for clean builds"
+            exit 1
+          fi
+          echo "PASS: full SSI263 and authentic SynthLAB ROM inventory, clean checkout"
+      - name: Windows PowerShell Enhanced ROM prep and offline verification
+        run: |
+          pwsh -NoProfile -File ./Build-M2-FPGA.ps1 Check
+          pwsh -NoProfile -File ./Build-M2-FPGA.ps1 Prepare -Offline
       - name: Verify Apple IIe/IIgs ROMless slot3 SPI7 mailbox
         run: |
           iverilog -g2012 -s tb_media_mailbox_slot3 -o /tmp/m1 boards/a2n20v2-Enhanced/hdl/media_mailbox_slot3.sv boards/a2n20v2-Enhanced/tests/tb_media_mailbox_slot3.sv
           vvp /tmp/m1
+      - name: Verify M2 bidirectional Apple reply FIFO and unchanged M1 ABI
+        run: |
+          iverilog -g2012 -s tb_media_mailbox_m2 -o /tmp/m2             boards/a2n20v2-Enhanced/hdl/media_mailbox_slot3.sv             boards/a2n20v2-Enhanced/tests/tb_media_mailbox_m2.sv
+          vvp /tmp/m2
+          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
+          grep -q 'case FSOP_MEDIA_LIST_OPEN:' "$MCU/disk.c"
+          grep -q 'case FSOP_MEDIA_LIST_NEXT:' "$MCU/disk.c"
+          grep -q 'case FSOP_MEDIA_LIST_CLOSE:' "$MCU/disk.c"
+          grep -q 'mod_audio_jukebox_start_from_file(path)' "$MCU/media_mailbox.c"
+      - name: M2 MCU request handler and FAT picker host integration
+        run: |
+          MCU=boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 \
+            -Iboards/a2n20v2-Enhanced/tests/p1d_mock \
+            -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware \
+            boards/a2n20v2-Enhanced/tests/test_media_mailbox_m2.c -o /tmp/m2_mcu
+          /tmp/m2_mcu
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 -I"$MCU" boards/a2n20v2-Enhanced/tests/test_mcu_mod_filename.c -o /tmp/m2_filenames
+          /tmp/m2_filenames
+          python3 boards/a2n20v2-Enhanced/tests/test_mcu_picker_cached_paging.py
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host")
+          disk=(root/"disk.c").read_text()
+          hdr=(root/"disk.h").read_text()
+          menu=(root/"menu.c").read_text()
+          assert "#define DISK_LIST_MAX 512" in hdr
+          # One FatFS enumerator per directory, followed by one global sort.
+          scan=disk.split("if (g_list_req) {",1)[1].split("for (int v = 0; v < NDRV; v++)",1)[0]
+          assert scan.count("f_opendir(&dir,g_list_path)") == 1
+          assert scan.count("f_readdir(&dir,&fno)") == 1
+          assert "qsort(g_list_ents" in scan
+          assert "mod_filename_matches(fno.fname)" in scan
+          assert "waited < 15000" in menu
+          assert "s_pick_page*MOD_PICK_PAGE_SIZE" in menu
+          assert "PICK DIR: %s raw=" in disk
+          print("PASS MCU MOD picker: single-pass sorted 512-entry catalog, 15s timeout")
+          PY
+      - name: M2 guarded BL616 Stage2 helper smoke
+        run: |
+          git checkout -B petar/media-m2-bidir-fat-picker-20261122 HEAD
+          pwsh -NoProfile -File ./M2.ps1 Help
+          pwsh -NoProfile -File ./M2.ps1 SourceState > /tmp/m2_source.txt
+          grep -q 'Git tracked files are clean' /tmp/m2_source.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('M2.ps1').read_text()
+          assert "petar/media-m2-bidir-fat-picker-20261122" in s
+          assert "'M2 FAT REPLY=YES'" in s
+          assert "'MOD JUKE=STARTFILE'" in s
+          assert "$flashArgs=@('--stage2', $firmware" in s
+          assert "'0x40000'" in s and "'--skip-verify'" in s
+          assert "--stage1" not in s
+          print("PASS M2 protected Stage2, exact branch and audio signatures")
+          PY
       - name: Preserve BL616 stereo PCM HDMI stream on SPACE6
         run: |
           iverilog -g2012 -s tb_mcu_stereo_pcm_bridge -o /tmp/pcm boards/a2n20v2-Enhanced/hdl/mcu_stereo_pcm_bridge.sv boards/a2n20v2-Enhanced/tests/tb_mcu_stereo_pcm_bridge.sv
@@ -38,7 +120,7 @@ jobs:
           gcc -std=gnu11 -Wall -Wextra -Werror -fsyntax-only -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware -DHXCMOD_MAXCHANNELS=8 "$MCU/media_mailbox.c" "$MCU/mcu_mod_audio.c" "$MCU/mcu_mod_gain.c" "$MCU/mcu_mod_now_playing.c" "$MCU/mcu_mod_jukebox.c" "$MCU/mcu_mod_format.c" "$MCU/mcu_mod_sample_store.c" "$MCU/mcu_mod_pattern_store.c"
           gcc -std=gnu11 -O2 -I"$MCU/third_party/hxcmod" boards/a2n20v2-Enhanced/tests/test_mcu_hxcmod_pcm.c "$MCU/third_party/hxcmod/hxcmod.c" -o /tmp/hxcmod
           /tmp/hxcmod
-          gcc -std=gnu11 -Wall -Wextra -Werror -O2 -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" boards/a2n20v2-Enhanced/tests/test_mcu_jukebox_scan.c "$MCU/mcu_mod_jukebox.c" -o /tmp/juke
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" boards/a2n20v2-Enhanced/tests/test_mcu_jukebox_scan.c "$MCU/mcu_mod_jukebox.c" -Wl,--wrap=malloc -o /tmp/juke
           /tmp/juke
           gcc -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O2 -DHXCMOD_MAXCHANNELS=8 -I"$MCU" -I"$MCU/third_party/hxcmod" -Iboards/a2n20v2-Enhanced/src/a2n20_bl616/firmware \
             boards/a2n20v2-Enhanced/tests/test_mcu_mod_large.c \
@@ -92,7 +174,7 @@ jobs:
           gcc -std=gnu11 -Wall -Wextra -Werror -O2 \
             -Iboards/a2n20v2-Enhanced/tests/p1d_mock -I"$MCU" \
             boards/a2n20v2-Enhanced/tests/test_mcu_jukebox_scan.c \
-            "$MCU/mcu_mod_jukebox.c" -o /tmp/j2r11_juke
+            "$MCU/mcu_mod_jukebox.c" -Wl,--wrap=malloc -o /tmp/j2r11_juke
           /tmp/j2r11_juke
           python3 - <<'PY'
           from pathlib import Path

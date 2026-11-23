@@ -10,17 +10,30 @@
 #include <string.h>
 
 typedef struct { const char *name; unsigned attr; } ent_t;
-static const ent_t root[]={{"c.mod",0},{"A",0x10},{"note.txt",0},{"B.MOD",0},{NULL,0}};
+static const ent_t root[]={{"c.mod",0},{"A",0x10},{"note.txt",0},{"MOD.alpha",0},{"B.MOD",0},{NULL,0}};
 static const ent_t sub[]={{"1.mod",0},{"Z",0x10},{NULL,0}};
 static const ent_t deep[]={{"last.mod",0},{NULL,0}};
 static const ent_t *cur;
 static size_t cursor;
+static bool stress_large, inject_read_error, empty_folder;
 static void check(bool cond,const char *msg) {
     if(!cond){fprintf(stderr,"FAIL JUKE: %s\n",msg);exit(1);}
 }
 void *pvPortMalloc(size_t n){return malloc(n);}
 void vPortFree(void *p){free(p);}
 void osd_log(const char *fmt,...) {(void)fmt;}
+void vTaskSuspendAll(void) {}
+int xTaskResumeAll(void) {return 1;}
+
+/* Simulate real libc OOM without invoking the fatal FreeRTOS hook. */
+static bool reject_malloc;
+static unsigned alloc_calls;
+extern void *__real_malloc(size_t n);
+void *__wrap_malloc(size_t n)
+{
+    ++alloc_calls;
+    return reject_malloc ? NULL : __real_malloc(n);
+}
 
 int disk_fs_request(fs_req_t *r)
 {
@@ -29,11 +42,27 @@ int disk_fs_request(fs_req_t *r)
         if(!strcmp(r->path,""))cur=root;
         else if(!strcmp(r->path,"A"))cur=sub;
         else if(!strcmp(r->path,"A/Z"))cur=deep;
+        else if(!strcmp(r->path,"PROTRACKER/2"))cur=root;
+        else if(!strcmp(r->path,"EMPTY"))cur=deep;
         else return -1;
+        stress_large=!strcmp(r->path,"PROTRACKER/2");
+        empty_folder=!strcmp(r->path,"EMPTY");
         cursor=0;
         return 0;
     }
     if(r->op==FSOP_MOD_LIST_NEXT && cur) {
+        r->name[0]=0;
+        if(inject_read_error && cursor==12u)return 1; /* FR_DISK_ERR */
+        if(stress_large) {
+            if(cursor<500u) {
+                snprintf(r->name,sizeof r->name,"TRACK%03u.MOD",
+                         (unsigned)(499u-cursor));
+                r->attr=0;
+            }
+            cursor++;
+            return 0;
+        }
+        if(empty_folder)return 0;
         const ent_t *e=&cur[cursor];
         r->name[0]=0;
         if(e->name) {
@@ -48,9 +77,10 @@ int disk_fs_request(fs_req_t *r)
 int main(void)
 {
     check(mod_jukebox_scan("",false),"root folder scan");
-    check(mod_jukebox_count()==2,"root folder has two MOD files");
+    check(mod_jukebox_count()==3,"root folder accepts both MOD filename conventions");
     check(!strcmp(mod_jukebox_track(0),"B.MOD"),"case-insensitive root sort 0");
     check(!strcmp(mod_jukebox_track(1),"c.mod"),"case-insensitive root sort 1");
+    check(!strcmp(mod_jukebox_track(2),"MOD.alpha"),"Amiga prefix MOD entry sorted");
     check(!mod_jukebox_truncated(),"root not truncated");
     check(mod_jukebox_find("c.mod")==1,"resume selected final root track");
     check(mod_jukebox_find("C.MOD")==1,"case-insensitive saved path");
@@ -59,18 +89,54 @@ int main(void)
     check(mod_jukebox_find("../c.mod")==-1,"no substring fallback");
     check(mod_jukebox_find(NULL)==-1,"null path never matches");
     check(mod_jukebox_scan("",true),"recursive tree scan");
-    check(mod_jukebox_count()==4,"tree has four MOD files");
+    check(mod_jukebox_count()==5,"tree has five MOD files");
     check(!strcmp(mod_jukebox_track(0),"A/1.mod"),"nested alphabetic sort 0");
     check(!strcmp(mod_jukebox_track(1),"A/Z/last.mod"),"nested alphabetic sort 1");
     check(!strcmp(mod_jukebox_track(2),"B.MOD"),"nested alphabetic sort 2");
     check(!strcmp(mod_jukebox_track(3),"c.mod"),"nested alphabetic sort 3");
+    check(!strcmp(mod_jukebox_track(4),"MOD.alpha"),"nested Amiga prefix sort 4");
     check(mod_jukebox_find("A/Z/LAST.MOD")==1,"subdirectory path lookup");
     check(mod_jukebox_find("c.mod")==3,"selected recursive last track");
     check(mod_jukebox_find("A/missing.mod")==-1,"no silent track zero");
+    check(mod_jukebox_find("mod.ALPHA")==4,"case-insensitive prefix start-file lookup");
     check(mod_jukebox_find("c.mo")==-1,"no prefix match");
     check(!mod_jukebox_scan("../escape",true),"reject parent traversal");
     mod_jukebox_clear();
     check(mod_jukebox_count()==0,"clear playlist releases tracks");
-    puts("PASS J2R11: sorted FAT jukebox, exact start-file lookup and missing handling");
+    reject_malloc=true;
+    check(!mod_jukebox_scan("",false),
+          "recoverable jukebox OOM must fail without fatal FreeRTOS hook");
+    reject_malloc=false;
+    check(mod_jukebox_last_error(),"OOM distinguished from an empty directory");
+    check(mod_jukebox_count()==0,"failed OOM scan leaves no playlist");
+    check(!mod_jukebox_scan("EMPTY",false),"empty folder returns false");
+    check(!mod_jukebox_last_error(),"empty folder is not a scan failure");
+    check(mod_jukebox_scan("",false),"scan recovers after low-heap condition");
+    check(mod_jukebox_count()==3,"recovered playlist contains all MODs");
+    mod_jukebox_clear();
+    const unsigned allocated_before=alloc_calls;
+    check(mod_jukebox_scan("PROTRACKER/2",false),
+          "500 MODs scan with directory already open in M2 Apple browser");
+    check(!mod_jukebox_last_error(),"500 MOD scan completed without error");
+    check(mod_jukebox_count()==500u,"all 500 MODs collected");
+    check(!strcmp(mod_jukebox_track(0),"PROTRACKER/2/TRACK000.MOD"),
+          "500 MOD catalog globally sorted ascending");
+    check(!strcmp(mod_jukebox_track(499),"PROTRACKER/2/TRACK499.MOD"),
+          "last MOD is present and seekable");
+    check(alloc_calls-allocated_before<24u,
+          "500 files use compact chunks rather than 500 malloc calls");
+    check(mod_jukebox_find("PROTRACKER/2/TRACK009.MOD")==9,
+          "selected 10th MOD position resolves correctly");
+    mod_jukebox_clear();
+    inject_read_error=true;
+    check(!mod_jukebox_scan("PROTRACKER/2",false),
+          "injected FatFS readdir error must not masquerade as no MODs");
+    check(mod_jukebox_last_error(),"FatFS failure code distinct from empty folder");
+    check(mod_jukebox_count()==0,"partial list discarded on failed read");
+    inject_read_error=false;
+    check(mod_jukebox_scan("PROTRACKER/2",false),
+          "directory scan can restart after genuine FatFS error");
+    mod_jukebox_clear();
+    puts("PASS J2R11: sorted FAT jukebox, exact start-file lookup and recoverable OOM");
     return 0;
 }

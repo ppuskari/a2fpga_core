@@ -54,7 +54,7 @@ bool disk_remount_pending(void);
  * are always included (is_dir set); files are filtered by exts, a
  * NULL-terminated list of extensions (no dot, case-insensitive).
  * Directories sort before files; each group is sorted alphabetically. */
-#define DISK_LIST_MAX 256 /* full sorted snapshot; picker displays 48 per page */
+#define DISK_LIST_MAX 512 /* full sorted snapshot, up to 500+ MODs per folder */
 typedef struct {
     char name[80];   /* entry name within the directory (LFN; longer skipped) */
     bool is_dir;
@@ -95,6 +95,11 @@ typedef enum {
     FSOP_MOD_LIST_OPEN,
     FSOP_MOD_LIST_NEXT,
     FSOP_MOD_LIST_CLOSE,
+    /* M2 Apple FAT browser owns a third independent directory handle.
+     * Never alias FTP's or the HxCMOD jukebox's FatFS directory. */
+    FSOP_MEDIA_LIST_OPEN,
+    FSOP_MEDIA_LIST_NEXT,
+    FSOP_MEDIA_LIST_CLOSE,
 } fs_op_t;
 
 typedef struct {
@@ -111,6 +116,15 @@ typedef struct {
 } fs_req_t;
 
 int  disk_fs_request(fs_req_t *r);          /* returns FRESULT */
+
+/* Nonblocking FS broker for the Apple M2 FAT catalog builder. Submit returns
+ * false when the single broker slot is busy; poll returns false until the
+ * disk thread has executed the request. Keep *r and any path/buffer pointers
+ * valid until poll succeeds. Only the submitting thread may poll its request.
+ * The caller MUST eventually poll completion before reusing *r. */
+bool disk_fs_try_submit(fs_req_t *r);
+bool disk_fs_try_complete(fs_req_t *r, int *result);
+
 
 /* True if the path (volume-root relative) is one of the currently mounted
  * disk/HDD images — network services must not overwrite those. */

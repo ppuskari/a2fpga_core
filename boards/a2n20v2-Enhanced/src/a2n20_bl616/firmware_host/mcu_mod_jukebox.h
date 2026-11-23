@@ -12,4 +12,7 @@ const char *mod_jukebox_track(unsigned index);
 /* Case-insensitive exact path match in the sorted playlist, -1 if absent. */
 int mod_jukebox_find(const char *relative_file);
 bool mod_jukebox_truncated(void);
+/* True only for failed scanning (FatFS error / low heap / invalid path),
+ * not for a successful but empty directory. Cleared by clear/new scan. */
+bool mod_jukebox_last_error(void);
 #endif

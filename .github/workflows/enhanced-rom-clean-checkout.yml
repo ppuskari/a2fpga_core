@@ -1,0 +1,74 @@
+name: Enhanced ROM clean-checkout gate
+
+on:
+  push:
+    branches:
+      - petar/media-m2-bidir-fat-picker-20261122
+    paths:
+      - "boards/a2n20v2-Enhanced/hdl/*.mem"
+      - "boards/a2n20v2-Enhanced/hdl/mb_doc_bridge.sv"
+      - "boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj"
+      - "boards/a2n20v2-Enhanced/prebuild.tcl"
+      - "boards/a2n20v2-Enhanced/impl/*process_config.json"
+      - "tools/generate_ssi263*.py"
+      - "tools/extract_synthlab_piano.py"
+      - "tools/prepare_enhanced_assets.py"
+      - "tools/build.sh"
+      - ".github/workflows/enhanced-rom-clean-checkout.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clean-roms:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate source ROM inventory and Gowin synthesis hooks
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          b = Path("boards/a2n20v2-Enhanced")
+          hdl = b / "hdl"
+          voice = (hdl / "ssi263_voice.mem").read_text(encoding="ascii").splitlines()
+          assert len(voice) == 8192, f"SSI ROM: {len(voice)} entries, expected 8192"
+          assert all(len(v) == 2 and all(c in "0123456789ABCDEFabcdef" for c in v) for v in voice)
+          assert any(int(v, 16) for v in voice), "SSI ROM must not be all zero"
+          project = (b / "a2n20v2_enhanced.gprj").read_text()
+          assert 'hdl/ssi263_voice.mem' in project and 'hdl/piano_multisustain.mem' in project
+          bridge = (hdl / "mb_doc_bridge.sv").read_text()
+          assert '$readmemh("hdl/piano_multisustain.mem", synthlab_pcm_rom)' in bridge
+          for name in ("a2n20v2_enhanced_process_config.json", "project_process_config.json"):
+              cfg = json.loads((b / "impl" / name).read_text())
+              assert cfg.get("TclPre") == "prebuild.tcl", f"{name}: prebuild hook disabled"
+          hook = (b / "prebuild.tcl").read_text()
+          assert "prepare_enhanced_assets.py" in hook and "--check" in hook
+          print("PASS: tracked 8KB SSI ROM; both Gowin hooks; piano dependency wired")
+          PY
+          python3 tools/generate_ssi263_voice.py --check
+          python3 tools/generate_ssi263_p8_roms.py --check
+          python3 tools/generate_ssi263_p9_nas_rom.py --check
+          python3 tools/generate_ssi263_p9_output_fir.py --check
+      - name: Missing piano must fail closed in check-only mode
+        run: |
+          piano=boards/a2n20v2-Enhanced/hdl/piano_multisustain.mem
+          # Exercise the missing-file failure even if piano PCM is ever added
+          # to the repository. Never allow an empty/missing ROM to pass.
+          if test -f "$piano"; then mv "$piano" "$piano.ci-hidden"; fi
+          trap 'if test -f "$piano.ci-hidden"; then mv "$piano.ci-hidden" "$piano"; fi' EXIT
+          if python3 tools/prepare_enhanced_assets.py --check; then
+            echo "::error::Unexpected success without validated SynthLAB sustain ROM"
+            exit 1
+          fi
+          echo "PASS: missing piano ROM is rejected before build"
+      - name: Fresh checkout automatically prepares and checks all real ROMs
+        run: |
+          python3 tools/prepare_enhanced_assets.py
+          python3 tools/prepare_enhanced_assets.py --check
+          python3 tools/extract_synthlab_piano.py --check
+          test "$(wc -l < boards/a2n20v2-Enhanced/hdl/ssi263_voice.mem)" -eq 8192
+          test "$(wc -l < boards/a2n20v2-Enhanced/hdl/piano_multisustain.mem)" -eq 1408
+          git diff --exit-code -- boards/a2n20v2-Enhanced/hdl/ssi263_voice.mem
+          echo "PASS: authentic SynthLAB sustains downloaded, checksum-verified, and build-ready"
