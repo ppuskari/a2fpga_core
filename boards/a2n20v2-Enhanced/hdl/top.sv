@@ -482,6 +482,9 @@ module top #(
     wire [7:0] pcm_spi_wr_data_w, pcm_spi_rd_data_w;
     wire signed [15:0] pcm_audio_l_w, pcm_audio_r_w;
     wire [15:0] pcm_audio_l_pixel_w, pcm_audio_r_pixel_w;
+    wire [15:0] hdmi_meter_peak_l_w, hdmi_meter_peak_r_w;
+    wire [7:0] hdmi_meter_clip_history_w;
+    wire hdmi_meter_valid_w;
 
     // Physically-installed A2FPGA slot-3 ROMless Media Mailbox. This
     // doesn't depend on slotmaker or the current A3 audio personality.
@@ -1217,7 +1220,11 @@ wire [7:0] doc_128k_status_w;
         .spi_rd_valid_o(pcm_spi_rd_valid_w),
         .spi_rd_data_o(pcm_spi_rd_data_w),
         .pcm_left_o(pcm_audio_l_w),
-        .pcm_right_o(pcm_audio_r_w)
+        .pcm_right_o(pcm_audio_r_w),
+        .hdmi_peak_left_i(hdmi_meter_peak_l_w),
+        .hdmi_peak_right_i(hdmi_meter_peak_r_w),
+        .hdmi_clip_history_i(hdmi_meter_clip_history_w),
+        .hdmi_diag_valid_i(hdmi_meter_valid_w)
     );
 
     cdc_sampling #(.WIDTH(16)) pcm_to_hdmi_l (
@@ -2082,6 +2089,23 @@ wire [15:0] audio_sample_word[1:0];
         .over_peak_o(pcm_hdmi_mix_over_peak_w)
     );
 
+
+    // One-second post-mix stereo sample-peak and clip snapshot, transferred
+    // pixel->logic clock only once per second for infrequent MCU reporting.
+    // No modification of the HDMI PCM samples, audio-rate DSP or SPI6 FIFO.
+    hdmi_mix_meter #(.SAMPLE_RATE(AUDIO_RATE)) hdmi_mix_meter_inst (
+        .clk_pixel_i(clk_pixel_w),
+        .clk_logic_i(clk_logic_w),
+        .reset_n_i(device_reset_n_w),
+        .sample_tick_i(clk_audio_w),
+        .sample_l_i($signed(audio_sample_word[0])),
+        .sample_r_i($signed(audio_sample_word[1])),
+        .clip_history_i(hdmi_clip_history_r),
+        .peak_l_o(hdmi_meter_peak_l_w),
+        .peak_r_o(hdmi_meter_peak_r_w),
+        .clip_history_o(hdmi_meter_clip_history_w),
+        .valid_o(hdmi_meter_valid_w)
+    );
 
     // HDMI
 
