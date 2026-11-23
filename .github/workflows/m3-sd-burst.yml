@@ -94,7 +94,8 @@ jobs:
           assert "'M3 SD BURST FPGA='" in helper
           fpga_helper=Path("Build-M3-FPGA.ps1").read_text()
           assert "petar/m3-sd-sector-burst-20261123" in fpga_helper
-          assert "program" not in fpga_helper.lower() or "Program volatile SRAM" in fpga_helper or "Program volatile SRAM" in Path("boards/a2n20v2-Enhanced/docs/M3_SD_BURST.md").read_text()
+          assert "PROGRAM VOLATILE FPGA SRAM ONLY" in fpga_helper
+          assert "previous bitstream archived" in fpga_helper.lower()
           print("PASS M3: legacy ABI preserved, SD portal capability gated, CRC16, golden FPGA/Stage2 branch protection")
           PY
       - name: Check M3 guarded helpers and fail-closed ROM integrity
