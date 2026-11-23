@@ -87,8 +87,9 @@ static void prepare(unsigned data_bytes,bool cap)
     card_stream[0]=0xFE;
     for(unsigned i=0;i<data_bytes;i++)
         card_stream[i+1u]=(uint8_t)(i*37u+((i>>4u)*7u)+0xA5u);
-    card_stream[data_bytes+1u]=0xCA;
-    card_stream[data_bytes+2u]=0xFE;
+    const uint16_t crc=sd_m3_crc16(&card_stream[1],data_bytes);
+    card_stream[data_bytes+1u]=(uint8_t)(crc>>8);
+    card_stream[data_bytes+2u]=(uint8_t)crc;
     s_sd_burst_cap=-1;
 }
 static void check_bytes(const uint8_t *buf,unsigned n)
@@ -118,6 +119,18 @@ int main(void)
     check_bytes(sector,16u);
     CHECK(burst_started==0u && bytes_polled==19u);
 
+    /* The XFER readback can be perfect while real SD->FPGA MISO data
+     * was corrupted. A mismatched SD data CRC must reject the sector and
+     * disable the M3 path until the next card initialization. */
+    prepare(512u,true);
+    card_stream[513u]^=0x01u; /* corrupt ONLY the wire CRC */
+    CHECK(rcvr_datablock(sector,512u)==0);
+    CHECK(s_sd_burst_cap==0 && mmc_sd_burst_error_count()>=1u);
+    CHECK(burst_started==1u && portal_reads==1u);
+    cursor=0u;bytes_polled=0u;waiting=false;
+    CHECK(rcvr_datablock(sector,512u)==1); /* sticky legacy fallback */
+    check_bytes(sector,512u);
+    CHECK(burst_started==1u && bytes_polled==515u);
     prepare(512u,true);
     force_error=true;
     CHECK(rcvr_datablock(sector,512u)==0);
@@ -129,6 +142,6 @@ int main(void)
     CHECK(rcvr_datablock(sector,512u)==0);
     CHECK(burst_started==1u && burst_aborted==1u && portal_reads==0u);
     CHECK(scheduler_yields>=100u && fake_us>=200000u);
-    puts("PASS M3 real FatFS SD driver: 512B burst, legacy M2, short block, errors and timeout");
+    puts("PASS M3 real FatFS SD driver: 512B burst, M2 fallback, SD CRC16, errors and timeout");
     return 0;
 }
