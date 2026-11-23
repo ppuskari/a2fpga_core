@@ -57,6 +57,28 @@ def generate(project_path: Path, output_path: Path, flow: str) -> dict:
     if cfg.get("Synthesize_tool") not in ("GowinSyn", "gowinsynthesis"):
         raise RuntimeError("Unexpected GUI synthesis tool, refusing silent change")
 
+    # Gowin GUI preserves dual-purpose configuration pins in its process
+    # config, NOT in the .gprj FileList. The M3 board deliberately uses
+    # SSPI-related pins for Apple bus a2_bridge_d[5:2]. Omitting these
+    # options reserves the pins and breaks P&R with PR2017/PR2028.
+    # GW2AR-18 also uses some MSPI pins as regular GPIO in the GUI.
+    # Mirror both confirmed settings; NEVER change .cst assignments.
+    pin_reuse = (
+        ("SSPI", "-use_sspi_as_gpio"),
+        ("MSPI", "-use_mspi_as_gpio"),
+    )
+    secondary_cfg = board_dir / "impl" / (project_path.stem + "_process_config.json")
+    if secondary_cfg.is_file():
+        pnr_cfg = json.loads(secondary_cfg.read_text(encoding="utf-8"))
+    else:
+        pnr_cfg = None
+    for key, _ in pin_reuse:
+        value = cfg.get(key)
+        if not isinstance(value, bool):
+            raise RuntimeError(f"Missing/invalid {key} dual-purpose pin setting in GUI config")
+        if pnr_cfg is not None and pnr_cfg.get(key) != value:
+            raise RuntimeError(f"{key} differs between GUI and PNR process config; refusing pin changes")
+
     files = root.findall("./FileList/File")
     if not files:
         raise RuntimeError(f"No HDL files in {project_path}")
@@ -112,6 +134,12 @@ def generate(project_path: Path, output_path: Path, flow: str) -> dict:
         # Original GUI include-path list is empty, but top.sv includes
         # datetime.svh from board/hdl. Make it explicit in headless mode.
         "    set_option -include_path {hdl;../../hdl}",
+    ]
+    # These MUST match the GUI process config; otherwise Gowin 1.9.9
+    # defaults to dedicated SSPI pins and cannot place Apple bus I/O.
+    for key, option in pin_reuse:
+        tcl.append(f"    set_option {option} {int(cfg[key])}")
+    tcl += [
         f"    run {flow}",
         "} m3_tcl_error m3_tcl_options]} {",
         '    puts "M3_GOWIN_TCL_FAILED: $m3_tcl_error"',
