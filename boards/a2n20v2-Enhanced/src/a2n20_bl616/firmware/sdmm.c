@@ -72,6 +72,7 @@ static uint32_t s_sd_burst_crc_errors;
  * big-endian on the two wire bytes after the data payload. Validate
  * accelerated sectors end-to-end: a self-test of the XFER buffer alone
  * cannot catch MISO bit slips at the SD FPGA PHY. */
+#if FPGA_SD_BURST_READ && FPGA_SD_BURST_VALIDATE_CRC
 static uint16_t sd_m3_crc16(const BYTE *data,UINT n)
 {
     uint16_t crc=0;
@@ -83,6 +84,7 @@ static uint16_t sd_m3_crc16(const BYTE *data,UINT n)
     }
     return crc;
 }
+#endif
 static bool s_sd_host_portal_reported;
 
 uint32_t mmc_sd_burst_read_count(void){return s_sd_burst_reads;}
