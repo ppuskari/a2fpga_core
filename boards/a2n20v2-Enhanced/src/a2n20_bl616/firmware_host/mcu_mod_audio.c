@@ -568,9 +568,14 @@ void mod_audio_task(void *arg)
                     playing=juke_active;
                 }
             }else {
-                juke_state(MOD_JUKE_EMPTY);
                 s_state=MOD_PCM_STOPPED;
-                osd_log("MCU JUKE: NO .MOD FILES FOUND");
+                if(mod_jukebox_last_error()) {
+                    juke_state(MOD_JUKE_SCAN_ERROR);
+                    osd_log("MCU JUKE: PLAYLIST SCAN FAILED (SEE PREVIOUS FR/HEAP LOG)");
+                }else {
+                    juke_state(MOD_JUKE_EMPTY);
+                    osd_log("MCU JUKE: NO .MOD FILES FOUND");
+                }
             }
             blocks=window=0;
         }else if(selected) {
