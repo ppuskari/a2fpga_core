@@ -38,6 +38,16 @@ jobs:
             "$ROOT/tests/test_fpga_spi_m3_burst.c" "$SPI/fpga_spi.c" -o /tmp/m3_host
           /tmp/m3_host
           /tmp/m3_host --corrupt
+      - name: Verify real FatFS sector read with old FPGA, burst FPGA and faults
+        run: |
+          ROOT=boards/a2n20v2-Enhanced
+          MOCK="$ROOT/tests/m3_sd_mock"
+          SPI="$ROOT/src/a2n20_bl616/firmware"
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 \
+            -DFATFS_EXTERNAL_DISKIO -DFPGA_SD_BURST_READ=1 \
+            -I"$MOCK" -I"$SPI" \
+            "$ROOT/tests/test_sdmm_m3_burst.c" -o /tmp/m3_fatfs
+          /tmp/m3_fatfs
       - name: Verify safe aperture, runtime cap and independent fallbacks
         run: |
           python3 - <<'PY'
