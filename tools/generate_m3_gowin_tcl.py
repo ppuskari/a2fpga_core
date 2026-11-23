@@ -66,6 +66,9 @@ def generate(project_path: Path, output_path: Path, flow: str) -> dict:
         "# Run from the .gprj directory via gw_sh.exe <this_file.tcl>.",
         "# Do not edit: regenerate from the authoritative .gprj on each build.",
         "if {[catch {",
+        # Match the GUI TclPre process hook: this re-verifies authentic
+        # SSI/SynthLAB assets and regenerates hdl/datetime.svh.
+        "    source {prebuild.tcl}",
         f"    set_device -name {tcl_literal(device_name)} {tcl_literal(part_number)}",
     ]
     enabled_count = 0
