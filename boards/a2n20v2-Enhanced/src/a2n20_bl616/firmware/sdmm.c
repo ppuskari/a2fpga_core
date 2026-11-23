@@ -50,6 +50,9 @@
 #define SD_BURST_CMD_START   0xA1u
 #define SD_BURST_CMD_ABORT   0xAFu
 #define SD_BURST_LIMIT_US    200000u
+#ifndef FPGA_SD_BURST_VALIDATE_CRC
+#define FPGA_SD_BURST_VALIDATE_CRC 1
+#endif
 
 #if FPGA_SD_BURST_READ && defined(FATFS_EXTERNAL_DISKIO)
 #include "FreeRTOS.h"
@@ -63,11 +66,28 @@
 #endif
 static int s_sd_burst_cap=-1; /* -1=unknown,0=legacy,1=M3 FPGA */ 
 static uint32_t s_sd_burst_reads,s_sd_burst_timeouts,s_sd_burst_errors;
+static uint32_t s_sd_burst_crc_errors;
+
+/* SD SPI read-data CRC is CRC16-CCITT, poly 0x1021, initial value 0,
+ * big-endian on the two wire bytes after the data payload. Validate
+ * accelerated sectors end-to-end: a self-test of the XFER buffer alone
+ * cannot catch MISO bit slips at the SD FPGA PHY. */
+static uint16_t sd_m3_crc16(const BYTE *data,UINT n)
+{
+    uint16_t crc=0;
+    for(UINT i=0;i<n;i++) {
+        crc^=(uint16_t)data[i]<<8;
+        for(unsigned bit=0;bit<8u;bit++)
+            crc=(uint16_t)((crc<<1) ^
+                 ((crc&0x8000u)?0x1021u:0u));
+    }
+    return crc;
+}
 static bool s_sd_host_portal_reported;
 
 uint32_t mmc_sd_burst_read_count(void){return s_sd_burst_reads;}
 uint32_t mmc_sd_burst_error_count(void){
-    return s_sd_burst_timeouts+s_sd_burst_errors;
+    return s_sd_burst_timeouts+s_sd_burst_errors+s_sd_burst_crc_errors;
 }
 /* Only call for the payload AFTER the card's 0xFE data token has been
  * received. The SD card stays selected and no other thread accesses this
@@ -298,8 +318,20 @@ int rcvr_datablock (	/* 1:OK, 0:Failed */
 	int staged=(btr==512u)?sd_m3_receive_sector(buff):-1;
 	if(staged==0)return 0;  /* failed mid-packet: caller deselects */
 	if(staged<0)rcvr_mmc(buff,btr);
-	rcvr_mmc(d, 2);					/* Discard CRC */
-
+	rcvr_mmc(d, 2);					/* SD CRC16 (legacy ignores) */
+#if FPGA_SD_BURST_READ && FPGA_SD_BURST_VALIDATE_CRC
+	if(staged==1) {
+		const uint16_t wire=(uint16_t)(((uint16_t)d[0]<<8)|d[1]);
+		const uint16_t got=sd_m3_crc16(buff,btr);
+		if(got!=wire) {
+			++s_sd_burst_crc_errors;
+			SD_BURST_LOG("M3 SD CRC16 FAIL CALC=%04X WIRE=%04X; FALLBACK M2",
+			             got,wire);
+			s_sd_burst_cap=0; /* sticky until next card initialization */
+			return 0; /* never deliver a possibly corrupted FatFS sector */
+		}
+	}
+#endif
 	return 1;						/* Return with success */
 }
 
