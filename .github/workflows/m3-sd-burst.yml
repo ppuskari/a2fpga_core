@@ -67,6 +67,9 @@ jobs:
           assert "fpga_sd_burst.sv" in gowin
           assert "FPGA_SD_BURST_READ 1" in cmake
           assert "FPGA_SPI_SD_BURST_PORTAL_BULK 1" in cmake
+          assert "FPGA_SD_BURST_VALIDATE_CRC 1" in cmake
+          assert "sd_m3_crc16(buff,btr)" in mmc
+          assert "s_sd_burst_cap=0; /* sticky until next card initialization */" in mmc
           assert "s_sd_burst_cap=(fpga_spi_reg_read(SD_REG_STATUS)&SD_BURST_CAP)" in mmc
           assert "if(!s_sd_burst_cap)return -1" in mmc
           assert "if(staged<0)rcvr_mmc(buff,btr)" in mmc
@@ -76,10 +79,14 @@ jobs:
           helper=Path("M3.ps1").read_text()
           assert "$requiredBranch='petar/m3-sd-sector-burst-20261123'" in helper
           assert "'M3 SD BURST FPGA='" in helper
-          print("PASS M3: legacy ABI preserved, SD portal capability gated, per-sector fallback, Stage2 source protection")
+          fpga_helper=Path("Build-M3-FPGA.ps1").read_text()
+          assert "petar/m3-sd-sector-burst-20261123" in fpga_helper
+          assert "program" not in fpga_helper.lower() or "Program volatile SRAM" in fpga_helper or "Program volatile SRAM" in Path("boards/a2n20v2-Enhanced/docs/M3_SD_BURST.md").read_text()
+          print("PASS M3: legacy ABI preserved, SD portal capability gated, CRC16, golden FPGA/Stage2 branch protection")
           PY
-      - name: Check guarded M3 Stage2 helper syntax and source
+      - name: Check guarded M3 Stage2 and FPGA preparation helpers
         shell: pwsh
         run: |
           ./M3.ps1 Help
           ./M3.ps1 SourceState
+          ./Build-M3-FPGA.ps1 Check -Offline
