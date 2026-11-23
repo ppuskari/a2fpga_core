@@ -36,7 +36,86 @@
 
 #define SD_REG_CTRL   0x6C  /* [1]=slow_clk, [0]=CS# */
 #define SD_REG_XFER   0x6D  /* W=start xfer with TX byte, R=last RX byte */
-#define SD_REG_STATUS 0x6E  /* [0]=busy */
+#define SD_REG_STATUS 0x6E  /* [0]=byte busy, M3 [7:4]=cap/done/active/error */
+
+/* M3 is opt-in at firmware build time, and ALSO runtime capability gated.
+ * Upgrading Stage 2 without upgrading FPGA remains entirely functional. */
+#ifndef FPGA_SD_BURST_READ
+#define FPGA_SD_BURST_READ 0
+#endif
+#define SD_BURST_CAP         0x80u
+#define SD_BURST_DONE        0x40u
+#define SD_BURST_ACTIVE      0x20u
+#define SD_BURST_ERROR       0x10u
+#define SD_BURST_CMD_START   0xA1u
+#define SD_BURST_CMD_ABORT   0xAFu
+#define SD_BURST_LIMIT_US    200000u
+
+#if FPGA_SD_BURST_READ && defined(FATFS_EXTERNAL_DISKIO)
+#include "FreeRTOS.h"
+#include "task.h"
+#include "osd_console.h"
+#define SD_BURST_WAIT() vTaskDelay(pdMS_TO_TICKS(1))
+#define SD_BURST_LOG(...) osd_log(__VA_ARGS__)
+#else
+#define SD_BURST_WAIT() bflb_mtimer_delay_us(100)
+#define SD_BURST_LOG(...) do {} while(0)
+#endif
+static int s_sd_burst_cap=-1; /* -1=unknown,0=legacy,1=M3 FPGA */ 
+static uint32_t s_sd_burst_reads,s_sd_burst_timeouts,s_sd_burst_errors;
+static bool s_sd_host_portal_reported;
+
+uint32_t mmc_sd_burst_read_count(void){return s_sd_burst_reads;}
+uint32_t mmc_sd_burst_error_count(void){
+    return s_sd_burst_timeouts+s_sd_burst_errors;
+}
+/* Only call for the payload AFTER the card's 0xFE data token has been
+ * received. The SD card stays selected and no other thread accesses this
+ * card: the disk thread is the sole FatFS owner. The shared BL616-to-FPGA
+ * SPI mutex is free between tiny status probes and 128B portal frames. */
+static int sd_m3_receive_sector(BYTE *buff)
+{
+#if FPGA_SD_BURST_READ
+    if(s_sd_burst_cap<0) {
+        s_sd_burst_cap=(fpga_spi_reg_read(SD_REG_STATUS)&SD_BURST_CAP)?1:0;
+        SD_BURST_LOG("M3 SD BURST FPGA=%s",
+                     s_sd_burst_cap ? "YES":"NO (M2 FALLBACK)");
+    }
+    if(!s_sd_burst_cap)return -1; /* use historical bytewise SD */
+    fpga_spi_reg_write(SD_REG_STATUS,SD_BURST_CMD_START);
+    const uint32_t begin=(uint32_t)bflb_mtimer_get_time_us();
+    for(;;) {
+        const BYTE status=fpga_spi_reg_read(SD_REG_STATUS);
+        if((status&SD_BURST_DONE) && !(status&SD_BURST_ACTIVE)) {
+            if(status&SD_BURST_ERROR) {
+                ++s_sd_burst_errors;
+                SD_BURST_LOG("M3 SD BURST FPGA ERROR STATUS=%02X",status);
+                fpga_spi_reg_write(SD_REG_STATUS,SD_BURST_CMD_ABORT);
+                return 0; /* card stream consumed: fail this block */
+            }
+            fpga_spi_sd_burst_buffer_read(buff);
+            ++s_sd_burst_reads;
+            if(!s_sd_host_portal_reported) {
+                s_sd_host_portal_reported=true;
+                SD_BURST_LOG("M3 SD 512B BURST READY HOST SPI=%s",
+                     fpga_spi_sd_burst_bulk_ok()?"BULK":"BYTEWISE FALLBACK");
+            }
+            return 1;
+        }
+        if((uint32_t)((uint32_t)bflb_mtimer_get_time_us()-begin)>=
+           SD_BURST_LIMIT_US) {
+            ++s_sd_burst_timeouts;
+            SD_BURST_LOG("M3 SD BURST TIMEOUT STATUS=%02X",status);
+            fpga_spi_reg_write(SD_REG_STATUS,SD_BURST_CMD_ABORT);
+            return 0; /* never retry within an already-clocked SD block */
+        }
+        SD_BURST_WAIT();
+    }
+#else
+    (void)buff;
+    return -1;
+#endif
+}
 
 /*-------------------------------------------------------------------------*/
 /* Platform-dependent functions for FPGA SPI tunnel                        */
@@ -212,7 +291,13 @@ int rcvr_datablock (	/* 1:OK, 0:Failed */
 	}
 	if (d[0] != 0xFE) return 0;		/* If not valid data token, return with error */
 
-	rcvr_mmc(buff, btr);			/* Receive the data block into buffer */
+	/* M3: FPGA receives the whole 512-byte payload autonomously;
+	 * BL616 fetches it via 4 short XFER0 frames. All non-512-byte
+	 * reads (CSD, status), commands, response tokens, and CRC bytes
+	 * retain the known-good register-byte path. */
+	int staged=(btr==512u)?sd_m3_receive_sector(buff):-1;
+	if(staged==0)return 0;  /* failed mid-packet: caller deselects */
+	if(staged<0)rcvr_mmc(buff,btr);
 	rcvr_mmc(d, 2);					/* Discard CRC */
 
 	return 1;						/* Return with success */
@@ -339,6 +424,8 @@ DSTATUS mmc_disk_initialize (
 	dly_us(10000);			/* 10ms */
 
 	/* Set CS# high + slow clock for init sequence */
+	s_sd_burst_cap=-1;
+	s_sd_host_portal_reported=false;
 	sd_ctrl_r = 0x03;		/* [1]=slow_clk, [0]=CS# high */
 	fpga_spi_reg_write(SD_REG_CTRL, sd_ctrl_r);
 
