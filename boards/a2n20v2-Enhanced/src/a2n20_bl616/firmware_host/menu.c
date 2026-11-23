@@ -1430,6 +1430,7 @@ static void mod_library_build(void)
         case MOD_JUKE_READY: scan="READY";break;
         case MOD_JUKE_EMPTY: scan="NO MODS";break;
         case MOD_JUKE_START_MISSING: scan="START MISSING";break;
+        case MOD_JUKE_SCAN_ERROR: scan="READ/HEAP ERROR";break;
         default:break;
         }
         mi_add(MI_INFO,"JUKEBOX SCAN",scan);
@@ -1792,6 +1793,8 @@ void menu_input(uint16_t buttons)
                 set_status("JUKEBOX SCAN: NO MODS");break;
             case MOD_JUKE_START_MISSING:
                 set_status("START FILE NOT FOUND IN FOLDER");break;
+            case MOD_JUKE_SCAN_ERROR:
+                set_status("JUKEBOX SCAN FAILED: CHECK CONSOLE LOG");break;
             default: break;
             }
             screen_refresh();
