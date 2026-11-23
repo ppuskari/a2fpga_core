@@ -33,7 +33,8 @@ unsigned mod_audio_jukebox_last_track(void);
  * increments on queue/scan/completion/clear to prompt UI repaint. */
 typedef enum {
     MOD_JUKE_IDLE=0, MOD_JUKE_QUEUED, MOD_JUKE_SCANNING,
-    MOD_JUKE_READY, MOD_JUKE_EMPTY, MOD_JUKE_START_MISSING
+    MOD_JUKE_READY, MOD_JUKE_EMPTY, MOD_JUKE_START_MISSING,
+    MOD_JUKE_SCAN_ERROR
 } mod_jukebox_scan_state_t;
 mod_jukebox_scan_state_t mod_audio_jukebox_scan_state(void);
 uint32_t mod_audio_jukebox_generation(void);
