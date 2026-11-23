@@ -6,11 +6,21 @@ on:
       - petar/m3-mb-timing-prodos-suite-20261123
     paths:
       - 'boards/a2n20v2-Enhanced/hdl/mcu_pcm_hdmi_mix.sv'
+      - 'boards/a2n20v2-Enhanced/hdl/hdmi_mix_meter.sv'
+      - 'boards/a2n20v2-Enhanced/hdl/mcu_stereo_pcm_bridge.sv'
       - 'boards/a2n20v2-Enhanced/hdl/top.sv'
       - 'boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj'
       - 'boards/a2n20v2-Enhanced/tests/tb_mcu_pcm_hdmi_mix.sv'
+      - 'boards/a2n20v2-Enhanced/tests/tb_hdmi_mix_meter.sv'
+      - 'boards/a2n20v2-Enhanced/tests/tb_mcu_stereo_pcm_bridge.sv'
       - 'boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/mcu_mod_gain.*'
+      - 'boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/mcu_hdmi_meter.*'
+      - 'boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/mcu_mod_audio.c'
+      - 'boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/CMakeLists.txt'
       - 'boards/a2n20v2-Enhanced/tests/test_mcu_mod_gain.c'
+      - 'boards/a2n20v2-Enhanced/tests/test_mcu_hdmi_meter.c'
+      - 'M3.ps1'
+      - 'Build-M3-FPGA.ps1'
       - '.github/workflows/m3-mod-hdmi-unity.yml'
   workflow_dispatch:
 
@@ -21,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install RTL test tool
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq iverilog
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iverilog yosys
       - name: Verify final unity-gain stereo mixer and -2dBFS sample ceiling
         run: |
           ROOT=boards/a2n20v2-Enhanced
@@ -29,6 +39,31 @@ jobs:
             "$ROOT/hdl/mcu_pcm_hdmi_mix.sv" \
             "$ROOT/tests/tb_mcu_pcm_hdmi_mix.sv"
           vvp /tmp/m3_mod_mix
+      - name: Verify one-second HDMI meter CDC and original PCM transport
+        run: |
+          ROOT=boards/a2n20v2-Enhanced
+          iverilog -g2012 -Wall -s tb_hdmi_mix_meter -o /tmp/m3_meter \
+            "$ROOT/hdl/hdmi_mix_meter.sv" \
+            "$ROOT/tests/tb_hdmi_mix_meter.sv"
+          vvp /tmp/m3_meter
+          iverilog -g2012 -Wall -s tb_mcu_stereo_pcm_bridge -o /tmp/m3_pcm_status \
+            "$ROOT/hdl/mcu_stereo_pcm_bridge.sv" \
+            "$ROOT/tests/tb_mcu_stereo_pcm_bridge.sv"
+          vvp /tmp/m3_pcm_status
+      - name: Synthesize isolated 1Hz meter and inspect hardware cell usage
+        run: |
+          ROOT=boards/a2n20v2-Enhanced
+          yosys -Q -T -p "read_verilog -sv $ROOT/hdl/hdmi_mix_meter.sv; synth -top hdmi_mix_meter; stat" > /tmp/m3_meter_synth.log
+          tail -45 /tmp/m3_meter_synth.log
+      - name: Test integer-only HDMI meter log conversion on host
+        run: |
+          ROOT=boards/a2n20v2-Enhanced
+          HOST="$ROOT/src/a2n20_bl616/firmware_host"
+          gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+            -I"$HOST" \
+            "$ROOT/tests/test_mcu_hdmi_meter.c" \
+            "$HOST/mcu_hdmi_meter.c" -lm -o /tmp/m3_meter_host
+          /tmp/m3_meter_host
       - name: Verify independent BL616 +8dB gain and linked peak limiter
         run: |
           ROOT=boards/a2n20v2-Enhanced
@@ -49,6 +84,10 @@ jobs:
           assert 'mcu_pcm_hdmi_mix #' in top
           assert 'hdmi_gain_clip_w || pcm_hdmi_mix_over_peak_w' in top
           assert 'hdl/mcu_pcm_hdmi_mix.sv' in gowin
+          assert 'hdl/hdmi_mix_meter.sv' in gowin
+          assert 'mcu_hdmi_meter.c' in (root/'src/a2n20_bl616/firmware_host/CMakeLists.txt').read_text()
+          assert 'hdmi_mix_meter_inst' in top
+          assert 'HDMI_METER_BYTES' in (root/'src/a2n20_bl616/firmware_host/mcu_mod_audio.c').read_text()
           assert '#define MOD_GAIN_CEILING 26028' in mcu
           assert 'petar/m3-mb-timing-prodos-suite-20261123' in Path('Build-M3-FPGA.ps1').read_text()
           assert "$requiredBranch='petar/m3-sd-sector-burst-20261123'" in Path('M3.ps1').read_text()
