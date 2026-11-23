@@ -87,6 +87,57 @@ operates with the new FPGA bitstream with no new behavior. New M3 MCU
 Stage2 automatically uses old M2 bytes on an old FPGA bitstream, and
 logs `M3 SD BURST FPGA=NO (M2 FALLBACK)` once.
 
+## Gowin 1.9.9 Beta/Education headless build compatibility
+
+The installed `gw_sh.exe` does **not** support `open_project` even
+though later Gowin releases document it. An earlier M3 wrapper passed
+`open_project a2n20v2_enhanced.gprj` on stdin, Gowin printed
+`invalid command name "open_project"` followed by `PJ0001: No
+available design files found`, yet the helper mistakenly reported an
+old tracked `.fs` and old timing report as a fresh build. **That
+artifact is not hardware-valid and must not be programmed.**
+
+The corrected `Build-M3-FPGA.ps1` generates `impl/m3-headless-build.tcl`
+by parsing the actual `.gprj` XML, checking every enabled source and
+asset, and retaining the GUI project device, HDL source inventory,
+pin/timing constraints, top module, standards, and the `prebuild.tcl`
+ROM verification/timestamp hook. Its generated Tcl uses commands
+available in older 1.9.9 shells:
+
+```tcl
+source {prebuild.tcl}
+set_device -name {GW2AR-18C} {GW2AR-LV18QN88C8/I7}
+# add_file -type verilog/vhdl/cst/sdc for every enabled source
+set_option -output_base_name {a2n20v2_enhanced}
+set_option -synthesis_tool gowinsynthesis
+set_option -top_module {top}
+set_option -verilog_std sysv2017
+set_option -vhdl_std vhd1993
+run all
+```
+
+The `Script` action generates this Tcl without launching Gowin.
+`Build` passes it as a **script filename** to `gw_sh.exe`, captures
+stdout/stderr into `impl/m3-gowin-*.log`, and **moves older `.fs` and
+timing reports to a timestamped `impl/m3-previous-artifacts` archive**
+before running. A nonzero exit status, Tcl error, PJ error, missing
+explicit completion marker, missing newly built `.fs`, or missing
+fresh timing report now fails closed. A real `run all` completion is
+mandatory; mere presence of an `.fs` is not accepted.
+
+```powershell
+Set-Location C:\AppleIIgsDev_02\a2fpga-media-m3
+git pull --ff-only
+.\Build-M3-FPGA.ps1 Script -Offline
+.\Build-M3-FPGA.ps1 Build -Offline -GowinCli "C:\Gowin\Gowin_V1.9.9Beta-4_Education\IDE\bin\gw_sh.exe"
+```
+
+Do not program FPGA SRAM until the new wrapper reports a freshly built
+bitstream and the Gowin place-and-route timing report has been checked.
+This restores headless invocation, but does not imply real Gowin
+1.9.9 synthesis was remotely run or that placement/timing closure
+has yet been proven on the user's Windows installation.
+
 ## Build and first hardware validation (Windows PowerShell)
 
 Make a new worktree next to the functioning M2 checkout. Do not switch
