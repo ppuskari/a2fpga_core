@@ -262,3 +262,42 @@ marker (DebugOverlay): `ED E1 E1 E1 ED` means malloc-failure hook,
 absent those, investigate scheduling / SD scan progress. The `$E1`
 printed by the Apple app is a separate **mailbox ACK** error code and
 does not itself mean FreeRTOS heap exhaustion.
+
+### IIgs hardware: Apple J from ProTracker/2 returns failed jukebox scan
+
+A ROM 3 IIgs test after M2 directory browse and fast-mode mailbox fixes
+reported:
+```
+M2 FAT DIR: /ProTracker/2 visible=500 ...
+MCU JUKE: SCAN FOLDER protracker/2
+MCU JUKE: DIRECTORY SCAN FAILED
+MCU JUKE: NO .MOD FILES FOUND
+```
+The first line proves that the **Apple M2 browser** successfully built its
+independent 500-entry catalog. `M2_START` was accepted and its selected
+path converted to the parent directory. The jukebox's **separate**
+`FSOP_MOD_LIST_OPEN/NEXT/CLOSE` scan failed afterward. It did **not**
+demonstrate that the highlighted tenth file was absent: the audio task
+previously conflated *scan failed* with *scan succeeded but empty*.
+
+Changes on this experimental branch:
+- The independent jukebox playlist now packs full MOD paths into 2-KiB
+  heap blocks rather than calling malloc once for each of 500 paths. The
+  Apple browser already uses a separate packed name-block allocator;
+  reducing allocation fragmentation/pressure helps while both catalogs
+  coexist.
+- Jukebox directory OPEN/READ/CLOSE calls log their FatFS results and the
+  number of entries examined. Low-heap conditions log the corresponding
+  allocation stage and track number. No allocator on this path calls the
+  fatal FreeRTOS `pvPortMalloc` hook.
+- `mod_jukebox_last_error()` distinguishes an unsuccessful directory scan
+  from a truly empty folder. The console and jukebox status show
+  `JUKEBOX SCAN FAILED` / `READ/HEAP ERROR` instead of falsely reporting
+  `NO .MOD FILES FOUND`.
+- Host regressions include 500 reverse-order MOD names, exact lookup of the
+  tenth track, bounded chunk allocations, recoverable out-of-memory, a
+  deliberately injected FatFS READ failure, and recovery on rescan.
+- These changes are BL616 Stage 2 only. No FPGA bitstream or ProDOS SYS
+  changes. Physical hardware still must establish the cause of the initial
+  failure and verify the remedy; do not mark this case as resolved solely
+  because host tests pass.
