@@ -96,10 +96,15 @@ module mcu_stereo_pcm_bridge #(
                     5'h11:spi_rd_data_o<=8'h4d; // M
                     5'h12:spi_rd_data_o<=8'h01; // v1
                     5'h13:spi_rd_data_o<=hdmi_diag_latched_r[39:32];
-                    5'h14:spi_rd_data_o<=hdmi_diag_latched_r[31:24];
-                    5'h15:spi_rd_data_o<=hdmi_diag_latched_r[23:16];
-                    5'h16:spi_rd_data_o<=hdmi_diag_latched_r[15:8];
-                    5'h17:spi_rd_data_o<=hdmi_diag_latched_r[7:0];
+                    // Packed snapshot is {valid,clip,L[15:0],R[15:0]}.
+                    // SPI protocol is little-endian: lo byte FIRST.
+                    // Previous revision accidentally returned hi-first,
+                    // making e.g. 0x65AC (-2.0 dBFS) appear as 0xAC65
+                    // and misleading the MCU formatter into -0.0 dBFS.
+                    5'h14:spi_rd_data_o<=hdmi_diag_latched_r[23:16]; // L lo
+                    5'h15:spi_rd_data_o<=hdmi_diag_latched_r[31:24]; // L hi
+                    5'h16:spi_rd_data_o<=hdmi_diag_latched_r[7:0];   // R lo
+                    5'h17:spi_rd_data_o<=hdmi_diag_latched_r[15:8];  // R hi
                     5'h18:spi_rd_data_o<={7'b0,hdmi_diag_latched_r[40]};
                 endcase
             end
