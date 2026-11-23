@@ -84,9 +84,20 @@ jobs:
           assert "program" not in fpga_helper.lower() or "Program volatile SRAM" in fpga_helper or "Program volatile SRAM" in Path("boards/a2n20v2-Enhanced/docs/M3_SD_BURST.md").read_text()
           print("PASS M3: legacy ABI preserved, SD portal capability gated, CRC16, golden FPGA/Stage2 branch protection")
           PY
-      - name: Check guarded M3 Stage2 and FPGA preparation helpers
+      - name: Check M3 guarded helpers and fail-closed ROM integrity
         shell: pwsh
         run: |
           ./M3.ps1 Help
           ./M3.ps1 SourceState
-          ./Build-M3-FPGA.ps1 Check -Offline
+          $piano='boards/a2n20v2-Enhanced/hdl/piano_multisustain.mem'
+          if(Test-Path -LiteralPath $piano) {
+            ./Build-M3-FPGA.ps1 Check -Offline
+          } else {
+            try {
+              ./Build-M3-FPGA.ps1 Check -Offline
+              throw "ROM integrity check unexpectedly passed without pinned piano"
+            } catch {
+              if($_.Exception.Message -ne 'Required ROM preparation failed. FPGA build NOT started.') { throw }
+              Write-Host 'PASS expected fail-closed: private SynthLAB piano ROM absent, FPGA build correctly refused.'
+            }
+          }
