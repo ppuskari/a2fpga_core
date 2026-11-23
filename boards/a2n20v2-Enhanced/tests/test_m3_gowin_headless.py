@@ -53,6 +53,7 @@ with tempfile.TemporaryDirectory() as td:
     assert result["data_files"] == len(memory_files)
     assert text.count("    add_file -type ") == expected_add_files
     assert "set_device -name {GW2AR-18C} {GW2AR-LV18QN88C8/I7}" in text
+    assert "source {prebuild.tcl}" in text
     assert "set_option -top_module {top}" in text
     assert "set_option -verilog_std sysv2017" in text
     assert "set_option -output_base_name {a2n20v2_enhanced}" in text
