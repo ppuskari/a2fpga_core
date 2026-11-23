@@ -1,0 +1,169 @@
+# M3 — FPGA-autonomous SD read payload staging
+
+## Branch and safety
+
+- **Golden M2 branch/commit:** `petar/media-m2-bidir-fat-picker-20261122`,
+  `519882c551d0fb6eab2e3a02cdb7d4cea0d2447d`. IIe/ROM 3 IIgs
+  directory traversal, 500+ MOD entries, J start-file, HDMI playback,
+  mailbox sequencing, and MCU USB keyboard response were validated on
+  physical hardware. M3 does **not** change that branch.
+- **Experimental M3:** `petar/m3-sd-sector-burst-20261123`.
+- **Separate IIgs 2.8MHz Mockingboard timing investigation:**
+  `petar/iigs-mb-28mhz-timing-20261123`, forked at the same M2 commit.
+  The title-song behavior (works at 1MHz, problematic at 2.8MHz) is
+  independent of SD payload transport; do not mix speculative Mockingboard
+  timing fixes into the M3 storage branch.
+- M3 changes only SD **read payloads**. CMD17/CMD18, 0xFE data token
+  detection, two CRC bytes, SD writes, FatFS locking/volume/partition
+  logic, SSI263, AY, DOC, HDMI PCM, slot-3 media mailbox and 80-column
+  ProDOS app remain on their existing paths.
+- **Program FPGA volatile SRAM first; do not overwrite working M2 FPGA
+  flash during validation.** MCU Stage2 is also independently flashed at
+  0x40000 only after the FPGA resource/timing check.
+- Passing host regressions is not physical Tang Nano 20K validation.
+
+## New hardware contract (backwards compatible)
+
+All existing registers and XFER spaces retain their meanings.
+
+```
+SD $6C  legacy SD_CS and slow clock                  (unchanged)
+SD $6D  legacy 8-bit full-duplex TX/RX               (unchanged)
+SD $6E  READ status
+         bit7 1 = M3 512-byte staging capability (old M2: bit7=0)
+         bit6 1 = buffer ready / completion
+         bit5 1 = autonomous SD 512-byte clocking in progress
+         bit4 1 = burst error (CS raised, overlapping command, etc.)
+         bit0     original one-byte SD SPI busy (unchanged)
+SD $6E  WRITE 0xA1 = clock in 512 bytes with MOSI=0xFF
+         WRITE 0xAF = abort/reset this burst engine
+XFER SPACE0, 0x800000..0x8001FF = 512-byte SD receive buffer, read only
+XFER SPACE0, low legacy RAM 0x000000..0x0000FF = unchanged
+XFER SPACE1 SDRAM, 2 FIFO, 3 W5100, 4/5 SSI, 6 PCM, 7 M2 = unchanged
+```
+
+The FPGA clocks SD autonomously at the existing fast SD clock setting:
+54MHz / 8 = 6.75MHz. A 512-byte payload has 4096 SD clock edges,
+approximately 0.61ms of pure SD serial transfer time, ignoring SD
+response latency and state-machine overhead. **This is not a measured
+throughput result.** The BL616 may run other tasks and use the shared
+FPGA SPI port while the SD engine works. Only one FatFS disk task owns
+the physical SD card, and `SD_CS` remains asserted throughout the
+payload.
+
+### SD sector read sequence
+
+1. Disk task sends CMD17/CMD18 and polls for `0xFE` using the original
+   register-byte SD path. No command-phase or write-path changes.
+2. If `$6E bit7==0` or firmware flag `FPGA_SD_BURST_READ=0`, read 512
+   bytes with the legacy `xchg_spi(0xFF)` loop.
+3. Otherwise write `0xA1` to `$6E`; the autonomous FPGA receiver
+   requests 512 back-to-back 8-bit transfers from `fpga_sd_spi`.
+4. Firmware releases the shared SPI mutex between short status probes,
+   and waits (RTOS sleep) for `done && !active && !error`. A bounded
+   200ms timeout or error aborts the transaction and fails the sector;
+   never silently returns partially clocked data or replays within an
+   existing SD data packet.
+5. Pull 512 bytes from XFER SPACE0 high aperture in four 128-byte
+   frames, unlocking the shared SPI mutex between frames. The first
+   sector compares the **entire 512B fast-portal read** against a
+   conservative bytewise XFER read of the same FPGA BRAM; on mismatch,
+   use the bytewise result and permanently disable *fast host SPI
+   portal reads* for this boot. The autonomous FPGA SD receive engine
+   remains useful independently.
+6. Read the two trailing SD CRC bytes via the existing register path.
+   Write/stop/multi-sector protocol remains FatFS/ChaN's existing logic.
+
+Because `$6E bit0` retains its prior meaning, old MCU Stage2 also
+operates with the new FPGA bitstream with no new behavior. New M3 MCU
+Stage2 automatically uses old M2 bytes on an old FPGA bitstream, and
+logs `M3 SD BURST FPGA=NO (M2 FALLBACK)` once.
+
+## Build and first hardware validation (Windows PowerShell)
+
+Make a new worktree next to the functioning M2 checkout. Do not switch
+the golden M2 working directory to the experimental branch.
+
+```powershell
+Set-Location C:\AppleIIgsDev_02\a2fpga-media-m2
+git fetch origin petar/m3-sd-sector-burst-20261123
+git worktree add -b petar/m3-sd-sector-burst-20261123 C:\AppleIIgsDev_02\a2fpga-media-m3 origin/petar/m3-sd-sector-burst-20261123
+Set-Location C:\AppleIIgsDev_02\a2fpga-media-m3
+.\Build-M3-FPGA.ps1 Prepare
+.\Build-M3-FPGA.ps1 Build
+```
+
+If Gowin's `gw_sh.exe` is not on PATH, pass its full installed path with
+`-GowinCli`. The ROM-preparation script uses the existing pinned SSI263
+and Apple SynthLAB instrument assets; it must not silently insert placeholders.
+
+Check the resulting Gowin synthesis and timing reports. Program
+`boards/a2n20v2-Enhanced/impl/pnr/a2n20v2_enhanced.fs` to **FPGA SRAM**
+with Gowin Programmer. Confirm the current M2 Stage2 still boots and
+reads /ProTracker in legacy byte mode. This checks that M3 FPGA itself
+does not perturb the working baseline while its new SD receiver is idle.
+
+Then prepare the experimental BL616 Stage2:
+
+```powershell
+.\M3.ps1 SourceState
+.\M3.ps1 Build -Jobs 8
+```
+
+Enter BL616 UPDATE/BootROM mode, then:
+
+```powershell
+.\M3.ps1 Flash
+```
+
+Enter `FLASH M3` only if the source manifest, correct branch and
+binary hash checks all pass. This flashes **BL616 Stage2 at 0x40000 only**,
+not signed Stage1 and not FPGA flash. Reboot normally without UPDATE,
+reprogram FPGA SRAM if needed and verify MCU log:
+
+```
+M3 SD BURST FPGA=YES
+M3 SD 512B BURST READY HOST SPI=BULK
+```
+
+If only `...HOST SPI=BYTEWISE FALLBACK` appears, the first-sector A/B
+check rejected bulk host-SPI timing. The SD FPGA receiver remains active
+but the host transfer uses conservative XFER reads automatically.
+
+### Compare against physical M2 baseline
+
+Before/after: browse `/ProTracker` (39 folders), `/ProTracker/1`
+(~506 visible files), and `/ProTracker/2` (500 visible files).
+Record existing `PICK TIMING: OPEN= READ= SORT=` diagnostics on the MCU.
+Verify page 1, middle and final pages from `A2MEDIA.SYSTEM` on IIe
+1MHz first, then ROM 3 IIgs at 2.8MHz; test J from the selected tenth
+track, NEXT/PREVIOUS, PCM audio, USB keyboard, and SSI speech.
+Repeat on a cold reboot.
+
+For a controlled SD transport A/B, use CMake cache switches:
+`FPGA_SD_BURST_READ=0` disables new SD engine at runtime in MCU
+firmware even with M3 FPGA; `FPGA_SPI_SD_BURST_PORTAL_BULK=0` keeps
+FPGA-autonomous SD clocking but uses conservative MCU XFER byte access.
+Both need a new Stage2 build/manifest; keep M2 as a known-good baseline.
+
+**Do not claim a measured speedup or write to FPGA flash until real
+hardware sector integrity and latency checks pass.**
+
+## Automated checks
+
+`.github/workflows/m3-sd-burst.yml` exercises:
+- Actual `fpga_sd_spi.sv` + `fpga_sd_burst.sv`, 512 synthetic SD bytes,
+  4096 SD clock edges, byte-exact buffer readback, legacy byte afterward,
+  CS# error and abort handling
+- Independent Yosys receiver synthesis
+- Real `fpga_spi.c` reading 4 × 128-byte XFER frames, byte-for-byte
+  512-byte verification and an injected fast-host-SPI corruption that
+  must trigger fallback
+- Real `sdmm.c` with mocked FPGA registers/FatFS interfaces, including
+  old FPGA capability fallback, short packet, successful 512B payload,
+  FPGA fault and 200ms timeout; no partial sectors
+- Static integration guards for connector mux, $6D legacy, FPGA project
+  source list, runtime capability, firmware flags and M3 branch protection
+
+No FPGA or Stage2 silicon is emulated beyond those test models. Tang Nano
+place-and-route and USB/audio contention remain physical tests.
