@@ -138,6 +138,47 @@ This restores headless invocation, but does not imply real Gowin
 1.9.9 synthesis was remotely run or that placement/timing closure
 has yet been proven on the user's Windows installation.
 
+### First real Gowin 1.9.9 headless synthesis/P&R failure (2026-11-23)
+
+Initial Windows headless build successfully read and synthesized the
+100 source files but P&R stopped with `PR2028` / `PR2017` on
+`a2_bridge_d[5]`, `[4]`, and `[2]`: these signals use FPGA pins
+that are also dedicated SSPI configuration pins. **No fresh `.fs` was
+produced; do not program the FPGA.** The board pin assignments were
+already validated in M2 and must NOT be moved.
+
+Root cause: `tools/generate_m3_gowin_tcl.py` originally reconstructed
+HDL files and device properties from `.gprj` but failed to reproduce
+the GUI's `SSPI=true` and `MSPI=true` pin-reuse settings from
+`impl/project_process_config.json`. The correct Gowin Tcl properties
+are `set_option -use_sspi_as_gpio 1` and
+`set_option -use_mspi_as_gpio 1`. New generation derives them from
+the actual GUI config and checks that the parallel P&R process config
+agrees. An absent/inconsistent setting aborts generation rather than
+silently making a new pinout.
+
+The previous wrapper also crashed while trying `$stdErr.Trim()`
+because `Get-Content -Raw` returns null on an empty stderr file.
+The helper now explicitly casts both log streams to strings and tests
+them with `[string]::IsNullOrWhiteSpace`. If Gowin still errors, the
+wrapper reports P&R failures instead of crashing or reusing an old
+bitstream.
+
+After fetching the revised M3 branch, verify the generated Tcl contains
+both `-use_*spi_as_gpio 1` options before running the full build:
+
+```powershell
+git fetch origin "+refs/heads/petar/m3-sd-sector-burst-20261123:refs/remotes/origin/petar/m3-sd-sector-burst-20261123"
+git merge --ff-only origin/petar/m3-sd-sector-burst-20261123
+.\Build-M3-FPGA.ps1 Script -Offline
+Select-String .\boards\a2n20v2-Enhanced\impl\m3-headless-build.tcl -Pattern 'use_sspi_as_gpio|use_mspi_as_gpio'
+.\Build-M3-FPGA.ps1 Build -Offline -GowinCli "C:\Gowin\Gowin_V1.9.9Beta-4_Education\IDE\bin\gw_sh.exe"
+```
+
+`CI` checks actual generated Tcl/source consistency, and PowerShell
+log guards. **Gowin place-and-route must still be validated in the
+user's installed Windows version**, followed by timing analysis.
+
 ## Build and first hardware validation (Windows PowerShell)
 
 Make a new worktree next to the functioning M2 checkout. Do not switch
