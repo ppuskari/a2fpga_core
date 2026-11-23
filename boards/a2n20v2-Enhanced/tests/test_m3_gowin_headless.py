@@ -98,7 +98,7 @@ for expected in (
 ):
     assert expected in wrapper, expected
 assert "$cmds | & $GowinCli" not in wrapper
-assert "$quotedScript='\"'+$tclScript+'\"'" not in wrapper
+assert "$quotedScript='\"'+$tclScript+'\"'" in wrapper
 
 print(
     f"PASS M3 Gowin 1.9.9: {expected_add_files} real sources,"
