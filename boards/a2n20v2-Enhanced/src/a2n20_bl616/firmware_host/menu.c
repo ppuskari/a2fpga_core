@@ -46,7 +46,10 @@
 typedef enum { VIEW_APPLE, VIEW_CONSOLE, VIEW_MENU } view_t;
 
 static view_t s_view       = VIEW_APPLE;
-static view_t s_mcu_view   = VIEW_MENU;    /* which MCU view SELECT returns to */
+static view_t s_mcu_view   = VIEW_CONSOLE; /* TAB first opens the console;
+                                           * Y switches to the full menu.
+                                           * Last selected MCU view is retained
+                                           * when TAB returns to Apple video. */
 #define MCU_SCREEN_TIMEOUT_US 180000000u
 static uint32_t s_last_mcu_input_us;
 
