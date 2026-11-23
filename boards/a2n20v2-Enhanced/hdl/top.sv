@@ -2023,7 +2023,7 @@ wire [15:0] audio_sample_word[1:0];
     logic [7:0] hdmi_clip_history_r;
 
     wire hdmi_clip_sample_event_w =
-        clk_audio_w && hdmi_gain_clip_w;
+        clk_audio_w && (hdmi_gain_clip_w || pcm_hdmi_mix_over_peak_w);
 
     always_ff @(posedge clk_pixel_w) begin
         if (!device_reset_n_w) begin
@@ -2064,28 +2064,23 @@ wire [15:0] audio_sample_word[1:0];
         hdmi_gain_plus_3db($signed(audio_sample_word_raw[1]));
 
 
-    // Mix MCU-rendered stereo PCM AFTER the pre-existing hardware gain,
-    // never through the DOC or 8x Enhanced-MB gain. Half-level reduces
-    // clipping when both the IIgs and MCU synth are producing music.
-    function automatic signed [15:0] pcm_hdmi_sat_mix;
-        input signed [15:0] native_sample;
-        input signed [15:0] mcu_sample;
-        logic signed [17:0] summed;
-    begin
-        summed = $signed({{2{native_sample[15]}},native_sample}) +
-                 ($signed({{2{mcu_sample[15]}},mcu_sample}) >>> 1);
-        if(summed > 18'sd32767)
-            pcm_hdmi_sat_mix=16'sh7fff;
-        else if(summed < -18'sd32768)
-            pcm_hdmi_sat_mix=16'sh8000;
-        else
-            pcm_hdmi_sat_mix=summed[15:0];
-    end
-    endfunction
-    assign audio_sample_word[0] = pcm_hdmi_sat_mix(
-        audio_core_gained_l_w,$signed(pcm_audio_l_pixel_w));
-    assign audio_sample_word[1] = pcm_hdmi_sat_mix(
-        audio_core_gained_r_w,$signed(pcm_audio_r_pixel_w));
+    // M3 experimental output balance: the BL616's post-HxCMOD limiter
+    // already calibrates MOD PCM to -2 dBFS. Do not halve it again here.
+    // Preserve native/DOC/AY/SSI output bit-for-bit when MOD is silent.
+    // Bound the combined sample peak and surface overlap overrange via
+    // the pre-existing HDMI clip-history diagnostic. This is a hard peak
+    // guard, NOT a transparent lookahead compressor; overlapping loud
+    // sources may require master bus gain management in a later stage.
+    wire pcm_hdmi_mix_over_peak_w;
+    mcu_pcm_hdmi_mix #(.PEAK_CEILING(26028)) pcm_hdmi_mix (
+        .native_l_i(audio_core_gained_l_w),
+        .native_r_i(audio_core_gained_r_w),
+        .mod_l_i($signed(pcm_audio_l_pixel_w)),
+        .mod_r_i($signed(pcm_audio_r_pixel_w)),
+        .mix_l_o(audio_sample_word[0]),
+        .mix_r_o(audio_sample_word[1]),
+        .over_peak_o(pcm_hdmi_mix_over_peak_w)
+    );
 
 
     // HDMI
