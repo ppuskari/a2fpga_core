@@ -1,0 +1,75 @@
+name: M3 FPGA autonomous SD-sector burst and BL616 SPI portal
+
+on:
+  push:
+    branches:
+      - petar/m3-sd-sector-burst-20261123
+  workflow_dispatch:
+
+jobs:
+  m3-sd-read-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install FPGA RTL tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iverilog yosys
+      - name: Verify real 54 MHz SD SPI master + autonomous 512-byte reader
+        run: |
+          ROOT=boards/a2n20v2-Enhanced
+          iverilog -g2012 -Wall -s tb_fpga_sd_m3_burst -o /tmp/m3_sd \
+            "$ROOT/hdl/bl616/fpga_sd_spi.sv" \
+            "$ROOT/hdl/bl616/fpga_sd_burst.sv" \
+            "$ROOT/tests/tb_fpga_sd_m3_burst.sv"
+          vvp /tmp/m3_sd
+      - name: Check SD receiver FPGA synthesis
+        run: |
+          yosys -Q -T -p 'read_verilog -sv boards/a2n20v2-Enhanced/hdl/bl616/fpga_sd_burst.sv; synth -top fpga_sd_burst; stat' > /tmp/m3_sd_synth.log
+          grep -q 'fpga_sd_burst' /tmp/m3_sd_synth.log
+      - name: Compile and test actual BL616 fast SPI portal and fallback
+        run: |
+          ROOT=boards/a2n20v2-Enhanced
+          MOCK="$ROOT/tests/j2r9_spi_mock"
+          SPI="$ROOT/src/a2n20_bl616/firmware"
+          gcc -std=gnu11 -Wall -Wextra -Werror -O2 \
+            -DFPGA_SPI_MOD_BULK_XFER=1 -DFPGA_SPI_MOD_BULK_SDRAM=0 \
+            -DFPGA_SPI_SD_BURST_PORTAL_BULK=1 \
+            -I"$MOCK" -I"$SPI" \
+            "$ROOT/tests/test_fpga_spi_m3_burst.c" "$SPI/fpga_spi.c" -o /tmp/m3_host
+          /tmp/m3_host
+          /tmp/m3_host --corrupt
+      - name: Verify safe aperture, runtime cap and independent fallbacks
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path("boards/a2n20v2-Enhanced")
+          hdl=(root/"hdl/bl616/bl616_spi_connector.sv").read_text()
+          spi=(root/"src/a2n20_bl616/firmware/fpga_spi.c").read_text()
+          mmc=(root/"src/a2n20_bl616/firmware/sdmm.c").read_text()
+          cmake=(root/"src/a2n20_bl616/firmware_host/CMakeLists.txt").read_text()
+          gowin=(root/"a2n20v2_enhanced.gprj").read_text()
+          assert "sd_burst_aperture_rd" in hdl
+          assert "15'h4000" in hdl and "mem_rd_addr[23:9]" in hdl
+          assert "sd_burst_rd_valid_w" in hdl and "fpga_sd_burst sd_burst_inst" in hdl
+          assert "7'h6E: reg_rdata = {1'b1,sd_burst_done_w" in hdl
+          assert "7'h6D: begin" in hdl and "if(!sd_burst_active_w)" in hdl
+          assert "7'h6C: begin" in hdl and "7'h6F: begin" in hdl
+          assert "fpga_sd_burst.sv" in gowin
+          assert "FPGA_SD_BURST_READ 1" in cmake
+          assert "FPGA_SPI_SD_BURST_PORTAL_BULK 1" in cmake
+          assert "s_sd_burst_cap=(fpga_spi_reg_read(SD_REG_STATUS)&SD_BURST_CAP)" in mmc
+          assert "if(!s_sd_burst_cap)return -1" in mmc
+          assert "if(staged<0)rcvr_mmc(buff,btr)" in mmc
+          assert "if(staged==0)return 0" in mmc
+          assert "s_sd_portal_checked" in spi and "memcmp(data,s_sd_portal_verify" in spi
+          assert "SD_PORTAL_FRAME_BYTES 128u" in spi
+          helper=Path("M3.ps1").read_text()
+          assert "$requiredBranch='petar/m3-sd-sector-burst-20261123'" in helper
+          assert "'M3 SD BURST FPGA='" in helper
+          print("PASS M3: legacy ABI preserved, SD portal capability gated, per-sector fallback, Stage2 source protection")
+          PY
+      - name: Check guarded M3 Stage2 helper syntax and source
+        shell: pwsh
+        run: |
+          ./M3.ps1 Help
+          ./M3.ps1 SourceState
