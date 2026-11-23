@@ -61,13 +61,15 @@ sdk_add_compile_definitions(-DFATFS_EXTERNAL_DISKIO)
 # disabling only the fast portal if 20MHz CDC causes any byte mismatch.
 set(FPGA_SD_BURST_READ 1 CACHE STRING "0=all legacy SD bytes, 1=M3 FPGA-autonomous 512B SD RX")
 set(FPGA_SPI_SD_BURST_PORTAL_BULK 1 CACHE STRING "0=bytewise XFER0, 1=fast 128-byte XFER0 frames with readback check")
-foreach(flag FPGA_SD_BURST_READ FPGA_SPI_SD_BURST_PORTAL_BULK)
+set(FPGA_SD_BURST_VALIDATE_CRC 1 CACHE STRING "0=legacy discard SD read CRC, 1=verify every accelerated 512-byte sector CRC16")
+foreach(flag FPGA_SD_BURST_READ FPGA_SPI_SD_BURST_PORTAL_BULK FPGA_SD_BURST_VALIDATE_CRC)
     if(NOT ${flag} MATCHES "^[01]$")
         message(FATAL_ERROR "${flag} must be 0 or 1")
     endif()
 endforeach()
 sdk_add_compile_definitions(-DFPGA_SD_BURST_READ=${FPGA_SD_BURST_READ})
 sdk_add_compile_definitions(-DFPGA_SPI_SD_BURST_PORTAL_BULK=${FPGA_SPI_SD_BURST_PORTAL_BULK})
+sdk_add_compile_definitions(-DFPGA_SD_BURST_VALIDATE_CRC=${FPGA_SD_BURST_VALIDATE_CRC})
 
 sdk_add_compile_definitions(-DHXCMOD_MAXCHANNELS=8)
 
