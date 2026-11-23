@@ -16,7 +16,9 @@
 #include <stdint.h>
 
 /* XFER memory spaces */
-#define FPGA_SPACE_LOCAL  0  /* 256B local RAM */
+#define FPGA_SPACE_LOCAL  0  /* 256B legacy RAM; M3 high aperture below */
+#define FPGA_SD_BURST_WINDOW_ADDR 0x800000u
+#define FPGA_SD_BURST_WINDOW_SIZE 512u
 #define FPGA_SPACE_SDRAM  1  /* SDRAM (byte addressed) */
 #define FPGA_SPACE_FIFO   2  /* Bus event FIFO */
 #define FPGA_SPACE_W5100  3  /* Uthernet2 (W5100) backing store, W5100 addresses */
@@ -57,6 +59,13 @@ void fpga_spi_xfer_write(uint8_t space, uint32_t addr, const uint8_t *data, uint
 
 /* XFER read: receive data from FPGA memory space */
 void fpga_spi_xfer_read(uint8_t space, uint32_t addr, uint8_t *data, uint16_t len);
+
+/* M3: read the FPGA's autonomous SD RX buffer at SPACE0:0x800000.
+ * Releases the shared BL616-to-FPGA SPI mutex between 128-byte frames.
+ * On first use, cross-checks fast burst reads against the proven bytewise
+ * XFER path and permanently falls back if hardware disagrees. */
+void fpga_spi_sd_burst_buffer_read(uint8_t data[512]);
+bool fpga_spi_sd_burst_bulk_ok(void);
 
 /* XFER fill: write repeating byte to FPGA memory space */
 void fpga_spi_xfer_fill(uint8_t space, uint32_t addr, uint8_t val, uint16_t len);
