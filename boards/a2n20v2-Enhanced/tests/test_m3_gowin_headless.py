@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import json
 import tempfile
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
@@ -31,6 +32,10 @@ expected_add_files = sum(e.get("type") != "file.other" for e in enabled)
 memory_files = {e.get("path") for e in enabled if e.get("type") == "file.other"}
 assert "hdl/piano_multisustain.mem" in memory_files
 assert any("fpga_sd_burst.sv" in e.get("path", "") for e in enabled)
+gui_cfg=json.loads((BOARD / "impl" / "project_process_config.json").read_text())
+pnr_cfg=json.loads((BOARD / "impl" / "a2n20v2_enhanced_process_config.json").read_text())
+assert gui_cfg["SSPI"] is True and gui_cfg["MSPI"] is True
+assert pnr_cfg["SSPI"] is True and pnr_cfg["MSPI"] is True
 
 original_is_file = Path.is_file
 
@@ -57,6 +62,12 @@ with tempfile.TemporaryDirectory() as td:
     assert "set_option -top_module {top}" in text
     assert "set_option -verilog_std sysv2017" in text
     assert "set_option -output_base_name {a2n20v2_enhanced}" in text
+    # Reproduce exactly the GUI's dual-purpose configuration that frees
+    # Apple bus data pins on SSPI locations (PR2017/PR2028 otherwise).
+    assert "    set_option -use_sspi_as_gpio 1" in text
+    assert "    set_option -use_mspi_as_gpio 1" in text
+    assert text.index("    set_option -use_sspi_as_gpio 1") < text.index("    run all")
+    assert text.index("    set_option -use_mspi_as_gpio 1") < text.index("    run all")
     assert "run all" in text and "M3_GOWIN_TCL_COMPLETED" in text
     assert "open_project" not in "\n".join(
         line for line in text.splitlines()
@@ -96,6 +107,7 @@ for expected in (
     "Get-FileHash", "Gowin logged a synthesis/project/Tcl error",
     "No available design files found in this project",
     "-RedirectStandardOutput", "-RedirectStandardError",
+    "[string]$stdErr", "[string]::IsNullOrWhiteSpace($stdErr)",
 ):
     assert expected in wrapper, expected
 assert "$cmds | & $GowinCli" not in wrapper
