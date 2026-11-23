@@ -97,9 +97,17 @@ Set-Location C:\AppleIIgsDev_02\a2fpga-media-m2
 git fetch origin petar/m3-sd-sector-burst-20261123
 git worktree add -b petar/m3-sd-sector-burst-20261123 C:\AppleIIgsDev_02\a2fpga-media-m3 origin/petar/m3-sd-sector-burst-20261123
 Set-Location C:\AppleIIgsDev_02\a2fpga-media-m3
+Copy-Item -LiteralPath C:\AppleIIgsDev_02\a2fpga-media-m2\boards\a2n20v2-Enhanced\hdl\piano_multisustain.mem -Destination C:\AppleIIgsDev_02\a2fpga-media-m3\boards\a2n20v2-Enhanced\hdl\piano_multisustain.mem
 .\Build-M3-FPGA.ps1 Prepare
 .\Build-M3-FPGA.ps1 Build
 ```
+
+The `Copy-Item` line reuses your **existing verified locally extracted
+SynthLAB piano data** from the M2 checkout. New Git worktrees do not carry
+untracked/generated `piano_multisustain.mem` files automatically. If that
+file is not present in your M2 checkout, instead supply the original
+SynthLAB disk with `-SynthLABDisk` to `Build-M3-FPGA.ps1 Prepare`.
+No substituted/zero-filled PCM is accepted.
 
 If Gowin's `gw_sh.exe` is not on PATH, pass its full installed path with
 `-GowinCli`. The ROM-preparation script uses the existing pinned SSI263
