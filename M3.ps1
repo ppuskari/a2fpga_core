@@ -36,7 +36,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 
-$requiredBranch='petar/media-m2-bidir-fat-picker-20261122'
+$requiredBranch='petar/m3-sd-sector-burst-20261123'
 $root=$PSScriptRoot
 $board=Join-Path $root 'boards\a2n20v2-Enhanced\src\a2n20_bl616'
 $hostDir=Join-Path $board 'firmware_host'
@@ -181,7 +181,7 @@ function Get-Verified-Binary-Hash {
         Fail "Stage2 binary is unexpectedly small: $($bytes.Length) bytes."
     }
     $txt=[Text.Encoding]::ASCII.GetString($bytes)
-    foreach($marker in @('PCM RMAX=','MOD SMP CACHE=8x','MOD SMP WIN=4x2048B','MOD LOG=QUIET1HZ','MOD JUKE=STARTFILE','M3 FAT REPLY=YES','MOD MCU CACHE=','MOD SPI=PCM512 SDRAM=BYTE','M3 SD BURST FPGA=')) {
+    foreach($marker in @('PCM RMAX=','MOD SMP CACHE=8x','MOD SMP WIN=4x2048B','MOD LOG=QUIET1HZ','MOD JUKE=STARTFILE','M2 FAT REPLY=YES','MOD MCU CACHE=','MOD SPI=PCM512 SDRAM=BYTE','M3 SD BURST FPGA=')) {
         if(-not $txt.Contains($marker)) {
             Fail "Expected M3 diagnostic '$marker' absent from Stage2 binary."
         }
