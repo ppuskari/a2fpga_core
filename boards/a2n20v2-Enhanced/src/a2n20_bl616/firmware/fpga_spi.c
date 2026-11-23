@@ -290,6 +290,79 @@ void fpga_spi_xfer_read(uint8_t space, uint32_t addr, uint8_t *data, uint16_t le
     spi_lock_give();
 }
 
+/* M3 SD-sector RX portal. Unlike the existing bulk SDRAM experiment,
+ * this port reads FPGA BRAM, so each XFER byte can respond at 54MHz.
+ * Limit shared-SPI critical sections to 128B (<60us at 20MHz) so
+ * HxCMOD PCM FIFO, USB overlay and SSI voice can interleave between
+ * SD portal frames instead of waiting for a single uninterrupted 520B.
+ *
+ * First read uses the fast host-SPI driver and compares ALL 512 bytes
+ * against a known-good bytewise read of the exact same FPGA buffer.
+ * On mismatch, return the verified bytewise copy and permanently disable
+ * fast host-SPI reads (not the FPGA autonomous SD clocking). This avoids
+ * repeating the previous SDRAM burst timing failure on physical hardware. */
+#ifndef FPGA_SPI_SD_BURST_PORTAL_BULK
+#define FPGA_SPI_SD_BURST_PORTAL_BULK 0
+#endif
+#define SD_PORTAL_FRAME_BYTES 128u
+static bool s_sd_portal_checked;
+static bool s_sd_portal_fast_ok = (FPGA_SPI_SD_BURST_PORTAL_BULK != 0);
+static uint8_t s_sd_portal_verify[FPGA_SD_BURST_WINDOW_SIZE];
+
+static void sd_portal_read_frame(uint16_t offset,uint8_t *dst,
+                                 uint16_t n,bool bulk)
+{
+    build_xfer_header(FPGA_SPACE_LOCAL,
+                      FPGA_SD_BURST_WINDOW_ADDR+(uint32_t)offset,n,1);
+    spi_lock_take();
+    cs_assert();
+    if(bulk) {
+        memset(&spi_tx_scratch[XFER_HDR_LEN],0xFF,
+               XFER_DUMMY_LEN+n);
+        bflb_spi_poll_exchange(spi0,spi_tx_scratch,spi_rx_scratch,
+                               XFER_HDR_LEN+XFER_DUMMY_LEN+n);
+        memcpy(dst,&spi_rx_scratch[XFER_HDR_LEN+XFER_DUMMY_LEN],n);
+        bflb_mtimer_delay_us(FPGA_SPI_BULK_CS_HOLD_US);
+    } else {
+        for(uint16_t i=0;i<XFER_HDR_LEN;i++)
+            (void)spi_xchg_byte(spi_tx_scratch[i]);
+        (void)spi_xchg_byte(0xFF); /* Mandatory XFER read dummy. */
+        for(uint16_t i=0;i<n;i++)
+            dst[i]=spi_xchg_byte(0xFF);
+    }
+    cs_deassert();
+    spi_lock_give();
+}
+
+void fpga_spi_sd_burst_buffer_read(uint8_t data[512])
+{
+    if(!data)return;
+    for(uint16_t offset=0;offset<FPGA_SD_BURST_WINDOW_SIZE;
+        offset+=SD_PORTAL_FRAME_BYTES) {
+        sd_portal_read_frame(offset,data+offset,SD_PORTAL_FRAME_BYTES,
+                             s_sd_portal_fast_ok);
+    }
+
+    if(!s_sd_portal_checked && s_sd_portal_fast_ok) {
+        /* A complete 512-byte readback is checked ONCE per MCU boot.
+         * This costs one legacy XFER read and zero extra SD card clocks. */
+        for(uint16_t offset=0;offset<FPGA_SD_BURST_WINDOW_SIZE;
+            offset+=SD_PORTAL_FRAME_BYTES) {
+            sd_portal_read_frame(offset,s_sd_portal_verify+offset,
+                                 SD_PORTAL_FRAME_BYTES,false);
+        }
+        if(memcmp(data,s_sd_portal_verify,FPGA_SD_BURST_WINDOW_SIZE)!=0) {
+            memcpy(data,s_sd_portal_verify,FPGA_SD_BURST_WINDOW_SIZE);
+            s_sd_portal_fast_ok=false;
+        }
+    }
+    s_sd_portal_checked=true;
+}
+bool fpga_spi_sd_burst_bulk_ok(void)
+{
+    return s_sd_portal_checked && s_sd_portal_fast_ok;
+}
+
 void fpga_spi_xfer_fill(uint8_t space, uint32_t addr, uint8_t val, uint16_t len)
 {
     uint16_t remaining = len;
