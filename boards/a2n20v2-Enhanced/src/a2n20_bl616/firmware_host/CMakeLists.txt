@@ -84,6 +84,7 @@ target_sources(app PRIVATE
     disk.c
     # Software ProTracker playback -> independent HDMI PCM (no DOC ownership).
     mcu_mod_audio.c
+    mcu_hdmi_meter.c
     mcu_mod_gain.c
     mcu_mod_now_playing.c
     mcu_mod_jukebox.c
