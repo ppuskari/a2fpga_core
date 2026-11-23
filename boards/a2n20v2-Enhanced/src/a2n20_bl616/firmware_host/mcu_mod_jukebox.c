@@ -16,9 +16,18 @@
 #include <string.h>
 
 #define JUKE_DIR_LIMIT 96u
+/* 500 individual malloc() allocations were costly and fragmented the same
+ * libc heap as the M2 Apple browser. Pack full track paths into 2K blocks;
+ * only one allocation per block, each pointer remains valid through sorting,
+ * Next/Previous and playlist playback. Oversized libraries return an explicit
+ * recoverable error, never FreeRTOS' fatal malloc hook. */
+#define JUKE_TRACK_CHUNK_BYTES 2048u
+#define JUKE_TRACK_CHUNK_LIMIT 36u
 static char *s_tracks[MOD_JUKE_MAX_TRACKS];
+static char *s_track_chunks[JUKE_TRACK_CHUNK_LIMIT];
+static unsigned s_track_chunk_count,s_track_chunk_used;
 static unsigned s_count;
-static bool s_truncated;
+static bool s_truncated,s_last_error;
 
 static int icmp(const char *a, const char *b)
 {
@@ -41,13 +50,35 @@ static int track_cmp(const void *a,const void *b)
  * A 506-file jukebox plus the resident M2 Apple catalog can run low on
  * heap. Use identical scheduler serialization, but handle libc OOM
  * locally so the scan reports failure instead of halting the whole MCU. */
+static void *juke_try_alloc(size_t n)
+{
+    vTaskSuspendAll();
+    void *p=malloc(n);
+    (void)xTaskResumeAll();
+    return p;
+}
 static char *juke_strdup(const char *s)
 {
     size_t n=strlen(s)+1u;
-    vTaskSuspendAll();
-    char *p=(char *)malloc(n);
-    (void)xTaskResumeAll();
+    char *p=(char *)juke_try_alloc(n);
     if(p)memcpy(p,s,n);
+    return p;
+}
+static char *juke_track_store(const char *path)
+{
+    const size_t n=strlen(path)+1u;
+    if(n>JUKE_TRACK_CHUNK_BYTES)return NULL;
+    if(s_track_chunk_count==0u ||
+       s_track_chunk_used+n>JUKE_TRACK_CHUNK_BYTES) {
+        if(s_track_chunk_count>=JUKE_TRACK_CHUNK_LIMIT)return NULL;
+        char *chunk=(char *)juke_try_alloc(JUKE_TRACK_CHUNK_BYTES);
+        if(!chunk)return NULL;
+        s_track_chunks[s_track_chunk_count++]=chunk;
+        s_track_chunk_used=0u;
+    }
+    char *p=s_track_chunks[s_track_chunk_count-1u]+s_track_chunk_used;
+    memcpy(p,path,n);
+    s_track_chunk_used+=(unsigned)n;
     return p;
 }
 static void juke_free(char *p)
@@ -66,12 +97,16 @@ static bool safe_dir(const char *path)
 }
 void mod_jukebox_clear(void)
 {
-    for(unsigned i=0;i<s_count;i++) {
-        juke_free(s_tracks[i]);
-        s_tracks[i]=NULL;
+    for(unsigned i=0;i<s_track_chunk_count;i++) {
+        juke_free(s_track_chunks[i]);
+        s_track_chunks[i]=NULL;
     }
+    s_track_chunk_count=0u;
+    s_track_chunk_used=0u;
+    for(unsigned i=0;i<s_count;i++)s_tracks[i]=NULL;
     s_count=0;
     s_truncated=false;
+    s_last_error=false;
 }
 unsigned mod_jukebox_count(void){return s_count;}
 const char *mod_jukebox_track(unsigned index)
@@ -88,6 +123,7 @@ int mod_jukebox_find(const char *relative_file)
     return -1;
 }
 bool mod_jukebox_truncated(void){return s_truncated;}
+bool mod_jukebox_last_error(void){return s_last_error;}
 
 bool mod_jukebox_scan(const char *root,bool recursive)
 {
@@ -95,10 +131,18 @@ bool mod_jukebox_scan(const char *root,bool recursive)
     unsigned head=0,tail=0;
     bool failed=false;
     unsigned entries=0,nonmod=0,dir_entries=0,longpath=0;
-    if(!safe_dir(root))return false;
+    if(!safe_dir(root)) {
+        s_last_error=true;
+        osd_log("MCU JUKE: INVALID DIRECTORY PATH");
+        return false;
+    }
     mod_jukebox_clear();
     dirs[tail]=juke_strdup(root);
-    if(!dirs[tail])return false;
+    if(!dirs[tail]) {
+        s_last_error=true;
+        osd_log("MCU JUKE: LOW HEAP BEFORE DIR OPEN");
+        return false;
+    }
     tail++;
     while(head<tail && !failed) {
         fs_req_t r;
@@ -106,8 +150,10 @@ bool mod_jukebox_scan(const char *root,bool recursive)
         memset(&r,0,sizeof(r));
         r.op=FSOP_MOD_LIST_OPEN;
         r.path=dirs[head];
-        if(disk_fs_request(&r)!=0) {
-            osd_log("MCU JUKE: CANNOT OPEN DIR %s",dirs[head]);
+        const int open_fr=disk_fs_request(&r);
+        if(open_fr!=0) {
+            osd_log("MCU JUKE: DIR OPEN FAIL FR=%d /%s",
+                    open_fr,dirs[head]);
             failed=true;
         }else{
             opened=true;
@@ -116,7 +162,13 @@ bool mod_jukebox_scan(const char *root,bool recursive)
                 int n;
                 memset(&r,0,sizeof(r));
                 r.op=FSOP_MOD_LIST_NEXT;
-                if(disk_fs_request(&r)!=0) {failed=true;break;}
+                const int read_fr=disk_fs_request(&r);
+                if(read_fr!=0) {
+                    osd_log("MCU JUKE: DIR READ FAIL FR=%d AFTER %u ENTRIES",
+                            read_fr,entries);
+                    failed=true;
+                    break;
+                }
                 if(!r.name[0])break;
                 if(!strcmp(r.name,".") || !strcmp(r.name,".."))continue;
                 ++entries;
@@ -133,14 +185,22 @@ bool mod_jukebox_scan(const char *root,bool recursive)
                     if(recursive) {
                         if(tail<JUKE_DIR_LIMIT) {
                             dirs[tail]=juke_strdup(path);
-                            if(!dirs[tail]) {failed=true;break;}
+                            if(!dirs[tail]) {
+                                osd_log("MCU JUKE: LOW HEAP FOR SUBDIR AFTER %u",
+                                        entries);
+                                failed=true;break;
+                            }
                             tail++;
                         }else s_truncated=true;
                     }
                 }else if(mod_filename_matches(r.name)) {
                     if(s_count<MOD_JUKE_MAX_TRACKS) {
-                        s_tracks[s_count]=juke_strdup(path);
-                        if(!s_tracks[s_count]) {failed=true;break;}
+                        s_tracks[s_count]=juke_track_store(path);
+                        if(!s_tracks[s_count]) {
+                            osd_log("MCU JUKE: LOW HEAP FOR TRACK %u (CHUNKS=%u)",
+                                    s_count,s_track_chunk_count);
+                            failed=true;break;
+                        }
                         s_count++;
                     }else s_truncated=true;
                 }else ++nonmod;
@@ -149,7 +209,12 @@ bool mod_jukebox_scan(const char *root,bool recursive)
         if(opened) {
             memset(&r,0,sizeof(r));
             r.op=FSOP_MOD_LIST_CLOSE;
-            if(disk_fs_request(&r)!=0)failed=true;
+            const int close_fr=disk_fs_request(&r);
+            if(close_fr!=0) {
+                osd_log("MCU JUKE: DIR CLOSE FAIL FR=%d AFTER %u ENTRIES",
+                        close_fr,entries);
+                failed=true;
+            }
         }
         juke_free(dirs[head]);
         dirs[head]=NULL;
@@ -157,13 +222,16 @@ bool mod_jukebox_scan(const char *root,bool recursive)
     }
     for(;head<tail;head++)if(dirs[head])juke_free(dirs[head]);
     if(failed) {
-        osd_log("MCU JUKE: DIRECTORY SCAN FAILED");
+        osd_log("MCU JUKE: DIRECTORY SCAN FAILED AFTER %u ENTRIES / %u TRACKS",
+                entries,s_count);
         mod_jukebox_clear();
+        s_last_error=true; /* distinct from successfully scanned empty folder */
         return false;
     }
     if(s_count)qsort(s_tracks,s_count,sizeof(s_tracks[0]),track_cmp);
-    osd_log("MCU JUKE: %u MODS %s%s",s_count,
-            recursive?"TREE":"FOLDER",s_truncated?" (LIMIT)":"");
+    osd_log("MCU JUKE: %u MODS %s%s CHUNKS=%u",s_count,
+            recursive?"TREE":"FOLDER",s_truncated?" (LIMIT)":"",
+            s_track_chunk_count);
     osd_log("MCU JUKE: SEEN %u NONMOD %u DIR %u PATHLONG %u",
             entries,nonmod,dir_entries,longpath);
     return s_count!=0;
