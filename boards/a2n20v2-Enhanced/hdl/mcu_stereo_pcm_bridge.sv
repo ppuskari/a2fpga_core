@@ -21,7 +21,13 @@ module mcu_stereo_pcm_bridge #(
     output reg spi_rd_valid_o,
     output reg [7:0] spi_rd_data_o,
     output reg signed [15:0] pcm_left_o,
-    output reg signed [15:0] pcm_right_o
+    output reg signed [15:0] pcm_right_o,
+    // Optional M3 HDMI metering extension. Inputs are stable in this
+    // module's clk domain; diagnostics never touch the PCM FIFO.
+    input wire [15:0] hdmi_peak_left_i,
+    input wire [15:0] hdmi_peak_right_i,
+    input wire [7:0] hdmi_clip_history_i,
+    input wire hdmi_diag_valid_i
 );
     localparam integer DEPTH=1<<PCM_AW;
     localparam [PCM_AW:0] DEPTH_COUNT=DEPTH;
@@ -33,6 +39,9 @@ module mcu_stereo_pcm_bridge #(
     reg [23:0] frame_r;
     reg [15:0] underruns_r,overflows_r;
     reg [31:0] played_frames_r;
+    // Capture whole 9-byte diagnostic read at address 0x800010 so a
+    // 1Hz meter update cannot tear the L/R/clip snapshot mid-transfer.
+    reg [40:0] hdmi_diag_latched_r;
     reg enabled_r,playing_r;
     reg [2:0] tick_sync_r;
     wire tick_w=tick_sync_r[2] && !tick_sync_r[1];
@@ -52,28 +61,46 @@ module mcu_stereo_pcm_bridge #(
             underruns_r<=0;overflows_r<=0;played_frames_r<=0;
             tick_sync_r<=0;pcm_left_o<=0;pcm_right_o<=0;
             spi_rd_valid_o<=0;spi_rd_data_o<=0;
+            hdmi_diag_latched_r<=0;
         end else begin
             tick_sync_r<={tick_sync_r[1:0],audio_tick_pixel_i};
             spi_rd_valid_o<=0;
             if(spi_rd_i && spi_rd_addr_i[23]) begin
                 spi_rd_valid_o<=1;
-                case(spi_rd_addr_i[3:0])
-                    4'h0:spi_rd_data_o<=8'h50; // P
-                    4'h1:spi_rd_data_o<=8'h43; // C
-                    4'h2:spi_rd_data_o<=8'h01; // v1
-                    4'h3:spi_rd_data_o<={6'b0,playing_r,enabled_r};
-                    4'h4:spi_rd_data_o<=count_w[7:0];
-                    4'h5:spi_rd_data_o<=8'(count_w>>8);
-                    4'h6:spi_rd_data_o<=free_w[7:0];
-                    4'h7:spi_rd_data_o<=8'(free_w>>8);
-                    4'h8:spi_rd_data_o<=underruns_r[7:0];
-                    4'h9:spi_rd_data_o<=underruns_r[15:8];
-                    4'ha:spi_rd_data_o<=overflows_r[7:0];
-                    4'hb:spi_rd_data_o<=overflows_r[15:8];
-                    4'hc:spi_rd_data_o<=played_frames_r[7:0];
-                    4'hd:spi_rd_data_o<=played_frames_r[15:8];
-                    4'he:spi_rd_data_o<=played_frames_r[23:16];
-                    4'hf:spi_rd_data_o<=played_frames_r[31:24];
+                if (spi_rd_addr_i == 24'h800010)
+                    hdmi_diag_latched_r <= {
+                        hdmi_diag_valid_i, hdmi_clip_history_i,
+                        hdmi_peak_left_i, hdmi_peak_right_i
+                    };
+                case(spi_rd_addr_i[4:0])
+                    5'h0:spi_rd_data_o<=8'h50; // P
+                    5'h1:spi_rd_data_o<=8'h43; // C
+                    5'h2:spi_rd_data_o<=8'h01; // v1
+                    5'h3:spi_rd_data_o<={6'b0,playing_r,enabled_r};
+                    5'h4:spi_rd_data_o<=count_w[7:0];
+                    5'h5:spi_rd_data_o<=8'(count_w>>8);
+                    5'h6:spi_rd_data_o<=free_w[7:0];
+                    5'h7:spi_rd_data_o<=8'(free_w>>8);
+                    5'h8:spi_rd_data_o<=underruns_r[7:0];
+                    5'h9:spi_rd_data_o<=underruns_r[15:8];
+                    5'ha:spi_rd_data_o<=overflows_r[7:0];
+                    5'hb:spi_rd_data_o<=overflows_r[15:8];
+                    5'hc:spi_rd_data_o<=played_frames_r[7:0];
+                    5'hd:spi_rd_data_o<=played_frames_r[15:8];
+                    5'he:spi_rd_data_o<=played_frames_r[23:16];
+                    5'h0f:spi_rd_data_o<=played_frames_r[31:24];
+                    // M3 optional extension 0x800010..0x800018:
+                    // 'H','M',version,clip,L lo/hi,R lo/hi,valid.
+                    // Old 16-byte 'PC v1' status remains byte-identical.
+                    5'h10:spi_rd_data_o<=8'h48; // H
+                    5'h11:spi_rd_data_o<=8'h4d; // M
+                    5'h12:spi_rd_data_o<=8'h01; // v1
+                    5'h13:spi_rd_data_o<=hdmi_diag_latched_r[39:32];
+                    5'h14:spi_rd_data_o<=hdmi_diag_latched_r[31:24];
+                    5'h15:spi_rd_data_o<=hdmi_diag_latched_r[23:16];
+                    5'h16:spi_rd_data_o<=hdmi_diag_latched_r[15:8];
+                    5'h17:spi_rd_data_o<=hdmi_diag_latched_r[7:0];
+                    5'h18:spi_rd_data_o<={7'b0,hdmi_diag_latched_r[40]};
                 endcase
             end
             if(ctrl_reset_w) begin
