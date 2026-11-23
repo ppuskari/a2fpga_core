@@ -9,8 +9,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
-#include "ff.h"
-#include "diskio.h"
+/* Include the repository's REAL FatFS typedefs: sdmm.c uses quoted
+ * includes from its firmware directory, not the mock include path. */
+#include "../src/a2n20_bl616/firmware/ff.h"
+#include "../src/a2n20_bl616/firmware/diskio.h"
 #include "fpga_spi.h"
 #include "bflb_mtimer.h"
 #define CHECK(c) do { if(!(c)){fprintf(stderr,"FAIL M3 FatFS line %d: %s\n",__LINE__,#c);exit(1);} } while(0)
