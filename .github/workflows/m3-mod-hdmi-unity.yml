@@ -1,0 +1,56 @@
+name: M3 experimental MOD unity gain and HDMI -2dB mix
+
+on:
+  push:
+    branches:
+      - petar/m3-mb-timing-prodos-suite-20261123
+    paths:
+      - 'boards/a2n20v2-Enhanced/hdl/mcu_pcm_hdmi_mix.sv'
+      - 'boards/a2n20v2-Enhanced/hdl/top.sv'
+      - 'boards/a2n20v2-Enhanced/a2n20v2_enhanced.gprj'
+      - 'boards/a2n20v2-Enhanced/tests/tb_mcu_pcm_hdmi_mix.sv'
+      - 'boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/mcu_mod_gain.*'
+      - 'boards/a2n20v2-Enhanced/tests/test_mcu_mod_gain.c'
+      - '.github/workflows/m3-mod-hdmi-unity.yml'
+  workflow_dispatch:
+
+jobs:
+  m3-mod-hdmi-mixer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install RTL test tool
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq iverilog
+      - name: Verify final unity-gain stereo mixer and -2dBFS sample ceiling
+        run: |
+          ROOT=boards/a2n20v2-Enhanced
+          iverilog -g2012 -Wall -s tb_mcu_pcm_hdmi_mix -o /tmp/m3_mod_mix \
+            "$ROOT/hdl/mcu_pcm_hdmi_mix.sv" \
+            "$ROOT/tests/tb_mcu_pcm_hdmi_mix.sv"
+          vvp /tmp/m3_mod_mix
+      - name: Verify independent BL616 +8dB gain and linked peak limiter
+        run: |
+          ROOT=boards/a2n20v2-Enhanced
+          HOST="$ROOT/src/a2n20_bl616/firmware_host"
+          gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+            -I"$HOST" \
+            "$ROOT/tests/test_mcu_mod_gain.c" \
+            "$HOST/mcu_mod_gain.c" -o /tmp/m3_mod_gain
+          /tmp/m3_mod_gain
+      - name: Verify experimental project includes mixer and production Stage2 remains unchanged
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('boards/a2n20v2-Enhanced')
+          top=(root/'hdl/top.sv').read_text()
+          gowin=(root/'a2n20v2_enhanced.gprj').read_text()
+          mcu=(root/'src/a2n20_bl616/firmware_host/mcu_mod_gain.h').read_text()
+          assert 'mcu_pcm_hdmi_mix #' in top
+          assert 'hdmi_gain_clip_w || pcm_hdmi_mix_over_peak_w' in top
+          assert 'hdl/mcu_pcm_hdmi_mix.sv' in gowin
+          assert '#define MOD_GAIN_CEILING 26028' in mcu
+          assert 'petar/m3-mb-timing-prodos-suite-20261123' in Path('Build-M3-FPGA.ps1').read_text()
+          assert "$requiredBranch='petar/m3-sd-sector-burst-20261123'" in Path('M3.ps1').read_text()
+          print('PASS M3 experiment: mixer routed, -2dBFS MCU ceiling, source safety gates intact')
+          PY
