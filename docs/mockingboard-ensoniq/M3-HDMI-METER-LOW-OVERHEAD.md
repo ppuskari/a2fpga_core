@@ -36,6 +36,28 @@ measured by Gowin and physical MCU telemetry. An isolated Yosys synthesis
 step is included as a coarse standalone resource estimate; do not claim
 a Gowin P&R result until compiled locally.
 
+## Hardware correction: endian fix (2026-11-23)
+
+The first hardware build displayed `HDMI CLIP=00 L=-0.0 R=-0.0`
+during active MOD playback. Root cause: the new SPACE6 meter case
+statement emitted each 16-bit peak **high byte first**, while the
+MCU parser (and this ABI table) expects **little-endian** low byte first.
+
+For example, -2 dBFS sample peak `26028 = 0x65AC` was transmitted
+as `0x65,0xAC` and decoded as `0xAC65 = 44133`. The C formatter
+returns 0 dB attenuation for values at or above unsigned 32768,
+hence the false `-0.0` reading. Neither the actual HDMI samples
+nor the clip-history byte were affected.
+
+Fixed in the FPGA `mcu_stereo_pcm_bridge.sv` byte selectors at
+`0x800014..0x800017`. The existing RTL regression
+`tb_mcu_stereo_pcm_bridge.sv` already expects the correct low/high
+order and will catch a future regression.
+
+**FPGA rebuild and volatile SRAM reload ONLY.** MCU Stage2 from the
+first meter build is already compatible; no MCU reflash, new SPI
+transaction, additional LUTs/DSPs/FFs, or audio mixer changes.
+
 ## SPACE6 meter read ABI
 
 All values are from a 1-second snapshot, stable and coherent in logic clock:
