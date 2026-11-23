@@ -37,6 +37,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 
 $requiredBranch='petar/m3-sd-sector-burst-20261123'
+# Only this isolated experiment may also build/flash Stage2. Production M3
+# keeps its original hard-fail guard and separate build manifest unchanged.
+$experimentalBranch='petar/m3-mb-timing-prodos-suite-20261123'
 $root=$PSScriptRoot
 $board=Join-Path $root 'boards\a2n20v2-Enhanced\src\a2n20_bl616'
 $hostDir=Join-Path $board 'firmware_host'
@@ -93,8 +96,9 @@ function Assert-M3-Checkout {
         Fail "Cannot locate BL616 programmer: $programmer"
     }
     $current=(& git -C $root branch --show-current | Out-String).Trim()
-    if($LASTEXITCODE -ne 0 -or $current -ne $requiredBranch) {
-        Fail "Wrong repository branch '$current'. Expected '$requiredBranch'."
+    if($LASTEXITCODE -ne 0 -or
+       ($current -ne $requiredBranch -and $current -ne $experimentalBranch)) {
+        Fail "Wrong repository branch '$current'. Only approved M3 branches may build."
     }
 }
 
@@ -198,7 +202,8 @@ function Assert-Built-Manifest {
     }
     $record=Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
     $head=Current-Commit
-    if([string]$record.branch -ne $requiredBranch -or
+    $current=(& git -C $root branch --show-current | Out-String).Trim()
+    if([string]$record.branch -ne $current -or
        [string]$record.commit -ne $head -or
        [string]$record.sha256 -ne $hash -or
        [string]$record.sourceDiffSha256 -ne $sourceHash -or
@@ -236,7 +241,7 @@ function Build-Stage2 {
         Fail 'Tracked source inputs changed DURING compilation; run SourceState to inspect changes before retrying.'
     }
     $record=[ordered]@{
-        branch=$requiredBranch
+        branch=(& git -C $root branch --show-current | Out-String).Trim()
         commit=(Current-Commit)
         sha256=$hash
         sourceDiffSha256=$sourceAfter
