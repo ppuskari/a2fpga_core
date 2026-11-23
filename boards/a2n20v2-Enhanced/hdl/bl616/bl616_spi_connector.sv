@@ -410,8 +410,12 @@ module bl616_spi_connector #(
     reg [7:0] local_rd_data_q;
     reg       local_rd_valid_q;
 
+    // SPACE0 high aperture 0x800000..0x8001FF is reserved for the
+    // M3 SD receive buffer. All legacy low 256-byte accesses stay intact.
+    wire sd_burst_aperture_wr = (mem_wr_addr[23:9] == 15'h4000);
+    wire sd_burst_aperture_rd = (mem_rd_addr[23:9] == 15'h4000);
     always @(posedge clk) begin
-        if (mem_wr_en && (mem_space == 3'd0))
+        if (mem_wr_en && (mem_space == 3'd0) && !sd_burst_aperture_wr)
             local_mem[mem_wr_addr[7:0]] <= mem_wr_data;
     end
 
@@ -421,7 +425,8 @@ module bl616_spi_connector #(
             local_rd_data_q  <= 8'h00;
         end else begin
             local_rd_valid_q <= 1'b0;
-            if (mem_rd_req && (mem_rd_space == 3'd0)) begin
+            if (mem_rd_req && (mem_rd_space == 3'd0) &&
+                !sd_burst_aperture_rd) begin
                 local_rd_data_q  <= local_mem[mem_rd_addr[7:0]];
                 local_rd_valid_q <= 1'b1;
             end
@@ -725,6 +730,9 @@ module bl616_spi_connector #(
         if (local_rd_valid_q) begin
             mem_rd_valid = 1'b1;
             mem_rd_data  = local_rd_data_q;
+        end else if (sd_burst_rd_valid_w) begin
+            mem_rd_valid = 1'b1;
+            mem_rd_data  = sd_burst_rd_data_w;
         end else if (sdram_rd_resp_valid_r) begin
             mem_rd_valid = 1'b1;
             mem_rd_data  = sdram_rd_resp_data_r;
@@ -757,6 +765,33 @@ module bl616_spi_connector #(
     wire [7:0] sd_rx_data_w;
     wire       sd_busy_w;
 
+    // M3 read-side block staging. The MCU initiates 512-byte clocking by
+    // writing A1 to SD_REG_STATUS (0x6E), polls completion without holding
+    // SPI CS#, then fetches one SPACE0 512-byte XFER aperture. Legacy
+    // register 0x6D byte exchanges, CS# and SD clock speed are unchanged.
+    reg sd_burst_start_r,sd_burst_abort_r;
+    wire sd_burst_tx_start_w,sd_burst_active_w;
+    wire sd_burst_done_w,sd_burst_error_w;
+    wire [7:0] sd_burst_tx_data_w;
+    wire sd_burst_rd_valid_w;
+    wire [7:0] sd_burst_rd_data_w;
+
+    fpga_sd_burst sd_burst_inst (
+        .clk(clk),.rst_n(rst_n),
+        .start_i(sd_burst_start_r),.abort_i(sd_burst_abort_r),
+        .cs_n_i(sd_cs_n_r),
+        .sd_busy_i(sd_busy_w),.sd_rx_data_i(sd_rx_data_w),
+        .sd_tx_start_o(sd_burst_tx_start_w),
+        .sd_tx_data_o(sd_burst_tx_data_w),
+        .active_o(sd_burst_active_w),
+        .complete_o(sd_burst_done_w),.error_o(sd_burst_error_w),
+        .rd_req_i(mem_rd_req && mem_rd_space==3'd0 &&
+                  sd_burst_aperture_rd),
+        .rd_addr_i(mem_rd_addr[8:0]),
+        .rd_valid_o(sd_burst_rd_valid_w),
+        .rd_data_o(sd_burst_rd_data_w)
+    );
+
     fpga_sd_spi #(
         .CLOCK_SPEED_HZ(CLOCK_SPEED_HZ)
     ) fpga_sd_spi_inst (
@@ -764,8 +799,8 @@ module bl616_spi_connector #(
         .rst_n(rst_n),
         .cs_n_i(sd_cs_n_r),
         .slow_clk_i(sd_slow_clk_r),
-        .tx_start_i(sd_tx_start_r),
-        .tx_data_i(sd_tx_data_r),
+        .tx_start_i(sd_tx_start_r | sd_burst_tx_start_w),
+        .tx_data_i(sd_burst_active_w ? sd_burst_tx_data_w : sd_tx_data_r),
         .rx_data_o(sd_rx_data_w),
         .busy_o(sd_busy_w),
         .sd_clk_o(sd_clk_o),
@@ -921,7 +956,10 @@ module bl616_spi_connector #(
             // SD card registers
             7'h6C: reg_rdata = {6'b0, sd_slow_clk_r, sd_cs_n_r};
             7'h6D: reg_rdata = sd_rx_data_w;
-            7'h6E: reg_rdata = {7'b0, sd_busy_w};
+            // [7] M3 capability, [6] 512B ready, [5] burst active,
+            // [4] burst error, [0] original per-byte SD busy bit.
+            7'h6E: reg_rdata = {1'b1,sd_burst_done_w,sd_burst_active_w,
+                                 sd_burst_error_w,3'b000,sd_busy_w};
             7'h6F: reg_rdata = {6'b101000, audio_mode_r}; // 0xA0 | accepted request
 
             // Page 7: Bus event FIFO
@@ -1007,6 +1045,8 @@ module bl616_spi_connector #(
             sd_slow_clk_r    <= 1'b1;
             sd_tx_data_r     <= 8'hFF;
             sd_tx_start_r    <= 1'b0;
+            sd_burst_start_r <= 1'b0;
+            sd_burst_abort_r <= 1'b0;
             w5100_cmd_clr_r  <= 4'd0;
         end else begin
             // One-shot clears
@@ -1020,6 +1060,8 @@ module bl616_spi_connector #(
             slot_reconfig_r   <= 1'b0;
             fifo_reg_pop_r    <= 1'b0;
             sd_tx_start_r     <= 1'b0;
+            sd_burst_start_r  <= 1'b0;
+            sd_burst_abort_r  <= 1'b0;
             w5100_cmd_clr_r   <= 4'd0;
 
             // A2 reset edge detection
@@ -1131,8 +1173,15 @@ module bl616_spi_connector #(
                         sd_slow_clk_r <= reg_wdata[1];
                     end
                     7'h6D: begin
-                        sd_tx_data_r  <= reg_wdata;
-                        sd_tx_start_r <= 1'b1;
+                        if(!sd_burst_active_w) begin
+                            sd_tx_data_r  <= reg_wdata;
+                            sd_tx_start_r <= 1'b1;
+                        end
+                    end
+                    // Previously write-ignored: M3 autonomous SD read.
+                    7'h6E: begin
+                        if(reg_wdata==8'hA1) sd_burst_start_r<=1'b1;
+                        if(reg_wdata==8'hAF) sd_burst_abort_r<=1'b1;
                     end
                     7'h6F: begin
                         // Legacy F0 explicitly resets Apple boot; selecting
