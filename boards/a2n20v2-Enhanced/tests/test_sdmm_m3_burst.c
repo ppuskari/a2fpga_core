@@ -99,6 +99,7 @@ static void check_bytes(const uint8_t *buf,unsigned n)
 int main(void)
 {
     uint8_t sector[512];
+    CHECK(sd_m3_crc16((const BYTE *)"123456789",9u)==0x31C3u);
     prepare(512u,true);
     CHECK(rcvr_datablock(sector,512u)==1);
     check_bytes(sector,512u);
