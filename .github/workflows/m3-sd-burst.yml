@@ -99,5 +99,9 @@ jobs:
             } catch {
               if($_.Exception.Message -ne 'Required ROM preparation failed. FPGA build NOT started.') { throw }
               Write-Host 'PASS expected fail-closed: private SynthLAB piano ROM absent, FPGA build correctly refused.'
+              # The intentional ROM-helper failure leaves LASTEXITCODE=1 even
+              # after PowerShell catches its expected exception. Clear only
+              # after confirming the exact integrity-guard rejection.
+              $global:LASTEXITCODE=0
             }
           }
