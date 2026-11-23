@@ -15,7 +15,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position=0)]
-    [ValidateSet('Prepare','Check','Synthesize','Build')]
+    [ValidateSet('Prepare','Check','Script','Synthesize','Build')]
     [string] $Action='Prepare',
     [string] $GowinCli='',
     [string] $SynthLABDisk='',
@@ -64,6 +64,24 @@ if($Action -eq 'Prepare'){
     return
 }
 
+# Gowin 1.9.9 Beta/Education gw_sh DOES NOT implement open_project.
+# Generate a Tcl script from the authoritative .gprj to avoid divergence.
+$generator=Join-Path $root 'tools\generate_m3_gowin_tcl.py'
+$tclScript=Join-Path $board 'impl\m3-headless-build.tcl'
+if(-not (Test-Path -LiteralPath $generator -PathType Leaf)) {
+    throw "Missing Gowin 1.9.9 Tcl generator: $generator"
+}
+$flow=if($Action -eq 'Synthesize'){'syn'}else{'all'}
+& $python @pyArgs $generator --project (Join-Path $board $project) --out $tclScript --flow $flow
+if($LASTEXITCODE -ne 0) {
+    throw 'Cannot generate complete headless Tcl: inspect missing project files.'
+}
+if($Action -eq 'Script') {
+    Write-Host "Generated Gowin 1.9.9 compatible Tcl: $tclScript" -ForegroundColor Green
+    Write-Host "Run manually from the board directory: gw_sh.exe `"$tclScript`""
+    return
+}
+
 if(-not $GowinCli) {
     foreach($name in @('gw_sh.exe','gw_sh')) {
         $candidate=Get-Command $name -ErrorAction SilentlyContinue
@@ -73,31 +91,101 @@ if(-not $GowinCli) {
 if(-not $GowinCli -or -not (Test-Path -LiteralPath $GowinCli -PathType Leaf)) {
     throw "Gowin gw_sh not found; supply -GowinCli with its full path."
 }
-$run=if($Action -eq 'Synthesize'){'run syn'}else{'run all'}
-$cmds="open_project $project`n$run`nexit`n"
-Write-Host "Gowin ${Action}: $GowinCli" -ForegroundColor Cyan
-Push-Location $board
-try {
-    $cmds | & $GowinCli
-    if($LASTEXITCODE -ne 0){throw "Gowin returned exit code $LASTEXITCODE"}
-} finally {
-    Pop-Location
+
+# Never allow a prior M2/M3 GUI artifact to impersonate a new headless build.
+# Archive rather than destroy the previous bitstream/timing report.
+$pnrDir=Join-Path $board 'impl\pnr'
+$bitstream=Join-Path $pnrDir 'a2n20v2_enhanced.fs'
+$report=Join-Path $pnrDir 'a2n20v2_enhanced_tr_content.html'
+$backupDir=Join-Path $board ('impl\m3-previous-artifacts\'+
+                             (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
+$archived=0
+foreach($outputFile in @($bitstream,$report)) {
+    if(Test-Path -LiteralPath $outputFile -PathType Leaf) {
+        if(-not (Test-Path -LiteralPath $backupDir -PathType Container)) {
+            $null=New-Item -ItemType Directory -Path $backupDir -Force
+        }
+        Move-Item -LiteralPath $outputFile -Destination $backupDir -Force
+        $archived++
+    }
 }
+if($archived -gt 0) {
+    Write-Warning "Archived $archived previous FPGA artifact(s) in $backupDir. They are NOT a new M3 build."
+}
+
+$stdoutPath=Join-Path $board 'impl\m3-gowin-stdout.log'
+$stderrPath=Join-Path $board 'impl\m3-gowin-stderr.log'
+foreach($file in @($stdoutPath,$stderrPath)) {
+    if(Test-Path -LiteralPath $file) {
+        Remove-Item -LiteralPath $file -Force
+    }
+}
+Write-Host "Gowin $Action (legacy 1.9.9 Tcl): $GowinCli" -ForegroundColor Cyan
+Write-Host "Generated source list: $tclScript"
+Write-Host "Build stdout: $stdoutPath"
+
+# Give gw_sh a real SCRIPT FILE as its argument, not piped console input.
+# Some Gowin versions return process exit code 0 even when Tcl reports an
+# invalid command. We require a Tcl completion marker, a clean log AND
+# newly produced artifacts. Output remains available for postmortem.
+$started=Get-Date
+$quotedScript='\"'+$tclScript+'\"'
+$process=Start-Process -FilePath $GowinCli -ArgumentList $quotedScript `
+          -WorkingDirectory $board `
+          -RedirectStandardOutput $stdoutPath `
+          -RedirectStandardError $stderrPath `
+          -PassThru -Wait -NoNewWindow
+$stdOut=if(Test-Path -LiteralPath $stdoutPath) {
+    Get-Content -LiteralPath $stdoutPath -Raw
+} else {''}
+$stdErr=if(Test-Path -LiteralPath $stderrPath) {
+    Get-Content -LiteralPath $stderrPath -Raw
+} else {''}
+Write-Host '--- Gowin stdout (last 100 lines) ---'
+$stdOut -split "`r?`n" | Select-Object -Last 100 | ForEach-Object {
+    if($_){Write-Host $_}
+}
+if($stdErr.Trim()) {
+    Write-Warning 'Gowin stderr (last 60 lines):'
+    $stdErr -split "`r?`n" | Select-Object -Last 60 | ForEach-Object {
+        if($_){Write-Warning $_}
+    }
+}
+$allLog=$stdOut+"`n"+$stdErr
+if($process.ExitCode -ne 0) {
+    throw "Gowin process exited $($process.ExitCode). Inspect $stdoutPath and $stderrPath; previous bitstream archived."
+}
+if($allLog -match '(?im)^\s*(?:ERROR\b|FATAL\b|invalid command name\b|M3_GOWIN_TCL_FAILED\b)' -or
+   $allLog -match '(?i)No available design files found in this project') {
+    throw "Gowin logged a synthesis/project/Tcl error despite exit code 0. Inspect $stdoutPath and $stderrPath; DO NOT program an FPGA."
+}
+if($allLog -notmatch 'M3_GOWIN_TCL_COMPLETED') {
+    throw "Gowin never confirmed completion of run $flow. Inspect $stdoutPath; DO NOT program an FPGA."
+}
+
 if($Action -eq 'Build') {
-    $bitstream=Join-Path $board 'impl\pnr\a2n20v2_enhanced.fs'
     if(-not (Test-Path -LiteralPath $bitstream -PathType Leaf)) {
-        throw "Gowin reported success, but no FPGA .fs was produced: $bitstream"
+        throw "Fresh Gowin run produced no FPGA .fs: $bitstream. DO NOT use an older bitstream."
     }
-    $report=Join-Path $board 'impl\pnr\a2n20v2_enhanced_tr_content.html'
     if(-not (Test-Path -LiteralPath $report -PathType Leaf)) {
-        throw "Missing Gowin timing report. Inspect synthesis and place-and-route."
+        throw "Fresh Gowin run produced no timing report: $report. DO NOT use an older bitstream."
     }
-    $text=Get-Content -LiteralPath $report -Raw
-    if($text -notmatch 'Setup Violated Endpoints' -or
-       $text -notmatch 'Hold Violated Endpoints') {
-        throw "Could not verify Gowin timing report format. Inspect manually."
+    foreach($file in @($bitstream,$report)) {
+        $item=Get-Item -LiteralPath $file
+        if($item.Length -le 1000 -or $item.LastWriteTime -lt $started.AddSeconds(-2)) {
+            throw "FPGA output missing, empty or stale: $file. DO NOT program an FPGA."
+        }
     }
-    Write-Host "FPGA bitstream produced: $bitstream" -ForegroundColor Green
-    Write-Warning "Read timing violation counts in $report before programming hardware."
-    Write-Warning 'Program volatile SRAM first. Leave J2R11 golden FPGA flash intact.'
+    $timingText=Get-Content -LiteralPath $report -Raw
+    if($timingText -notmatch 'Setup Violated Endpoints' -or
+       $timingText -notmatch 'Hold Violated Endpoints') {
+        throw "Timing report not verified: $report. DO NOT program until inspected."
+    }
+    Write-Host "Fresh FPGA bitstream built: $bitstream" -ForegroundColor Green
+    Write-Host "SHA256: $((Get-FileHash -LiteralPath $bitstream -Algorithm SHA256).Hash)"
+    Write-Host "Timing report: $report" -ForegroundColor Green
+    Write-Warning 'Review actual Setup/Hold Violated Endpoints before FPGA SRAM programming.'
+    Write-Warning 'PROGRAM VOLATILE FPGA SRAM ONLY: leave the M2 golden FPGA flash untouched.'
+} else {
+    Write-Host 'Gowin synthesis completed; no bitstream is implied.' -ForegroundColor Green
 }
