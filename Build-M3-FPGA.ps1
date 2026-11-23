@@ -135,17 +135,20 @@ $process=Start-Process -FilePath $GowinCli -ArgumentList $quotedScript `
           -RedirectStandardOutput $stdoutPath `
           -RedirectStandardError $stderrPath `
           -PassThru -Wait -NoNewWindow
-$stdOut=if(Test-Path -LiteralPath $stdoutPath) {
-    Get-Content -LiteralPath $stdoutPath -Raw
+# Get-Content -Raw returns $null for an EXISTING but zero-byte file.
+# Gowin often writes stdout only. Never call .Trim() on that null.
+# Cast each result explicitly to string before validating the output.
+[string]$stdOut=if(Test-Path -LiteralPath $stdoutPath) {
+    [string](Get-Content -LiteralPath $stdoutPath -Raw)
 } else {''}
-$stdErr=if(Test-Path -LiteralPath $stderrPath) {
-    Get-Content -LiteralPath $stderrPath -Raw
+[string]$stdErr=if(Test-Path -LiteralPath $stderrPath) {
+    [string](Get-Content -LiteralPath $stderrPath -Raw)
 } else {''}
 Write-Host '--- Gowin stdout (last 100 lines) ---'
 $stdOut -split '\r?\n' | Select-Object -Last 100 | ForEach-Object {
     if($_){Write-Host $_}
 }
-if($stdErr.Trim()) {
+if(-not [string]::IsNullOrWhiteSpace($stdErr)) {
     Write-Warning 'Gowin stderr (last 60 lines):'
     $stdErr -split '\r?\n' | Select-Object -Last 60 | ForEach-Object {
         if($_){Write-Warning $_}
