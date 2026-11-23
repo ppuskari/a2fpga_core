@@ -55,6 +55,19 @@ sdk_add_link_options(-Wl,--wrap=exception_entry)
 # The host build routes FatFS disk_* between SD and USB in diskio_host.c, so
 # sdmm.c must export its SD logic as mmc_disk_* instead of owning disk_*.
 sdk_add_compile_definitions(-DFATFS_EXTERNAL_DISKIO)
+# M3: autonomous FPGA 512-byte SD RX staging. Capability-gated at runtime:
+# a newer MCU on an M2 FPGA silently uses the legacy bytewise SD tunnel.
+# Bulk host SPI is independently A/B verified against the same FPGA buffer,
+# disabling only the fast portal if 20MHz CDC causes any byte mismatch.
+set(FPGA_SD_BURST_READ 1 CACHE STRING "0=all legacy SD bytes, 1=M3 FPGA-autonomous 512B SD RX")
+set(FPGA_SPI_SD_BURST_PORTAL_BULK 1 CACHE STRING "0=bytewise XFER0, 1=fast 128-byte XFER0 frames with readback check")
+foreach(flag FPGA_SD_BURST_READ FPGA_SPI_SD_BURST_PORTAL_BULK)
+    if(NOT ${flag} MATCHES "^[01]$")
+        message(FATAL_ERROR "${flag} must be 0 or 1")
+    endif()
+endforeach()
+sdk_add_compile_definitions(-DFPGA_SD_BURST_READ=${FPGA_SD_BURST_READ})
+sdk_add_compile_definitions(-DFPGA_SPI_SD_BURST_PORTAL_BULK=${FPGA_SPI_SD_BURST_PORTAL_BULK})
 
 sdk_add_compile_definitions(-DHXCMOD_MAXCHANNELS=8)
 
