@@ -2022,6 +2022,7 @@ wire [15:0] audio_sample_word[1:0];
     logic hdmi_clip_history_pending_r;
     logic [7:0] hdmi_clip_history_r;
 
+    wire pcm_hdmi_mix_over_peak_w;
     wire hdmi_clip_sample_event_w =
         clk_audio_w && (hdmi_gain_clip_w || pcm_hdmi_mix_over_peak_w);
 
@@ -2071,7 +2072,6 @@ wire [15:0] audio_sample_word[1:0];
     // the pre-existing HDMI clip-history diagnostic. This is a hard peak
     // guard, NOT a transparent lookahead compressor; overlapping loud
     // sources may require master bus gain management in a later stage.
-    wire pcm_hdmi_mix_over_peak_w;
     mcu_pcm_hdmi_mix #(.PEAK_CEILING(26028)) pcm_hdmi_mix (
         .native_l_i(audio_core_gained_l_w),
         .native_r_i(audio_core_gained_r_w),
