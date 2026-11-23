@@ -129,7 +129,7 @@ Write-Host "Build stdout: $stdoutPath"
 # invalid command. We require a Tcl completion marker, a clean log AND
 # newly produced artifacts. Output remains available for postmortem.
 $started=Get-Date
-$quotedScript='\"'+$tclScript+'\"'
+$quotedScript='"'+$tclScript+'"'
 $process=Start-Process -FilePath $GowinCli -ArgumentList $quotedScript `
           -WorkingDirectory $board `
           -RedirectStandardOutput $stdoutPath `
@@ -142,12 +142,12 @@ $stdErr=if(Test-Path -LiteralPath $stderrPath) {
     Get-Content -LiteralPath $stderrPath -Raw
 } else {''}
 Write-Host '--- Gowin stdout (last 100 lines) ---'
-$stdOut -split "`r?`n" | Select-Object -Last 100 | ForEach-Object {
+$stdOut -split '\r?\n' | Select-Object -Last 100 | ForEach-Object {
     if($_){Write-Host $_}
 }
 if($stdErr.Trim()) {
     Write-Warning 'Gowin stderr (last 60 lines):'
-    $stdErr -split "`r?`n" | Select-Object -Last 60 | ForEach-Object {
+    $stdErr -split '\r?\n' | Select-Object -Last 60 | ForEach-Object {
         if($_){Write-Warning $_}
     }
 }
