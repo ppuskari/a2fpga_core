@@ -43,10 +43,14 @@ jobs:
           & git -C $lab commit --allow-empty -m 'M3 synthetic hardware baseline'
           if($LASTEXITCODE -ne 0){throw 'git init/commit failed'}
           $head=(& git -C $lab rev-parse HEAD | Out-String).Trim()
+          $rng=New-Object System.Random(20261124)
           $fs=Join-Path $fpgaDir 'a2n20v2_enhanced.fs'
-          [IO.File]::WriteAllBytes($fs,(New-Object byte[] 120000))
+          $fsBytes=New-Object byte[] 120000
+          $rng.NextBytes($fsBytes)
+          [IO.File]::WriteAllBytes($fs,$fsBytes)
           $bin=Join-Path $mcuDir 'a2n20_bl616_host_bl616.bin'
           $bytes=New-Object byte[] 75000
+          $rng.NextBytes($bytes)
           $markers=[Text.Encoding]::ASCII.GetBytes('MOD JUKE=STARTFILE M3 SD BURST FPGA= HDMI CLIP=')
           [Array]::Copy($markers,$bytes,$markers.Length)
           [IO.File]::WriteAllBytes($bin,$bytes)
@@ -56,7 +60,9 @@ jobs:
              timestampUtc='2026-11-24T15:00:00Z' } |
               ConvertTo-Json | Set-Content (Join-Path $mcuDir 'm3-stage2-build.json') -Encoding UTF8
           $po=Join-Path $lab 'A2MEDIA-ProDOS243.po'
-          [IO.File]::WriteAllBytes($po,(New-Object byte[] 143360))
+          $poBytes=New-Object byte[] 143360
+          $rng.NextBytes($poBytes)
+          [IO.File]::WriteAllBytes($po,$poBytes)
           & .\tools\Publish-M3-Release.ps1 -SourceRoot $lab -Tag 'm3-smoke-test' -A2MediaPo $po
           if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Packaging smoke failed'}
           $out=Join-Path $lab 'release-out/m3-smoke-test'
