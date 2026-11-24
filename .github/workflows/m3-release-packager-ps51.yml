@@ -1,0 +1,80 @@
+name: M3 release packager PowerShell 5.1 smoke
+
+on:
+  push:
+    branches:
+      - petar/m3-release-packaging-20261124
+    paths:
+      - 'tools/Publish-M3-Release.ps1'
+      - '.github/workflows/m3-release-packager-ps51.yml'
+  workflow_dispatch:
+
+jobs:
+  windows-powershell-51:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse release script using native Windows PowerShell 5.1
+        run: |
+          $parseErrors=$null
+          $tokens=$null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'tools/Publish-M3-Release.ps1').Path,
+            [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -ne 0) {
+            $parseErrors | Format-List | Out-String | Write-Host
+            throw 'Release script has PowerShell 5.1 parse errors'
+          }
+          Write-Host "PASS: PowerShell 5.1 parse; token count $($tokens.Count)"
+      - name: Smoke test ZIP, manifest, checksum and optional PO without publishing
+        run: |
+          $ErrorActionPreference='Stop'
+          $lab=Join-Path $env:RUNNER_TEMP 'm3-release-fake-test'
+          $fpgaDir=Join-Path $lab 'boards/a2n20v2-Enhanced/impl/pnr'
+          $mcuDir=Join-Path $lab 'boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host/build/build_out'
+          New-Item -ItemType Directory -Force -Path $fpgaDir,$mcuDir | Out-Null
+          & git init -b petar/m3-mb-timing-prodos-suite-20261123 $lab
+          & git -C $lab config user.email 'ci@example.com'
+          & git -C $lab config user.name 'Release Smoke'
+          & git -C $lab commit --allow-empty -m 'M3 synthetic hardware baseline'
+          if($LASTEXITCODE -ne 0){throw 'git init/commit failed'}
+          $head=(& git -C $lab rev-parse HEAD | Out-String).Trim()
+          $fs=Join-Path $fpgaDir 'a2n20v2_enhanced.fs'
+          [IO.File]::WriteAllBytes($fs,(New-Object byte[] 120000))
+          $bin=Join-Path $mcuDir 'a2n20_bl616_host_bl616.bin'
+          $bytes=New-Object byte[] 75000
+          $markers=[Text.Encoding]::ASCII.GetBytes('MOD JUKE=STARTFILE M3 SD BURST FPGA= HDMI CLIP=')
+          [Array]::Copy($markers,$bytes,$markers.Length)
+          [IO.File]::WriteAllBytes($bin,$bytes)
+          $hash=(Get-FileHash -LiteralPath $bin -Algorithm SHA256).Hash
+          @{ branch='petar/m3-mb-timing-prodos-suite-20261123';
+             commit=$head;sha256=$hash;length=75000;
+             timestampUtc='2026-11-24T15:00:00Z' } |
+              ConvertTo-Json | Set-Content (Join-Path $mcuDir 'm3-stage2-build.json') -Encoding UTF8
+          $po=Join-Path $lab 'A2MEDIA-ProDOS243.po'
+          [IO.File]::WriteAllBytes($po,(New-Object byte[] 143360))
+          & .\tools\Publish-M3-Release.ps1 -SourceRoot $lab -Tag 'm3-smoke-test' -A2MediaPo $po
+          if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Packaging smoke failed'}
+          $out=Join-Path $lab 'release-out/m3-smoke-test'
+          $zip=Join-Path $out 'a2fpga-enhanced-m3-smoke-test-complete.zip'
+          if(-not (Test-Path $zip)) {throw 'Release ZIP missing'}
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive=[IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            $names=@($archive.Entries | ForEach-Object { $_.FullName })
+            foreach($name in @('a2fpga-enhanced-m3-fpga.fs',
+                               'a2fpga-enhanced-m3-bl616-stage2.bin',
+                               'A2MEDIA-ProDOS243.po',
+                               'MANIFEST.json','SHA256SUMS.txt','README.txt')) {
+              if($names -notcontains $name) {throw "Missing ZIP entry: $name"}
+            }
+            Write-Host "PASS: ZIP contains $($names.Count) expected assets"
+          } finally {$archive.Dispose()}
+          $manifest=Get-Content (Join-Path $out 'payload/MANIFEST.json') -Raw | ConvertFrom-Json
+          if($manifest.source_commit -ne $head){throw 'Source commit in manifest mismatch'}
+          if($manifest.files.Count -ne 3){throw 'Expected FPGA/MCU/PO manifests'}
+          Write-Host 'PASS: manifest and artifact counts; no publish invoked'
