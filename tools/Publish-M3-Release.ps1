@@ -161,7 +161,7 @@ $manifestData=[ordered]@{
     bl616_stage2_built_utc=[string]$stage2Info.timestampUtc
     fpga_built_last_write_utc=(Get-Item -LiteralPath $fpga).LastWriteTimeUtc.ToString('o')
     build_provenance='Exact on-disk .fs/.bin copies; SHA256 checksums. User hardware validation does not imply an automated FPGA flash readback.'
-    files=@($artifactRecords)
+    files=$artifactRecords.ToArray()
 }
 $manifestData | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath $manifestOut -Encoding UTF8
 
