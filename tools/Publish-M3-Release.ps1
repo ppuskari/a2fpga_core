@@ -223,7 +223,7 @@ try {
 } finally { $archive.Dispose() }
 $zipHash=Get-Sha $zip
 $zipHashFile=$zip+'.sha256'
-[IO.File]::WriteAllText($zipHashFile,($zipHash+'  '+[IO.Path]::GetFileName($zip)+"\r\n"),[Text.Encoding]::ASCII)
+[IO.File]::WriteAllLines($zipHashFile,[string[]]@($zipHash+'  '+[IO.Path]::GetFileName($zip)),[Text.Encoding]::ASCII)
 
 $notesFile=Join-Path $outDir 'RELEASE-NOTES.md'
 $poNote=if ($includePo) {
@@ -239,21 +239,21 @@ playback/diagnostic session alongside SpectrumWall was successful.
 - Native Apple II/IIgs HDMI video on startup; TAB to MCU console.
 - Stereo MOD jukebox, fast file/folder loading, independent Mockingboard.
 - Ensoniq DOC and SSI263 speech; SynthLAB piano instrument bank.
-- HDMI `CLIP=00` and approximately -2.0 dBFS L/R peak holds in measured playback.
+- HDMI CLIP=00 and approximately -2.0 dBFS L/R peak holds in measured playback.
 - M3 512-byte autonomous SD bursts and responsive USB controls.
-- Both exact local FPGA `.fs` and BL616 Stage2 `.bin` in one ZIP.
+- Both exact local FPGA .fs and BL616 Stage2 .bin in one ZIP.
 $poNote
 
-Download `$(Split-Path -Leaf $zip)` for the COMPLETE set. Individual
+Download $(Split-Path -Leaf $zip) for the COMPLETE set. Individual
 flash assets are also attached unless ZipOnly was selected.
 
-**BL616 flashing safety:** Stage2 `.bin` is for **0x40000 only**.
+**BL616 flashing safety:** Stage2 .bin is for **0x40000 only**.
 Do not overwrite Sipeed's encrypted/signed Stage1 at 0x00000.
 
-Source commit: `$head`
-FPGA SHA256: `$(Get-Sha $fpgaAsset)`
-MCU SHA256: `$(Get-Sha $mcuAsset)`
-ZIP SHA256: `$zipHash`
+Source commit: $head
+FPGA SHA256: $(Get-Sha $fpgaAsset)
+MCU SHA256: $(Get-Sha $mcuAsset)
+ZIP SHA256: $zipHash
 "@
 Set-Content -LiteralPath $notesFile -Value $notes -Encoding UTF8
 
