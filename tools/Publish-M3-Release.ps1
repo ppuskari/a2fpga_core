@@ -14,7 +14,7 @@
 .EXAMPLE
   .\Publish-M3-Release.ps1 -SourceRoot 'C:\AppleIIgsDev_02\a2fpga-m3-hdmi-lab' -Publish
 .EXAMPLE
-  .\Publish-M3-Release.ps1 -SourceRoot 'C:\AppleIIgsDev_02\a2fpga-m3-hdmi-lab' -A2MediaPo 'C:\AppleIIgsDev_02\a2media.system\disks\A2MEDIA-ProDOS243.po' -Publish
+  .\Publish-M3-Release.ps1 -SourceRoot 'C:\AppleIIgsDev_02\a2fpga-m3-hdmi-lab' -A2MediaPo 'C:\AppleIIgsDev_02\a2media.system\disks\A2MEDIA-M2-ProDOS243.po' -Publish
 #>
 [CmdletBinding()]
 param(
@@ -115,7 +115,7 @@ foreach ($marker in @('MOD JUKE=STARTFILE', 'M3 SD BURST FPGA=', 'HDMI CLIP=')) 
 }
 
 if (-not $A2MediaPo) {
-    $candidate = Join-Path (Split-Path -Parent $root) 'a2media.system\disks\A2MEDIA-ProDOS243.po'
+    $candidate = Join-Path (Split-Path -Parent $root) 'a2media.system\disks\A2MEDIA-M2-ProDOS243.po'
     if (Test-Path -LiteralPath $candidate -PathType Leaf) { $A2MediaPo=$candidate }
 }
 $includePo = -not [string]::IsNullOrWhiteSpace($A2MediaPo)
@@ -123,6 +123,11 @@ if ($includePo) {
     $null=Require-File $A2MediaPo 143360
     if ((Get-Item -LiteralPath $A2MediaPo).Length -ne 143360) {
         throw 'A2MEDIA ProDOS floppy .po must be a 143,360-byte 5.25-inch ProDOS image.'
+    }
+    # Fail closed if the historical P0 image was renamed to M2.
+    $m2Sha='abf6c0d552534912c8bc1742510467b47e748165376924c6d6cbeda9fe051c32'
+    if ((Get-Sha $A2MediaPo) -ne $m2Sha) {
+        throw "Wrong A2MEDIA image: M3 release needs M2 browser .po (SHA256 $m2Sha), never P0."
     }
 } else {
     Write-Warning 'No optional A2MEDIA .po file supplied/found. Package will contain FPGA+MCU only.'
@@ -143,7 +148,7 @@ $fpgaAsset=Add-Artifact $fpga $fpgaName 'Tang Nano 20K Enhanced FPGA configurati
 $mcuAsset=Add-Artifact $mcu $mcuName 'BL616 Stage2 executable: address 0x40000 ONLY'
 $poAsset=''
 if ($includePo) {
-    $poAsset=Add-Artifact $A2MediaPo 'A2MEDIA-ProDOS243.po' 'Optional ProDOS 2.4.3 boot floppy'
+    $poAsset=Add-Artifact $A2MediaPo 'A2MEDIA-M2-ProDOS243.po' 'M2 80-column FAT browser ProDOS 2.4.3 boot floppy'
 }
 
 $manifestOut=Join-Path $stage 'MANIFEST.json'
@@ -159,6 +164,8 @@ $manifestData=[ordered]@{
     bl616_stage2_flash_address='0x40000'
     bl616_stage2_build_manifest_sha256=(Get-Sha $buildManifest)
     bl616_stage2_built_utc=[string]$stage2Info.timestampUtc
+    a2media_source_branch='petar/m2-80col-fat-picker-20261122'
+    a2media_source_commit='375bb6ee96ad129c1a0faee1e98d9fc83788d882'
     fpga_built_last_write_utc=(Get-Item -LiteralPath $fpga).LastWriteTimeUtc.ToString('o')
     build_provenance='Exact on-disk .fs/.bin copies; SHA256 checksums. User hardware validation does not imply an automated FPGA flash readback.'
     files=$artifactRecords.ToArray()
@@ -182,7 +189,7 @@ MCU:
   Use the project's a2n20-mcu-program --stage2 tooling.
 
 ProDOS:
-  A2MEDIA-ProDOS243.po is optional, and is included only when the local
+  A2MEDIA-M2-ProDOS243.po (M2 FAT directory browser) is optional, and is included only when the local
   file is explicitly present or provided to the packaging command.
 
 After boot, HDMI defaults to native Apple II/IIgs video. TAB opens MCU
@@ -217,7 +224,7 @@ try {
             throw "ZIP integrity check: expected member not found: $requiredName"
         }
     }
-    if ($includePo -and $archiveNames -notcontains 'A2MEDIA-ProDOS243.po') {
+    if ($includePo -and $archiveNames -notcontains 'A2MEDIA-M2-ProDOS243.po') {
         throw 'ZIP integrity check: the selected .po was not included.'
     }
 } finally { $archive.Dispose() }
