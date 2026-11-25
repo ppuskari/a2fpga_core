@@ -1,0 +1,59 @@
+name: M3 MCU Dual Catalog Heap Efficiency
+on:
+  push:
+    branches:
+      - petar/m3-catalog-heap-compact-20261125
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  catalog-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Portable host jukebox 500 long names and allocation-fallback regressions
+        run: |
+          set -euo pipefail
+          ROOT=boards/a2n20v2-Enhanced
+          MCU="$ROOT/src/a2n20_bl616/firmware_host"
+          gcc -std=gnu11 -O2 -Wall -Wextra -Werror -I"$MCU"             "$ROOT/tests/test_mcu_jukebox_scan.c"             "$MCU/mcu_mod_jukebox.c" -Wl,--wrap=malloc             -o /tmp/m3_juke_compact
+          /tmp/m3_juke_compact
+      - name: A2MEDIA M2 mailbox 506 long names and compact-memory regressions
+        run: |
+          set -euo pipefail
+          ROOT=boards/a2n20v2-Enhanced
+          MCU="$ROOT/src/a2n20_bl616/firmware_host"
+          gcc -std=gnu11 -O2 -Wall -Wextra -Werror             -I"$ROOT/tests/p1d_mock" -I"$MCU" -I"$ROOT/src/a2n20_bl616/firmware"             "$ROOT/tests/test_media_mailbox_m2.c" -o /tmp/m3_m2_compact
+          /tmp/m3_m2_compact
+      - name: 80-column HDMI diagnostics and legacy 40-column menu
+        run: |
+          set -euo pipefail
+          ROOT=boards/a2n20v2-Enhanced
+          FIRM="$ROOT/src/a2n20_bl616/firmware"
+          MCU="$ROOT/src/a2n20_bl616/firmware_host"
+          MOCK="$ROOT/tests/j2r10_osd_mock"
+          gcc -std=gnu11 -O2 -Wall -Wextra -Werror -I"$FIRM" -I"$MOCK" -I"$MCU"             "$ROOT/tests/test_m3_osd80.c" "$FIRM/fpga_screen.c" "$MCU/osd_console.c"             -o /tmp/m3_osd80
+          /tmp/m3_osd80
+          gcc -std=gnu11 -O2 -Wall -Wextra -Werror -I"$MOCK" -I"$MCU"             "$ROOT/tests/test_j2r10_osd_batch.c" "$MCU/osd_console.c" -o /tmp/m3_osd_legacy
+          /tmp/m3_osd_legacy
+      - name: Verify no FPGA HDL changes and protected Stage2 flash helper
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          m=Path("boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware_host")
+          s=(m/"mcu_mod_jukebox.c").read_text()
+          a=(m/"media_mailbox.c").read_text()
+          h=Path("M3.ps1").read_text()
+          assert "char *s_dirs[JUKE_DIR_LIMIT]" in s
+          assert 'juke_track_store(r.name,head)' in s
+          assert "JUKE_TRACK_CHUNK_BYTES 1024u" in s
+          assert "JUKE_TRACK_CHUNK_LIMIT 256u" in s
+          assert "M2_CHUNK_BYTES 1024u" in a
+          assert "M2_CHUNK_LIMIT 136u" in a
+          assert "M2_CHUNK_MIN_BYTES 256u" in a
+          assert "petar/m3-catalog-heap-compact-20261125" in h
+          assert "'--stage2'" in h and "'0x40000'" in h
+          print("PASS M3 catalog contracts / guarded Stage2")
+          PY
