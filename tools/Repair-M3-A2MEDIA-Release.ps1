@@ -138,6 +138,13 @@ foreach($file in @(Get-ChildItem -LiteralPath $payload -File | Sort-Object Name)
     $hashLines+=('{0}  {1}' -f (Hash $file.FullName),$file.Name)
 }
 [IO.File]::WriteAllLines((Join-Path $payload 'SHA256SUMS.txt'),[string[]]$hashLines,[Text.Encoding]::ASCII)
+# ZIP stores filesystem timestamps. Fix these to stable release time so that
+# repeated repair runs generate identical bytes and SHA256, not time-varying
+# reuploads. No source or firmware bytes are changed by adjusting the COPIES.
+$stableUtc=[DateTime]::SpecifyKind(([DateTime]'2026-11-24T12:00:00'),[DateTimeKind]::Utc)
+foreach($entryFile in @(Get-ChildItem -LiteralPath $payload -File)){
+    $entryFile.LastWriteTimeUtc=$stableUtc
+}
 Compress-Archive -Path (Join-Path $payload '*') -DestinationPath $zip -CompressionLevel Optimal
 
 # Verify every archived member byte-for-byte against the staged file.
