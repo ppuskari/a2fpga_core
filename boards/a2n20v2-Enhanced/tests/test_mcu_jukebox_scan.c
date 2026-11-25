@@ -155,8 +155,9 @@ int main(void)
     check(mod_jukebox_count()==500u,"all 500 long names retained");
     char selected[MOD_JUKE_PATH_CAP];
     snprintf(selected,sizeof selected,"PROTRACKER/LONG/TRACK%03u",494u);
-    memset(selected+strlen(selected),'X',50u);
-    strcat(selected,".MOD");
+    const size_t prefix_len=strlen(selected);
+    memset(selected+prefix_len,'X',50u);
+    memcpy(selected+prefix_len+50u,".MOD",5u);
     check(mod_jukebox_find(selected)==494,
           "long selected entry at previous failure position 494 resolves");
     check(!strcmp(mod_jukebox_track(494),selected),
