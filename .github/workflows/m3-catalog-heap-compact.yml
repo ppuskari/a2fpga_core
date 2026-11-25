@@ -17,7 +17,7 @@ jobs:
           set -euo pipefail
           ROOT=boards/a2n20v2-Enhanced
           MCU="$ROOT/src/a2n20_bl616/firmware_host"
-          gcc -std=gnu11 -O2 -Wall -Wextra -Werror -I"$MCU"             "$ROOT/tests/test_mcu_jukebox_scan.c"             "$MCU/mcu_mod_jukebox.c" -Wl,--wrap=malloc             -o /tmp/m3_juke_compact
+          gcc -std=gnu11 -O2 -Wall -Wextra -Werror -I"$ROOT/tests/p1d_mock" -I"$MCU"             "$ROOT/tests/test_mcu_jukebox_scan.c"             "$MCU/mcu_mod_jukebox.c" -Wl,--wrap=malloc             -o /tmp/m3_juke_compact
           /tmp/m3_juke_compact
       - name: A2MEDIA M2 mailbox 506 long names and compact-memory regressions
         run: |
