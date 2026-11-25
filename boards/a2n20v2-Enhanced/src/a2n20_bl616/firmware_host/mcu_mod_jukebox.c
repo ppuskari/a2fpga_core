@@ -283,6 +283,9 @@ bool mod_jukebox_scan(const char *root,bool recursive)
     if(failed) {
         osd_log("MCU JUKE: SCAN FAILED ENTRIES=%u TRACKS=%u CHUNKS=%u",
                 entries,s_count,s_track_chunk_count);
+        osd_log("MCU JUKE: FAIL MEM=%uB NAMES=%uB DIRBYTES=%uB FALLBACK=%u",
+                s_track_alloc_bytes,s_name_bytes,s_dir_alloc_bytes,
+                s_chunk_fallbacks);
         mod_jukebox_clear();
         s_last_error=true;
         return false;
