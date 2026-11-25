@@ -15,7 +15,7 @@ static const ent_t sub[]={{"1.mod",0},{"Z",0x10},{NULL,0}};
 static const ent_t deep[]={{"last.mod",0},{NULL,0}};
 static const ent_t *cur;
 static size_t cursor;
-static bool stress_large, inject_read_error, empty_folder;
+static bool stress_large, stress_long, inject_read_error, empty_folder;
 static void check(bool cond,const char *msg) {
     if(!cond){fprintf(stderr,"FAIL JUKE: %s\n",msg);exit(1);}
 }
@@ -27,12 +27,16 @@ int xTaskResumeAll(void) {return 1;}
 
 /* Simulate real libc OOM without invoking the fatal FreeRTOS hook. */
 static bool reject_malloc;
+static size_t reject_larger_than;
 static unsigned alloc_calls;
+static unsigned maximum_requested;
 extern void *__real_malloc(size_t n);
 void *__wrap_malloc(size_t n)
 {
     ++alloc_calls;
-    return reject_malloc ? NULL : __real_malloc(n);
+    if(n>maximum_requested)maximum_requested=(unsigned)n;
+    return (reject_malloc || (reject_larger_than && n>reject_larger_than)) ?
+        NULL : __real_malloc(n);
 }
 
 int disk_fs_request(fs_req_t *r)
@@ -43,9 +47,12 @@ int disk_fs_request(fs_req_t *r)
         else if(!strcmp(r->path,"A"))cur=sub;
         else if(!strcmp(r->path,"A/Z"))cur=deep;
         else if(!strcmp(r->path,"PROTRACKER/2"))cur=root;
+        else if(!strcmp(r->path,"PROTRACKER/LONG"))cur=root;
         else if(!strcmp(r->path,"EMPTY"))cur=deep;
         else return -1;
-        stress_large=!strcmp(r->path,"PROTRACKER/2");
+        stress_large=!strcmp(r->path,"PROTRACKER/2") ||
+                     !strcmp(r->path,"PROTRACKER/LONG");
+        stress_long=!strcmp(r->path,"PROTRACKER/LONG");
         empty_folder=!strcmp(r->path,"EMPTY");
         cursor=0;
         return 0;
@@ -55,8 +62,17 @@ int disk_fs_request(fs_req_t *r)
         if(inject_read_error && cursor==12u)return 1; /* FR_DISK_ERR */
         if(stress_large) {
             if(cursor<500u) {
-                snprintf(r->name,sizeof r->name,"TRACK%03u.MOD",
-                         (unsigned)(499u-cursor));
+                if(stress_long) {
+                    /* 62-byte legal filename, including .MOD, case-insensitive
+                     * order by the fixed eight-character TRACKnnn prefix. */
+                    snprintf(r->name,sizeof r->name,"TRACK%03u",
+                             (unsigned)(499u-cursor));
+                    memset(r->name+8,'X',50u);
+                    memcpy(r->name+58,".MOD",5u);
+                } else {
+                    snprintf(r->name,sizeof r->name,"TRACK%03u.MOD",
+                             (unsigned)(499u-cursor));
+                }
                 r->attr=0;
             }
             cursor++;
@@ -123,11 +139,40 @@ int main(void)
           "500 MOD catalog globally sorted ascending");
     check(!strcmp(mod_jukebox_track(499),"PROTRACKER/2/TRACK499.MOD"),
           "last MOD is present and seekable");
-    check(alloc_calls-allocated_before<24u,
-          "500 files use compact chunks rather than 500 malloc calls");
+    check(alloc_calls-allocated_before<12u,
+          "500 filenames use ~7 small allocations, not 500 duplicated paths");
+    check(maximum_requested<=1024u,
+          "no 2-KiB-or-larger jukebox allocation");
     check(mod_jukebox_find("PROTRACKER/2/TRACK009.MOD")==9,
           "selected 10th MOD position resolves correctly");
+    /* Reproduce the original 500-track failure with much longer filenames.
+     * With 1-KiB allocations blocked by simulated fragmentation the scan
+     * must transparently recover using 512-byte chunks. Full selected
+     * file paths are reconstructed identically for ProDOS start-at-file. */
+    reject_larger_than=512u;
+    check(mod_jukebox_scan("PROTRACKER/LONG",false),
+          "500 long-name MODs fit 512-byte fallback blocks");
+    check(mod_jukebox_count()==500u,"all 500 long names retained");
+    char selected[MOD_JUKE_PATH_CAP];
+    snprintf(selected,sizeof selected,"PROTRACKER/LONG/TRACK%03u",494u);
+    memset(selected+strlen(selected),'X',50u);
+    strcat(selected,".MOD");
+    check(mod_jukebox_find(selected)==494,
+          "long selected entry at previous failure position 494 resolves");
+    check(!strcmp(mod_jukebox_track(494),selected),
+          "full path reconstructed exactly, preserving filename and extension");
+    check(mod_jukebox_track(499)!=NULL,
+          "last long filename remains playable");
     mod_jukebox_clear();
+    reject_larger_than=256u;
+    check(mod_jukebox_scan("PROTRACKER/LONG",false),
+          "500 long MOD names survive minimum 256-byte allocation ceiling");
+    check(mod_jukebox_count()==500u,
+          "512-track capacity unaffected by small malloc blocks");
+    check(mod_jukebox_find(selected)==494,
+          "exact long-name lookup preserved under 256-byte fallback");
+    mod_jukebox_clear();
+    reject_larger_than=0u;
     inject_read_error=true;
     check(!mod_jukebox_scan("PROTRACKER/2",false),
           "injected FatFS readdir error must not masquerade as no MODs");
@@ -137,6 +182,6 @@ int main(void)
     check(mod_jukebox_scan("PROTRACKER/2",false),
           "directory scan can restart after genuine FatFS error");
     mod_jukebox_clear();
-    puts("PASS J2R11: sorted FAT jukebox, exact start-file lookup and recoverable OOM");
+    puts("PASS M3: compact sorted FAT jukebox, interned dirs, 500 long names, 512/256-byte heap fallback, exact start-file and OOM");
     return 0;
 }
