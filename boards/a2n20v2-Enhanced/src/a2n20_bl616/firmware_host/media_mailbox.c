@@ -117,25 +117,25 @@ static const char *m2_path(void)
  * combined heap is exhausted, FreeRTOS' malloc hook disables interrupts
  * permanently, freezing USB HID too.
  *
- * Keep names packed into a few 2-KiB chunks allocated as needed. Unlike
- * a 32-KiB fixed BSS table, the typical 506-file directory consumes only
- * its real string bytes plus small chunk padding. Use the *same libc
- * malloc/free* behind FreeRTOS heap_3, protected by its scheduler lock, but
- * don't call the fatal pvPortMalloc hook when no space remains: complete
- * the scan with an FS result instead. This leaves the console's jukebox
- * allocator and the working HxCMOD audio implementation untouched.
- *
- * 20 chunks cover even 512 names of maximum legal length 63 bytes plus
- * per-chunk alignment waste. No name is allowed across chunk boundaries. */
-#define M2_CHUNK_BYTES 2048u
-#define M2_CHUNK_LIMIT 20u
+ * Keep names packed into 1-KiB chunks, saving slack space compared to the
+ * previous 2-KiB allocator. When heap fragmentation prevents a 1-KiB
+ * allocation, retry 512 and 256 bytes (every legal name fits).
+ * Use libc malloc/free behind FreeRTOS heap_3 with identical scheduler
+ * serialization, but NEVER invoke the fatal pvPortMalloc failure hook.
+ * Browser and jukebox retain separate ownership, so the Apple can browse
+ * while the MOD thread plays. 40 slots hold even 512 x 64-byte names with
+ * ordinary 1-KiB packing and some mixed-size fragmentation. */
+#define M2_CHUNK_BYTES 1024u
+#define M2_CHUNK_MIN_BYTES 256u
+#define M2_CHUNK_LIMIT 40u
 typedef struct {
     char *name;
     bool is_dir;
 } m2_browser_entry_t;
 static m2_browser_entry_t s_m2_catalog[M2_SORT_MAX];
 static char *s_m2_chunks[M2_CHUNK_LIMIT];
-static unsigned s_m2_chunk_count,s_m2_chunk_used;
+static unsigned s_m2_chunk_count,s_m2_chunk_used,s_m2_chunk_capacity;
+static unsigned s_m2_name_bytes,s_m2_alloc_bytes,s_m2_chunk_fallbacks;
 static unsigned s_m2_catalog_count,s_m2_catalog_next;
 
 /* heap_3 wraps exactly libc malloc/free under vTaskSuspendAll; direct use
@@ -161,6 +161,8 @@ static void m2_catalog_clear(void)
     }
     s_m2_chunk_count=0u;
     s_m2_chunk_used=0u;
+    s_m2_chunk_capacity=0u;
+    s_m2_name_bytes=s_m2_alloc_bytes=s_m2_chunk_fallbacks=0u;
     s_m2_catalog_count=0u;
     s_m2_catalog_next=0u;
     s_m2_directory_open=false;
@@ -271,6 +273,9 @@ static void m2_scan_finalize(void)
     osd_log("M2 FAT DIR: /%s visible=%u raw=%u skip=%u long=%u",
             s_m2_scan_path,s_m2_catalog_count,s_m2_scan_raw,
             s_m2_scan_filtered,s_m2_scan_long);
+    osd_log("M2 CAT: CHUNKS=%u ALLOC=%uB NAMES=%uB FALLBACK=%u",
+            s_m2_chunk_count,s_m2_alloc_bytes,
+            s_m2_name_bytes,s_m2_chunk_fallbacks);
 }
 
 static void m2_scan_consume_entry(void)
@@ -297,30 +302,42 @@ static void m2_scan_consume_entry(void)
         s_m2_scan_finishing=true;
         return;
     }
+    const unsigned needed=(unsigned)len+1u;
     if(s_m2_chunk_count==0u ||
-       s_m2_chunk_used+len+1u>M2_CHUNK_BYTES) {
+       s_m2_chunk_used+needed>s_m2_chunk_capacity) {
         if(s_m2_chunk_count>=M2_CHUNK_LIMIT) {
-            osd_log("M2 FAT DIR NAME CHUNK LIMIT: /%s entries=%u",
-                    s_m2_scan_path,s_m2_catalog_count);
+            osd_log("M2 CAT CHUNK LIMIT: entries=%u chunks=%u bytes=%u",
+                    s_m2_catalog_count,s_m2_chunk_count,s_m2_alloc_bytes);
             s_m2_scan_failed=true;
             s_m2_scan_finishing=true;
             return;
         }
-        char *chunk=(char *)m2_try_alloc(M2_CHUNK_BYTES);
+        unsigned cap=M2_CHUNK_BYTES;
+        char *chunk=NULL;
+        while(cap>=M2_CHUNK_MIN_BYTES && cap>=needed) {
+            chunk=(char *)m2_try_alloc(cap);
+            if(chunk)break;
+            cap>>=1;
+        }
         if(!chunk) {
-            osd_log("M2 FAT DIR LOW HEAP: /%s entries=%u",
-                    s_m2_scan_path,s_m2_catalog_count);
+            osd_log("M2 CAT LOW HEAP: entries=%u chunks=%u need=%u alloc=%uB",
+                    s_m2_catalog_count,s_m2_chunk_count,
+                    needed,s_m2_alloc_bytes);
             s_m2_scan_failed=true;
             s_m2_scan_finishing=true;
             return;
         }
+        if(cap!=M2_CHUNK_BYTES)s_m2_chunk_fallbacks++;
         s_m2_chunks[s_m2_chunk_count++]=chunk;
         s_m2_chunk_used=0u;
+        s_m2_chunk_capacity=cap;
+        s_m2_alloc_bytes+=cap;
     }
     m2_browser_entry_t *entry=&s_m2_catalog[s_m2_catalog_count++];
     entry->name=s_m2_chunks[s_m2_chunk_count-1u]+s_m2_chunk_used;
-    memcpy(entry->name,s_m2_fs_job.name,len+1u);
-    s_m2_chunk_used+=(unsigned)len+1u;
+    memcpy(entry->name,s_m2_fs_job.name,needed);
+    s_m2_chunk_used+=needed;
+    s_m2_name_bytes+=needed;
     entry->is_dir=(s_m2_fs_job.attr&AM_DIR_BIT)!=0u;
 }
 
