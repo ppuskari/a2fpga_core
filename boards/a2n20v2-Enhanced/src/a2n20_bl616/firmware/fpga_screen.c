@@ -11,6 +11,8 @@
  * Characters are stored as Apple II screen codes: ASCII + 128 for normal text.
  * Advanced MCU console uses the same 2 KiB page in 80-column layout,
  * with all 80 byte lanes populated (four screen codes per 32-bit word).
+ * The M3 TEXT80 pipeline reads each word on-screen as byte lanes 1,0,3,2,
+ * so wide writes pre-swap adjacent character bytes to display them in order.
  * v1 simplification: cursor wraps to top (no scroll).
  *
  * IMPORTANT: Characters must be written in batches (one contiguous XFER per
@@ -136,8 +138,18 @@ static void flush_line(int start_h, int start_v, const uint8_t *buf, int nbytes)
             end = SCREEN_MAX_W;
         uint8_t packed[SCREEN_MAX_W];
         const int count = end - first;
+        /* M3 apple_video_gen TEXT80 fetch/ROM pipeline outputs each 4-byte
+         * group as lanes 1,0,3,2 (LSB-first pixel shifter, 2-cycle ROM).
+         * Store adjacent logical characters in REVERSED physical lanes to
+         * compensate. Without this, 'DISK' appears as 'IDKS' on HDMI even
+         * though a naive SDRAM readback test passes.
+         *
+         * Keep the shadow and Telnet mirror in normal, logical left-to-right
+         * order. Only encode the packed 80-column SDRAM write differently.
+         * first is always 4-byte aligned so XOR 1 never escapes the word.
+         * Do NOT change the proven 40-column main/aux packing path. */
         for (int i = 0; i < count; ++i)
-            packed[i] = s_shadow[start_v][first + i];
+            packed[i] = s_shadow[start_v][first + (i ^ 1)];
         fpga_spi_xfer_write(FPGA_SPACE_SDRAM,
                             screen_addr(first, start_v),
                             packed, (uint16_t)count);
