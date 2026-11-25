@@ -197,6 +197,16 @@ function Get-Verified-Binary-Hash {
             Fail "Expected M3 diagnostic '$marker' absent from Stage2 binary."
         }
     }
+    # Detect a stale Stage2 binary when an incremental Bouffalo SDK build
+    # erroneously reuses committed M3 artifacts in this isolated worktree.
+    $currentBranch=(& git -C $root branch --show-current | Out-String).Trim()
+    if($currentBranch -eq $catalogCompactBranch) {
+        foreach($marker in @('M2 CAT: CHUNKS=', 'MCU JUKE: DIRS=%u DIRBYTES=%uB FALLBACK=%u')) {
+            if(-not $txt.Contains($marker)) {
+                Fail "Stale Stage2: compact dual-catalog firmware marker '$marker' absent. A clean MCU rebuild is required."
+            }
+        }
+    }
     return (Get-FileHash -LiteralPath $firmware -Algorithm SHA256).Hash
 }
 
