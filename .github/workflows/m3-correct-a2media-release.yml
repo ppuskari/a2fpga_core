@@ -40,9 +40,13 @@ jobs:
           $oldZipHash=(Get-FileHash -LiteralPath $originalZip -Algorithm SHA256).Hash
           if($oldZipHash -ne 'F5C3D4D142BD79475698D6A26830653116D87B0E74735278A3E4622B7A338E34') {throw "Original release ZIP checksum mismatch: $oldZipHash"}
           Expand-Archive -LiteralPath $originalZip -DestinationPath $payload
+          # Reproduce hardware-generated readonly Gowin .fs build artifacts.
+          $fpgaSource=Get-Item -LiteralPath (Join-Path $payload 'a2fpga-enhanced-m3-fpga.fs')
+          $fpgaSource.IsReadOnly=$true
           $po=Join-Path $root 'A2MEDIA-M2-ProDOS243.po'
           Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/ppuskari/a2media.system/petar/m2-80col-fat-picker-20261122/disks/A2MEDIA-M2-ProDOS243.po' -OutFile $po
           & .\tools\Repair-M3-A2MEDIA-Release.ps1 -SourceRoot $root -A2MediaPo $po
+          if(-not $fpgaSource.IsReadOnly){throw 'The lab original readonly FPGA file was modified!'}
           $newPayload=Join-Path $out 'M2-corrected\payload'
           $manifest=Get-Content (Join-Path $newPayload 'MANIFEST.json') -Raw | ConvertFrom-Json
           if($manifest.files.Count -ne 3){throw 'Expected FPGA, MCU and M2 PO'}
