@@ -38,6 +38,7 @@
 /* FPGA video takeover registers (same as osd_console) */
 #define REG_VIDEO_ENABLE  0x10u
 #define REG_TEXT_MODE     0x11u
+#define REG_COL80         0x17u
 /* Slot config registers */
 #define REG_SLOT_BASE     0x60u
 #define REG_SLOT_RECONFIG 0x6Bu
@@ -1604,8 +1605,12 @@ static void enter_view(view_t v)
         break;
     case VIEW_MENU:
         s_mcu_view = VIEW_MENU;
-        /* buffer logs while the menu owns the screen */
+        /* Advanced console is 80-column, but the existing configuration
+         * menus remain Apple II-style 40-column. Change both the software
+         * row writer and FPGA mode BEFORE repainting any menu content. */
         osd_console_set_lockout(true);
+        fpga_screen_set_columns(FPGA_SCREEN_W);
+        fpga_spi_reg_write(REG_COL80, 0);
         screen_refresh();
         paint();
         break;
