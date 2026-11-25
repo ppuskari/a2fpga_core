@@ -4,6 +4,7 @@
  *
  * Key invariant: 40 columns = 40 screen codes at even byte addresses with
  * 0xA0 padding; 80 columns = all 80 byte lanes containing screen codes.
+ * M3 FPGA TEXT80 displays byte lanes 1,0,3,2 per word. Compensate in the MCU.
  * The 80-col path must always issue aligned complete 32-bit SPI writes.
  */
 #include <stdbool.h>
@@ -34,6 +35,16 @@ static uint32_t addr_of(unsigned x,unsigned y,unsigned width)
     return (0x50u * (y >> 3)) + ((y & 7u) << 8) +
            (width==40u ? 2u*x : x);
 }
+/* Real M3 FPGA TEXT80 pixel stream consumes SDRAM byte lanes in order
+ * 1,0,3,2 per four bytes, not 0,1,2,3. A naively correct SDRAM mock
+ * missed the garbled on-hardware message ("DISK" -> "IDKS"). */
+static uint8_t displayed_80(unsigned x,unsigned y)
+{
+    CHECK(x<80u && y<24u);
+    const unsigned physical=(x & ~3u) + ((x & 3u) ^ 1u);
+    return s_osd[addr_of(physical,y,80u)];
+}
+
 static unsigned osd_offset(uint32_t addr,unsigned count)
 {
     CHECK(addr>=OSD_BASE && addr+count<=OSD_BASE+OSD_BYTES);
@@ -98,23 +109,28 @@ int main(void)
     msg[79]=0;
     fpga_screen_puts(msg);
     for(unsigned i=0;i<79u;i++)
-        CHECK(s_osd[addr_of(i,0u,80u)]==(uint8_t)(msg[i]+128u));
-    CHECK(s_osd[addr_of(79u,0u,80u)]==0xA0u);
+        CHECK(displayed_80(i,0u)==(uint8_t)(msg[i]+128u));
+    CHECK(displayed_80(79u,0u)==0xA0u);
+    /* Prove bytes in physical SDRAM are adjacent-pair pre-swapped. */
+    CHECK(s_osd[addr_of(0u,0u,80u)]==(uint8_t)(msg[1]+128u));
+    CHECK(s_osd[addr_of(1u,0u,80u)]==(uint8_t)(msg[0]+128u));
+    CHECK(s_osd[addr_of(2u,0u,80u)]==(uint8_t)(msg[3]+128u));
+    CHECK(s_osd[addr_of(3u,0u,80u)]==(uint8_t)(msg[2]+128u));
     CHECK(fpga_screen_shadow_row(0)[78]==(uint8_t)(msg[78]+128u));
     /* Single-character write must merge its neighbors into a full word. */
-    uint8_t originalLeft=s_osd[addr_of(72u,0u,80u)];
+    uint8_t originalLeft=displayed_80(72u,0u);
     fpga_screen_goto(74,0);
     fpga_screen_putchar('!');
-    CHECK(s_osd[addr_of(74u,0u,80u)]==(uint8_t)('!'+128u));
-    CHECK(s_osd[addr_of(72u,0u,80u)]==originalLeft);
-    CHECK(s_osd[addr_of(75u,0u,80u)]==(uint8_t)(msg[75]+128u));
+    CHECK(displayed_80(74u,0u)==(uint8_t)('!'+128u));
+    CHECK(displayed_80(72u,0u)==originalLeft);
+    CHECK(displayed_80(75u,0u)==(uint8_t)(msg[75]+128u));
     /* Partial string must also leave its neighboring bytes intact. */
     fpga_screen_goto(3,0);
     fpga_screen_puts("HIJ");
-    CHECK(s_osd[addr_of(2u,0u,80u)]==(uint8_t)(msg[2]+128u));
-    CHECK(s_osd[addr_of(3u,0u,80u)]==(uint8_t)('H'+128u));
-    CHECK(s_osd[addr_of(5u,0u,80u)]==(uint8_t)('J'+128u));
-    CHECK(s_osd[addr_of(6u,0u,80u)]==(uint8_t)(msg[6]+128u));
+    CHECK(displayed_80(2u,0u)==(uint8_t)(msg[2]+128u));
+    CHECK(displayed_80(3u,0u)==(uint8_t)('H'+128u));
+    CHECK(displayed_80(5u,0u)==(uint8_t)('J'+128u));
+    CHECK(displayed_80(6u,0u)==(uint8_t)(msg[6]+128u));
 
     /* Existing menu layout remains exactly 40 columns after a wide view. */
     fpga_screen_set_columns(FPGA_SCREEN_W);
@@ -136,7 +152,7 @@ int main(void)
     CHECK(strstr(snapshot[0],"(CHUNKS=12)")!=NULL);
     const char *expected=snapshot[0];
     for(unsigned i=0;expected[i];i++)
-        CHECK(s_osd[addr_of(i,0u,80u)]==(uint8_t)(expected[i]+128u));
+        CHECK(displayed_80(i,0u)==(uint8_t)(expected[i]+128u));
 
     /* 79-character screen budget retains the end of long diagnostics
      * within the Apple II 80th-column auto-wrap boundary. */
@@ -166,7 +182,7 @@ int main(void)
     CHECK(s_regs[0x10]==0u); /* native Apple video returned */
     CHECK(s_mutex_take==s_mutex_give);
     CHECK(s_tee==3u);
-    puts("PASS M3 OSD80: 40/80 SDRAM layout, aligned complete-word writes, "
+    puts("PASS M3 OSD80: real TEXT80 pair-swapped display, 40/80 SDRAM layout, aligned complete-word writes, "
          "full diagnostic snapshots, throttled repaint, view lockout");
     return 0;
 }
