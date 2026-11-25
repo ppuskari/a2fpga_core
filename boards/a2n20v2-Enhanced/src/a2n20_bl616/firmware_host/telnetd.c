@@ -6,7 +6,7 @@
  *   'c'  CONSOLE (default): dumps the osd_console backlog, then streams
  *        every new osd_log() line live (the tee is a lock-protected line
  *        ring so logging threads never block on the network).
- *   'm'  MENU: mirrors the FPGA's 40x24 text page (menu, install pages,
+ *   'm'  MENU: mirrors the FPGA's 40/80x24 text page (menu, console, install pages,
  *        whatever is painted) as ANSI, ~10 Hz on change, and maps keys to
  *        gamepad buttons so the whole menu is drivable remotely:
  *          arrows = D-pad   Enter/a = A (OK)      b/Backspace = B (back)
@@ -37,8 +37,11 @@
 #include "mcu_mod_audio.h" /* j/J, n/N, 1/0 jukebox controls */
 
 #define TELNET_PORT     23
-#define TEE_LINES       32
-#define TEE_COLS        40
+/* Keep the Telnet tee SRAM footprint close to the former 32 x 40 ring.
+ * Widen to 79 columns without allocating an extra 1.3 KiB at boot.
+ * The primary 23-line OSD backlog remains independently available. */
+#define TEE_LINES       16
+#define TEE_COLS        OSD_CONSOLE_COLS
 
 /* ---- console tee ring (written by osd_log from any thread) -------------- */
 static char     s_tee[TEE_LINES][TEE_COLS + 1];
@@ -280,14 +283,15 @@ static void scope_dump_batch(int fd)
     }
 }
 
-/* Render one 40-char row of Apple II screen codes as ANSI. Inverse video
+/* Render one runtime 40- or 80-char row of Apple II screen codes as ANSI. Inverse video
  * is codes $00-$3F ($00-$1F = '@'+c, $20-$3F = c); normal is ASCII+0x80. */
 static void render_row(int fd, const uint8_t *row)
 {
-    char out[40 * 4 + 16];
+    char out[FPGA_SCREEN_WIDE_W * 6 + 20];
     int n = 0;
     bool inv = false;
-    for (int x = 0; x < 40; x++) {
+    const unsigned columns = fpga_screen_columns();
+    for (unsigned x = 0; x < columns; x++) {
         uint8_t c = row[x];
         bool want_inv = c < 0x40;
         char ch;
@@ -368,8 +372,8 @@ static void session(int fd)
 
     /* start in console mode: replay the on-screen backlog */
     {
-        char snap[23][41];
-        int n = osd_console_snapshot(snap, 23);
+        char snap[OSD_CONSOLE_ROWS][OSD_CONSOLE_LINE_CAP];
+        int n = osd_console_snapshot(snap, OSD_CONSOLE_ROWS);
         for (int i = 0; i < n; i++) {
             tn_puts(fd, snap[i]);
             tn_puts(fd, "\r\n");
