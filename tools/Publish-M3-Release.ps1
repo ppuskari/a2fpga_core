@@ -274,7 +274,7 @@ if (-not $Publish) {
     return
 }
 
-$gh=Get-Command gh -CommandType Application -ErrorAction SilentlyContinue
+$gh=Get-Command gh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $gh) {
     throw 'ZIP is ready but gh.exe (GitHub CLI) is not on PATH. Install/authenticate it to publish. Package was not lost.'
 }
