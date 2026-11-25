@@ -1,0 +1,89 @@
+name: M3 M2 ProDOS Release Repair PS5.1
+on:
+  push:
+    branches:
+      - petar/m3-release-packaging-20261124
+    paths:
+      - 'tools/Repair-M3-A2MEDIA-Release.ps1'
+      - '.github/workflows/m3-correct-a2media-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-repair-winps51:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse repair script with native Windows PowerShell 5.1
+        run: |
+          $tokens=$null
+          $errors=$null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'tools/Repair-M3-A2MEDIA-Release.ps1').Path,[ref]$tokens,[ref]$errors) | Out-Null
+          if($errors.Count) { $errors | Format-List | Out-String | Write-Host; throw 'PS5.1 parser failed' }
+          Write-Host "PASS: syntax, $($tokens.Count) tokens"
+      - name: Download actual released ZIP and official M2 PO; test correction offline
+        run: |
+          $ErrorActionPreference='Stop'
+          $root=Join-Path $env:RUNNER_TEMP 'm3-repair-test'
+          $out=Join-Path $root 'release-out\m3-2026.11.24'
+          $payload=Join-Path $out 'payload'
+          New-Item -Path $payload -ItemType Directory -Force | Out-Null
+          $zipName='a2fpga-enhanced-m3-2026.11.24-complete.zip'
+          $originalZip=Join-Path $out $zipName
+          Invoke-WebRequest -UseBasicParsing -Uri ('https://github.com/ppuskari/a2fpga_core/releases/download/m3-2026.11.24/'+$zipName) -OutFile $originalZip
+          $oldZipHash=(Get-FileHash -LiteralPath $originalZip -Algorithm SHA256).Hash
+          if($oldZipHash -ne 'F5C3D4D142BD79475698D6A26830653116D87B0E74735278A3E4622B7A338E34') {throw "Original release ZIP checksum mismatch: $oldZipHash"}
+          Expand-Archive -LiteralPath $originalZip -DestinationPath $payload
+          $po=Join-Path $root 'A2MEDIA-M2-ProDOS243.po'
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/ppuskari/a2media.system/petar/m2-80col-fat-picker-20261122/disks/A2MEDIA-M2-ProDOS243.po' -OutFile $po
+          & .\tools\Repair-M3-A2MEDIA-Release.ps1 -SourceRoot $root -A2MediaPo $po
+          $newPayload=Join-Path $out 'M2-corrected\payload'
+          $manifest=Get-Content (Join-Path $newPayload 'MANIFEST.json') -Raw | ConvertFrom-Json
+          if($manifest.files.Count -ne 3){throw 'Expected FPGA, MCU and M2 PO'}
+          $newZip=Join-Path $out ('M2-corrected\'+$zipName)
+          $newHash=(Get-FileHash $newZip -Algorithm SHA256).Hash
+          if($newHash -eq $oldZipHash){throw 'New ZIP did not change'}
+          if(-not (Test-Path (Join-Path $newPayload 'A2MEDIA-M2-ProDOS243.po'))){throw 'Corrected PO missing'}
+          if(Test-Path (Join-Path $newPayload 'A2MEDIA-ProDOS243.po')){throw 'Old P0 PO remains'}
+          Write-Host "PASS: actual release ZIP corrected, new SHA256 $newHash"
+      - name: Simulate full publication with mock gh (no network writes)
+        run: |
+          $ErrorActionPreference='Stop'
+          $root=Join-Path $env:RUNNER_TEMP 'm3-repair-test'
+          $out=Join-Path $root 'release-out\m3-2026.11.24\M2-corrected'
+          $zipName='a2fpga-enhanced-m3-2026.11.24-complete.zip'
+          $zipHash=(Get-FileHash (Join-Path $out $zipName) -Algorithm SHA256).Hash.ToLowerInvariant()
+          $mockDir=Join-Path $env:RUNNER_TEMP 'm3-repair-gh-mock'
+          New-Item -Path $mockDir -ItemType Directory -Force | Out-Null
+          $env:M3_MOCK_RELEASE_JSON=Join-Path $mockDir 'release.json'
+          $env:M3_MOCK_GH_LOG=Join-Path $mockDir 'commands.log'
+          $files=@(
+            @{name='a2fpga-enhanced-m3-fpga.fs';digest='sha256:dd34baaacbd80a4dabb2e5a94196ca59c4792f0392787aff9ba89a08ad62b6df'},
+            @{name='a2fpga-enhanced-m3-bl616-stage2.bin';digest='sha256:06819f74f90b95774a39256faaa518bab34239a31a78730089116763c020f741'},
+            @{name='A2MEDIA-M2-ProDOS243.po';digest='sha256:abf6c0d552534912c8bc1742510467b47e748165376924c6d6cbeda9fe051c32'},
+            @{name=$zipName;digest=('sha256:'+$zipHash)}
+          )
+          @{tag_name='m3-2026.11.24';assets=$files} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $env:M3_MOCK_RELEASE_JSON -Encoding ASCII
+          $mockGh=Join-Path $mockDir 'gh.cmd'
+          @('@echo off','if "%1"=="api" (','type "%M3_MOCK_RELEASE_JSON%"','exit /b 0',')',
+            'echo %* >> "%M3_MOCK_GH_LOG%"','exit /b 0') | Set-Content -LiteralPath $mockGh -Encoding ASCII
+          $env:PATH="$mockDir;$env:PATH"
+          $which=Get-Command gh -CommandType Application | Select-Object -First 1
+          if($which.Source -ne $mockGh){throw "Mock gh.cmd not selected: $($which.Source)"}
+          & .\tools\Repair-M3-A2MEDIA-Release.ps1 -SourceRoot $root -A2MediaPo (Join-Path $root 'A2MEDIA-M2-ProDOS243.po') -Publish
+          $commands=Get-Content -LiteralPath $env:M3_MOCK_GH_LOG -Raw
+          foreach($needed in @('release view m3-2026.11.24',
+                               'release upload m3-2026.11.24',
+                               '--clobber',
+                               'A2MEDIA-M2-ProDOS243.po',
+                               'release edit m3-2026.11.24',
+                               'release delete-asset m3-2026.11.24 A2MEDIA-ProDOS243.po')) {
+            if(-not $commands.Contains($needed)){throw "Missing GitHub publish action: $needed"}
+          }
+          Write-Host 'PASS: all publication actions and post-publication SHA256 verification mocked'
