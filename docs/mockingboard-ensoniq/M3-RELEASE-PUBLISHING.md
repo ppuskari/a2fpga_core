@@ -13,7 +13,7 @@ lab branch, without having to first merge the diverged A2Mega changes on
 a2fpga-enhanced-m3-2026.11.24-complete.zip
     a2fpga-enhanced-m3-fpga.fs
     a2fpga-enhanced-m3-bl616-stage2.bin
-    A2MEDIA-ProDOS243.po      (optional, only if verified/local file supplied)
+    A2MEDIA-M2-ProDOS243.po      (optional, only if verified/local file supplied)
     MANIFEST.json
     SHA256SUMS.txt
     README.txt
@@ -59,13 +59,13 @@ $b64=gh api 'repos/ppuskari/a2fpga_core/contents/tools/Publish-M3-Release.ps1?re
 [IO.File]::WriteAllBytes($script,[Convert]::FromBase64String(($b64 -join '')))
 ```
 
-If the A2MEDIA image is not already in a sibling clone:
+Fetch the latest M2 FAT browser ProDOS image; do NOT use a2media.system/main, which still contains P0:
 
 ```powershell
-gh repo clone ppuskari/a2media.system 'C:\AppleIIgsDev_02\a2media.system'
+Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/ppuskari/a2media.system/petar/m2-80col-fat-picker-20261122/disks/A2MEDIA-M2-ProDOS243.po' -OutFile "$env:TEMP\A2MEDIA-M2-ProDOS243.po"
 ```
 
-The image is `disks/A2MEDIA-ProDOS243.po`. This package deliberately
+The image is `disks/A2MEDIA-M2-ProDOS243.po`. This package deliberately
 includes **only `.po`**, never the alternate `.dsk`.
 
 To package and **publish** in one guarded step:
@@ -77,7 +77,7 @@ To package and **publish** in one guarded step:
 Or explicitly specify the optional image:
 
 ```powershell
-& $script -SourceRoot $repoRoot -A2MediaPo 'C:\AppleIIgsDev_02\a2media.system\disks\A2MEDIA-ProDOS243.po' -Publish
+& $script -SourceRoot $repoRoot -A2MediaPo "$env:TEMP\A2MEDIA-M2-ProDOS243.po" -Publish
 ```
 
 For an offline local ZIP only, omit `-Publish`. The script fails
@@ -104,3 +104,19 @@ gh release download m3-2026.11.24 -R ppuskari/a2fpga_core -p '*.zip' -D .\M3-rel
 Check the published ZIP and each included file against
 `SHA256SUMS.txt` and `MANIFEST.json`. Keep the local tested binaries
 and original MCU manifest as an immutable backup.
+
+## Correcting the original M3 beta release P0 floppy
+
+The first M3 prerelease accidentally included the P0 remote-only disk instead
+of the M2 80-column FAT directory browser. The verified M2 floppy is from
+ppuskari/a2media.system branch petar/m2-80col-fat-picker-20261122.
+
+To correct the existing release without changing the original FPGA/MCU
+binaries, use the tested PowerShell 5.1 utility:
+
+https://github.com/ppuskari/a2fpga_core/blob/petar/m3-release-packaging-20261124/tools/Repair-M3-A2MEDIA-Release.ps1
+
+It compares M2 ProDOS, FPGA and Stage2 hashes against expected release
+assets before upload; regenerates the ZIP, checksum and manifest; updates
+release notes; then removes the P0 standalone asset. The ordinary M3
+release publisher is also SHA256-gated against a P0 relabeling.
