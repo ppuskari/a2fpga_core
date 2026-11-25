@@ -1,0 +1,69 @@
+name: M3 80-column Advanced MCU Console
+on:
+  push:
+    branches:
+      - petar/m3-advanced-console-80col-20261124
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  advanced-osd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and execute byte-accurate MCU OSD 40/80 layout regression
+        run: |
+          set -euo pipefail
+          ROOT=boards/a2n20v2-Enhanced
+          FIRM="$ROOT/src/a2n20_bl616/firmware"
+          MCU="$ROOT/src/a2n20_bl616/firmware_host"
+          MOCK="$ROOT/tests/j2r10_osd_mock"
+          gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+            -I"$FIRM" -I"$MOCK" -I"$MCU" \
+            "$ROOT/tests/test_m3_osd80.c" \
+            "$FIRM/fpga_screen.c" "$MCU/osd_console.c" \
+            -o /tmp/m3_osd80
+          /tmp/m3_osd80
+      - name: Preserve legacy J2R10 OSD batching and lockout behavior
+        run: |
+          set -euo pipefail
+          ROOT=boards/a2n20v2-Enhanced
+          MCU="$ROOT/src/a2n20_bl616/firmware_host"
+          MOCK="$ROOT/tests/j2r10_osd_mock"
+          gcc -std=gnu11 -O2 -Wall -Wextra -Werror \
+            -I"$MOCK" -I"$MCU" \
+            "$ROOT/tests/test_j2r10_osd_batch.c" \
+            "$MCU/osd_console.c" \
+            -o /tmp/m3_osd_legacy
+          /tmp/m3_osd_legacy
+      - name: Guard 40-column menu and live-Apple handoff, 80-column-only console
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path("boards/a2n20v2-Enhanced")
+          host=root/"src/a2n20_bl616/firmware_host"
+          fw=root/"src/a2n20_bl616/firmware"
+          menu=(host/"menu.c").read_text()
+          osd=(host/"osd_console.c").read_text()
+          screen=(fw/"fpga_screen.c").read_text()
+          telnet=(host/"telnetd.c").read_text()
+          h=(host/"osd_console.h").read_text()
+          assert "fpga_screen_set_columns(FPGA_SCREEN_W);" in menu
+          assert "fpga_spi_reg_write(REG_COL80, 0);" in menu
+          assert "fpga_screen_set_columns(FPGA_SCREEN_WIDE_W);" in osd
+          assert "fpga_spi_reg_write(REG_COL80, 1);" in osd
+          assert "fpga_spi_reg_write(REG_VIDEO_ENABLE, 0);" in osd
+          assert "if (s_visible && !s_lockout && s_dirty" in osd
+          assert "if($entryFile.IsReadOnly)" not in osd
+          assert "#define OSD_CONSOLE_COLS 79" in h
+          assert "char snap[OSD_CONSOLE_ROWS][OSD_CONSOLE_LINE_CAP]" in telnet
+          assert "const unsigned columns = fpga_screen_columns()" in telnet
+          assert "s_columns == SCREEN_W" in screen
+          assert "screen_addr(first, start_v)" in screen
+          print("PASS: 80-col console, 40-col menu, native Apple video and Telnet mirroring guarded")
+          PY
