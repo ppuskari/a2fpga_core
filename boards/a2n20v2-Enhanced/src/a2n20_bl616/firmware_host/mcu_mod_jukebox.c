@@ -20,10 +20,12 @@
 #include <string.h>
 
 #define JUKE_DIR_LIMIT 96u
-/* 512 names can be as long as 127 bytes including NUL: 64 x 1 KiB.
- * 72 slots permit fragmentation and small-chunk fallbacks. */
+/* With the smallest 256-byte fallback and maximum 128-byte basename,
+ * each chunk still holds >=2 tracks. 256 slots cover all 512 entries;
+ * chunk_id stays uint8_t (0..255). Normal scans use ~7 chunks for 500
+ * 12-character filenames, not 256. */
 #define JUKE_TRACK_CHUNK_BYTES 1024u
-#define JUKE_TRACK_CHUNK_LIMIT 72u
+#define JUKE_TRACK_CHUNK_LIMIT 256u
 #define JUKE_TRACK_MIN_CHUNK 256u
 
 typedef struct {
