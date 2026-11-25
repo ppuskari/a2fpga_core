@@ -43,6 +43,8 @@ $experimentalBranch='petar/m3-mb-timing-prodos-suite-20261123'
 # Post-release console-only experiment, intentionally isolated from the
 # published M3 beta binaries and their SHA256 manifest.
 $advancedConsoleBranch='petar/m3-advanced-console-80col-20261124'
+# MCU-only post-release dual-catalog heap-efficiency build; isolated worktree.
+$catalogCompactBranch='petar/m3-catalog-heap-compact-20261125'
 $root=$PSScriptRoot
 $board=Join-Path $root 'boards\a2n20v2-Enhanced\src\a2n20_bl616'
 $hostDir=Join-Path $board 'firmware_host'
@@ -101,7 +103,8 @@ function Assert-M3-Checkout {
     $current=(& git -C $root branch --show-current | Out-String).Trim()
     if($LASTEXITCODE -ne 0 -or
        ($current -ne $requiredBranch -and $current -ne $experimentalBranch -and
-        $current -ne $advancedConsoleBranch)) {
+        $current -ne $advancedConsoleBranch -and
+        $current -ne $catalogCompactBranch)) {
         Fail "Wrong repository branch '$current'. Only approved M3 branches may build."
     }
 }
