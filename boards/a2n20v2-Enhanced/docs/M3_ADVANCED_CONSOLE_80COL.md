@@ -19,9 +19,14 @@ chunk count before either HDMI or Telnet could show it.
 - The MCU fpga_screen.c supports 80 screen codes per row in the same 2 KiB
   physical Apple text-page allocation: row offset is
   0x50*(y>>3) + 0x100*(y&7). At 40 columns each screen code occupies an
-  even byte with A0 padding; in 80 columns both even and odd bytes contain
-  glyph codes. Its partial-write path reconstructs aligned 32-bit words
-  from the SRAM shadow to avoid dropped SDRAM word accumulator writes.
+  even byte with A0 padding. At 80 columns both even and odd bytes contain
+  glyph codes, but crucially the existing M3 FPGA TEXT80 ROM/LSB-first shift
+  pipeline displays each group of four physical bytes in order 1,0,3,2.
+  The MCU must therefore reverse each adjacent pair when writing the 80-col
+  page. The initial straight-through implementation was garbled on actual
+  HDMI hardware (e.g. DISK rendered as IDKS); the corrected renderer keeps
+  the SRAM shadow in logical order but physically writes 1,0,3,2.
+  Partial writes still reconstruct aligned 32-bit words from the shadow.
 - The diagnostic console keeps a 23-line backlog with 79 printable
   characters per line. One spare column avoids unwanted auto-wrap.
   It repaints at most once per second from the menu/HID task only.
@@ -42,8 +47,9 @@ No extra heap allocations or FreeRTOS tasks are introduced.
 
 On each branch push, workflow m3-advanced-console-80col.yml verifies:
 1. Real MCU C against an in-memory 2KiB OSD SDRAM model: 40-column
-   even-byte packing, 80-column packed layout, aligned complete-word
-   SPI writes, partial character writes, and full log records.
+   even-byte packing, 80-column pair-swapped physical layout (1,0,3,2),
+   a model of the actual FPGA TEXT80 display byte order, aligned complete-
+   word SPI writes, partial character writes, and full log records.
 2. Legacy J2R10 batching, lockout, throttled repaint and Apple handoff.
 3. Menu/console COL80 control and runtime Telnet mirror width.
 
