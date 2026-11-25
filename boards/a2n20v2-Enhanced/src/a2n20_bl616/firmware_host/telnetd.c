@@ -37,10 +37,10 @@
 #include "mcu_mod_audio.h" /* j/J, n/N, 1/0 jukebox controls */
 
 #define TELNET_PORT     23
-/* Keep the Telnet tee SRAM footprint close to the former 32 x 40 ring.
- * Widen to 79 columns without allocating an extra 1.3 KiB at boot.
- * The primary 23-line OSD backlog remains independently available. */
-#define TEE_LINES       16
+/* Lightweight remote LIVE mirror; Telnet scrollback is deliberately not a
+ * priority. Eight full-width lines avoid extra MCU heap/SRAM pressure.
+ * The primary 23-line HDMI OSD backlog remains independent. */
+#define TEE_LINES       8
 #define TEE_COLS        OSD_CONSOLE_COLS
 
 /* ---- console tee ring (written by osd_log from any thread) -------------- */
