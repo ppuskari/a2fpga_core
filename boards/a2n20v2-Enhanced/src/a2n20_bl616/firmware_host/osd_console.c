@@ -18,9 +18,10 @@
 
 #define REG_VIDEO_ENABLE  0x10u
 #define REG_TEXT_MODE     0x11u
+#define REG_COL80         0x17u
 
-#define CON_ROWS 23           /* fits the 24-row text page with headroom */
-#define CON_COLS 39           /* 40-col screen, leave 1 to avoid auto-wrap */
+#define CON_ROWS OSD_CONSOLE_ROWS
+#define CON_COLS OSD_CONSOLE_COLS /* one blank rightmost column avoids wrap */
 
 static char  s_lines[CON_ROWS][CON_COLS + 1];
 static int   s_count;
@@ -96,11 +97,13 @@ void osd_console_show(void)
         return;
     }
     s_visible = true;
+    fpga_screen_set_columns(FPGA_SCREEN_WIDE_W);
     s_last_visible_activity_us = (uint32_t)bflb_mtimer_get_time_us();
     s_last_repaint_us = s_last_visible_activity_us;
     repaint();   /* Explicit user show: render latest buffered snapshot now. */
     s_dirty = false;
     fpga_spi_reg_write(REG_TEXT_MODE, 1);
+    fpga_spi_reg_write(REG_COL80, 1);
     fpga_spi_reg_write(REG_VIDEO_ENABLE, 1);
     usb_osal_mutex_give(s_lock);
 }
@@ -171,12 +174,12 @@ void osd_console_hide_if_idle(uint32_t timeout_us)
     usb_osal_mutex_give(s_lock);
 }
 
-int osd_console_snapshot(char dst[][41], int max)
+int osd_console_snapshot(char dst[][OSD_CONSOLE_LINE_CAP], int max)
 {
     ensure_lock();
     usb_osal_mutex_take(s_lock);
     int n = s_count < max ? s_count : max;
-    /* Both arrays are statically bounded to 40 printable bytes plus NUL.
+    /* Both arrays are statically bounded to 79 printable bytes plus NUL.
      * Avoid snprintf's expensive formatting and false host-GCC size
      * warnings in a path used by the remote console. */
     for (int i = 0; i < n; i++)
