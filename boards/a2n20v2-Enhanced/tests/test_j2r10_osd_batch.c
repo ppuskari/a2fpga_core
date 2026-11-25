@@ -19,8 +19,9 @@
 
 static uint64_t s_now;
 static unsigned s_clear,s_puts,s_reg,s_tee,s_take,s_give;
-static uint8_t s_video;
-static char s_last_line[41];
+static uint8_t s_video,s_col80;
+static unsigned s_columns;
+static char s_last_line[OSD_CONSOLE_LINE_CAP];
 
 usb_osal_mutex_t usb_osal_mutex_create(void) { return (void*)1; }
 void usb_osal_mutex_take(usb_osal_mutex_t m) { CHECK(m==(void*)1); ++s_take; }
@@ -28,10 +29,12 @@ void usb_osal_mutex_give(usb_osal_mutex_t m) { CHECK(m==(void*)1); ++s_give; }
 uint64_t bflb_mtimer_get_time_us(void) { return s_now; }
 void fpga_spi_reg_write(uint8_t reg,uint8_t value)
 {
-    CHECK(reg==0x10 || reg==0x11);
+    CHECK(reg==0x10 || reg==0x11 || reg==0x17);
     ++s_reg;
     if(reg==0x10)s_video=value;
+    if(reg==0x17)s_col80=value;
 }
+void fpga_screen_set_columns(unsigned columns) { s_columns=columns; }
 void fpga_screen_clear(void) { ++s_clear; }
 void fpga_screen_home(void) {}
 void fpga_screen_puts(const char *s) { (void)s; ++s_puts; }
@@ -47,10 +50,10 @@ int main(void)
     osd_console_service();
     CHECK(s_clear==0); /* hidden: no writes, no repaint */
     osd_console_show();
-    CHECK(s_clear==1 && s_reg==2 && s_video==1);
+    CHECK(s_clear==1 && s_reg==3 && s_video==1 && s_col80==1 && s_columns==80);
     s_now=100000u;
     for(unsigned i=0;i<32;i++)osd_log("MOD SAMPLE %u",i);
-    CHECK(s_clear==1 && s_reg==2 && s_tee==33);
+    CHECK(s_clear==1 && s_reg==3 && s_tee==33);
     osd_console_service();
     CHECK(s_clear==1);
     s_now=999999u;
@@ -58,16 +61,20 @@ int main(void)
     CHECK(s_clear==1);
     s_now=1000001u;
     osd_console_service();
-    CHECK(s_clear==2 && s_reg==2);
+    CHECK(s_clear==2 && s_reg==3);
     osd_console_service();
     CHECK(s_clear==2); /* no changes, no write */
     s_now=2000001u;
     osd_console_service();
     CHECK(s_clear==2); /* stale (no dirty lines) */
-    char rows[23][41];
+    char rows[OSD_CONSOLE_ROWS][OSD_CONSOLE_LINE_CAP];
     int count=osd_console_snapshot(rows,23);
     CHECK(count==23);
     CHECK(strstr(rows[22],"MOD SAMPLE 31")!=NULL);
+    osd_log("MCU JUKE: LOW HEAP FOR TRACK 494 (CHUNKS=12)");
+    count=osd_console_snapshot(rows,23);
+    CHECK(strstr(rows[22],"(CHUNKS=12)")!=NULL);
+    CHECK(strstr(s_last_line,"(CHUNKS=12)")!=NULL);
     osd_console_set_lockout(true);
     osd_log("LOCKED COUNTER");
     s_now=5000000u;
@@ -85,8 +92,9 @@ int main(void)
     osd_console_service();
     CHECK(s_clear==3);
     CHECK(s_take==s_give);
+    CHECK(s_columns==80 && s_col80==1);
     CHECK(!strcmp(s_last_line,"HIDDEN"));
-    printf("PASS J2R10: 34+ console lines, 3 deliberate FPGA frames, "
+    printf("PASS J2R10/M3: 79-column MCU console preserves chunk diagnostics, 3 deliberate FPGA frames, "
            "no producer redraw, menu lockout/hidden/telnet intact\n");
     return 0;
 }
