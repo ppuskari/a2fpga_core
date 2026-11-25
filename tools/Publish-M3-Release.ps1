@@ -280,8 +280,11 @@ if (-not $gh) {
 }
 & $gh.Source auth status --hostname github.com
 if ($LASTEXITCODE -ne 0) { throw 'gh is not authenticated to github.com. Release files were retained.' }
-& $gh.Source release view $Tag --repo $repo *> $null
-if ($LASTEXITCODE -eq 0) { throw "GitHub release tag '$Tag' already exists; refusing to overwrite assets." }
+# Do not probe a missing release with 'gh release view'. On Windows
+# PowerShell 5.1, gh writes its expected "release not found" to stderr,
+# which becomes a terminating NativeCommandError under ErrorActionPreference
+# Stop, before we can inspect LASTEXITCODE. gh release create itself refuses
+# an existing tag/release, so it is the safe and atomic existence check.
 
 $assets=@($zip,$zipHashFile)
 if (-not $ZipOnly) {
