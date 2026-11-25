@@ -59,10 +59,8 @@ jobs:
              commit=$head;sha256=$hash;length=75000;
              timestampUtc='2026-11-24T15:00:00Z' } |
               ConvertTo-Json | Set-Content (Join-Path $mcuDir 'm3-stage2-build.json') -Encoding UTF8
-          $po=Join-Path $lab 'A2MEDIA-ProDOS243.po'
-          $poBytes=New-Object byte[] 143360
-          $rng.NextBytes($poBytes)
-          [IO.File]::WriteAllBytes($po,$poBytes)
+          $po=Join-Path $lab 'A2MEDIA-M2-ProDOS243.po'
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/ppuskari/a2media.system/petar/m2-80col-fat-picker-20261122/disks/A2MEDIA-M2-ProDOS243.po' -OutFile $po
           & .\tools\Publish-M3-Release.ps1 -SourceRoot $lab -Tag 'm3-smoke-test' -A2MediaPo $po
           if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Packaging smoke failed'}
           $out=Join-Path $lab 'release-out/m3-smoke-test'
@@ -74,7 +72,7 @@ jobs:
             $names=@($archive.Entries | ForEach-Object { $_.FullName })
             foreach($name in @('a2fpga-enhanced-m3-fpga.fs',
                                'a2fpga-enhanced-m3-bl616-stage2.bin',
-                               'A2MEDIA-ProDOS243.po',
+                               'A2MEDIA-M2-ProDOS243.po',
                                'MANIFEST.json','SHA256SUMS.txt','README.txt')) {
               if($names -notcontains $name) {throw "Missing ZIP entry: $name"}
             }
@@ -89,7 +87,7 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           $lab=Join-Path $env:RUNNER_TEMP 'm3-release-fake-test'
-          $po=Join-Path $lab 'A2MEDIA-ProDOS243.po'
+          $po=Join-Path $lab 'A2MEDIA-M2-ProDOS243.po'
           $mockDir=Join-Path $env:RUNNER_TEMP 'm3-gh-mock'
           New-Item -ItemType Directory -Force -Path $mockDir | Out-Null
           $mockGh=Join-Path $mockDir 'gh.cmd'
@@ -110,7 +108,7 @@ jobs:
                                'm3-smoke-publish-complete.zip',
                                'a2fpga-enhanced-m3-fpga.fs',
                                'a2fpga-enhanced-m3-bl616-stage2.bin',
-                               'A2MEDIA-ProDOS243.po')) {
+                               'A2MEDIA-M2-ProDOS243.po')) {
             if(-not $commandArgs.Contains($needed)) { throw "Mock publish missing $needed" }
           }
           Write-Host 'PASS: PowerShell 5.1 full publish command with mocked gh, including all assets and release options'
