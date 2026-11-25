@@ -20,6 +20,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* Console text is 80 columns wide; leave one column clear to prevent
+ * auto-wrap followed by our explicit newline. Stored lines include NUL. */
+#define OSD_CONSOLE_ROWS 23
+#define OSD_CONSOLE_COLS 79
+#define OSD_CONSOLE_LINE_CAP (OSD_CONSOLE_COLS + 1)
+
 void osd_log(const char *fmt, ...);   /* append one status line (thread-safe) */
 /* MCU menu thread: one buffered FPGA OSD refresh per second, if visible. */
 void osd_console_service(void);
@@ -31,7 +37,7 @@ void osd_console_hide_if_idle(uint32_t timeout_us); /* auto-dismiss boot console
  * threads are ignored and osd_log() only buffers — the menu is never stomped. */
 void osd_console_set_lockout(bool lockout);
 
-/* Copy up to max backlog lines (each 40 chars + NUL) for a remote viewer. */
-int osd_console_snapshot(char dst[][41], int max);
+/* Copy up to max backlog lines (79 chars + NUL) for a remote viewer. */
+int osd_console_snapshot(char dst[][OSD_CONSOLE_LINE_CAP], int max);
 
 #endif
