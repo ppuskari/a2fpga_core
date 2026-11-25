@@ -84,3 +84,33 @@ jobs:
           if($manifest.source_commit -ne $head){throw 'Source commit in manifest mismatch'}
           if($manifest.files.Count -ne 3){throw 'Expected FPGA/MCU/PO manifests'}
           Write-Host 'PASS: manifest and artifact counts; no publish invoked'
+
+      - name: Simulate release publication with a fake gh.exe (no GitHub uploads)
+        run: |
+          $ErrorActionPreference='Stop'
+          $lab=Join-Path $env:RUNNER_TEMP 'm3-release-fake-test'
+          $po=Join-Path $lab 'A2MEDIA-ProDOS243.po'
+          $mockDir=Join-Path $env:RUNNER_TEMP 'm3-gh-mock'
+          New-Item -ItemType Directory -Force -Path $mockDir | Out-Null
+          $mockGh=Join-Path $mockDir 'gh.cmd'
+          @('@echo off',
+            'if "%1"=="auth" exit /b 0',
+            'if "%1"=="release" if "%2"=="create" (',
+            'echo %* > "%TEMP%\m3-gh-release-args.txt"',
+            'exit /b 0',
+            ')',
+            'exit /b 7') | Set-Content -LiteralPath $mockGh -Encoding Ascii
+          $env:PATH="$mockDir;$env:PATH"
+          $which=Get-Command gh -CommandType Application
+          if($which.Source -ne $mockGh) { throw "Mock gh.cmd was not selected: $($which.Source)" }
+          & .\tools\Publish-M3-Release.ps1 -SourceRoot $lab -Tag 'm3-smoke-publish' -A2MediaPo $po -Publish
+          $commandArgs=Get-Content (Join-Path $env:TEMP 'm3-gh-release-args.txt') -Raw
+          foreach($needed in @('release create m3-smoke-publish',
+                               '--target', '--notes-file', '--prerelease',
+                               'm3-smoke-publish-complete.zip',
+                               'a2fpga-enhanced-m3-fpga.fs',
+                               'a2fpga-enhanced-m3-bl616-stage2.bin',
+                               'A2MEDIA-ProDOS243.po')) {
+            if(-not $commandArgs.Contains($needed)) { throw "Mock publish missing $needed" }
+          }
+          Write-Host 'PASS: PowerShell 5.1 full publish command with mocked gh, including all assets and release options'
