@@ -101,7 +101,7 @@ jobs:
             ')',
             'exit /b 7') | Set-Content -LiteralPath $mockGh -Encoding Ascii
           $env:PATH="$mockDir;$env:PATH"
-          $which=Get-Command gh -CommandType Application
+          $which=Get-Command gh -CommandType Application | Select-Object -First 1
           if($which.Source -ne $mockGh) { throw "Mock gh.cmd was not selected: $($which.Source)" }
           & .\tools\Publish-M3-Release.ps1 -SourceRoot $lab -Tag 'm3-smoke-publish' -A2MediaPo $po -Publish
           $commandArgs=Get-Content (Join-Path $env:TEMP 'm3-gh-release-args.txt') -Raw
