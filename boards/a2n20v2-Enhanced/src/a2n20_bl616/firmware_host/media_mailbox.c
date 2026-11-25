@@ -123,11 +123,12 @@ static const char *m2_path(void)
  * Use libc malloc/free behind FreeRTOS heap_3 with identical scheduler
  * serialization, but NEVER invoke the fatal pvPortMalloc failure hook.
  * Browser and jukebox retain separate ownership, so the Apple can browse
- * while the MOD thread plays. 40 slots hold even 512 x 64-byte names with
- * ordinary 1-KiB packing and some mixed-size fragmentation. */
+ * while the MOD thread plays. 136 slots also cover 512 x 64-byte names
+ * under the minimum 256-byte fallback (four names per chunk).
+ * Ordinary 506-name scans use ~7 chunks, not 136. */
 #define M2_CHUNK_BYTES 1024u
 #define M2_CHUNK_MIN_BYTES 256u
-#define M2_CHUNK_LIMIT 40u
+#define M2_CHUNK_LIMIT 136u
 typedef struct {
     char *name;
     bool is_dir;
