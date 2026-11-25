@@ -143,6 +143,10 @@ foreach($file in @(Get-ChildItem -LiteralPath $payload -File | Sort-Object Name)
 # reuploads. No source or firmware bytes are changed by adjusting the COPIES.
 $stableUtc=[DateTime]::SpecifyKind(([DateTime]'2026-11-24T12:00:00'),[DateTimeKind]::Utc)
 foreach($entryFile in @(Get-ChildItem -LiteralPath $payload -File)){
+    # Gowin-generated .fs files can be marked READONLY. Copy-Item inherits
+    # that flag; clear it ONLY on the isolated release payload copy.
+    # Never modify the actual tested FPGA/MCU outputs in the lab tree.
+    if($entryFile.IsReadOnly){$entryFile.IsReadOnly=$false}
     $entryFile.LastWriteTimeUtc=$stableUtc
 }
 Compress-Archive -Path (Join-Path $payload '*') -DestinationPath $zip -CompressionLevel Optimal
