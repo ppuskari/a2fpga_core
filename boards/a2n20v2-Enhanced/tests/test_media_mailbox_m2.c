@@ -181,11 +181,13 @@ void fpga_spi_xfer_write(uint8_t space,uint32_t addr,const uint8_t *src,uint16_t
  * from the fatal FreeRTOS pvPortMalloc mock). Simulate OOM without killing
  * the host process, as the BL616's malloc-failure hook would. */
 static bool m2_force_low_heap;
+static size_t m2_max_alloc;
 static unsigned m2_chunk_allocations;
 static void *m2_test_malloc(size_t n)
 {
     m2_chunk_allocations++;
-    return m2_force_low_heap?NULL:malloc(n);
+    return (m2_force_low_heap || (m2_max_alloc && n>m2_max_alloc))?
+        NULL:malloc(n);
 }
 #define malloc m2_test_malloc
 /* Include real source to exercise static mb_service_once(). */
@@ -320,6 +322,9 @@ int main(void)
     CHECK(s_m2_catalog_count==506 && !s_m2_scan_active &&
           s_m2_directory_open && close_calls==3);
     CHECK(s_m2_chunk_count>0 && s_m2_chunk_count<20);
+    CHECK(s_m2_alloc_bytes>=s_m2_name_bytes);
+    CHECK(s_m2_chunk_fallbacks==0);
+    CHECK(s_m2_alloc_bytes<=8u*1024u);
     CHECK(m2_chunk_allocations-chunks_before_large_scan==
           s_m2_chunk_count);
     CHECK(m2_dynamic_allocations==0); /* no fatal pvPortMalloc per file */
@@ -423,6 +428,24 @@ int main(void)
           s_m2_catalog_count==506 && s_m2_chunk_count<=M2_CHUNK_LIMIT);
     CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_OK);
     CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
+    /* Worst-case browser: 506 legal 62-byte filenames, 256-byte
+     * allocator ceiling, while the host jukebox can independently keep
+     * its own compressed filename catalog. No lossy page-local sort. */
+    m2_max_alloc=256u;
+    path_cmd("PROTRACKER/LONG-NAMES",
+             MEDIA_CMD_M2_OPEN,MEDIA_RESULT_OK);
+    complete_scan();
+    CHECK(!s_m2_scan_failed && s_m2_directory_open &&
+          s_m2_catalog_count==506);
+    CHECK(s_m2_chunk_fallbacks>0 &&
+          s_m2_chunk_count<=M2_CHUNK_LIMIT);
+    CHECK(s_m2_alloc_bytes>=s_m2_name_bytes);
+    CHECK(s_m2_chunk_capacity==256u);
+    CHECK(seek_catalog(493u)==MEDIA_RESULT_OK);
+    CHECK(command(MEDIA_CMD_M2_NEXT)==MEDIA_RESULT_OK);
+    CHECK(response_count==64u && response[0]==63u);
+    CHECK(command(MEDIA_CMD_M2_CLOSE)==MEDIA_RESULT_OK);
+    m2_max_alloc=0u;
     /* When the underlying libc heap really IS exhausted, the Apple
      * catalog fails cleanly as a filesystem result and never calls the
      * BL616 fatal pvPortMalloc hook (USB keyboard must remain alive). */
@@ -438,7 +461,7 @@ int main(void)
     CHECK(command(MEDIA_CMD_STOP)==MEDIA_RESULT_OK && stop_calls==1);
     CHECK(command(MEDIA_CMD_PING)==MEDIA_RESULT_PONG);
     CHECK(m2_dynamic_allocations==0);
-    printf("PASS M2 MCU mailbox: 506-file sorted catalog without heap allocations, J startup, cancellation\n");
+    printf("PASS M2 MCU mailbox: 506-file sorted catalog with 1KiB and 256B blocks, J startup, cancellation\n");
     printf("PASS M2 protocol: M1 compatibility, live now-playing frame, source/status, path validation\n");
     return 0;
 }
