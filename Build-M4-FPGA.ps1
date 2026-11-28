@@ -28,7 +28,7 @@ $root=$PSScriptRoot
 # All other branches fail closed. This exception exists ONLY on the
 # experimental branch; the production M3 helper is not modified.
 $branch=(& git -C $root branch --show-current | Out-String).Trim()
-$allowedFpgaBranches=@('petar/m4-upstream-enhanced-integration-20261125')
+$allowedFpgaBranches=@('petar/m4-upstream-enhanced-integration-20261125','petar/m4-p3-speaker-uthernet2')
 if($LASTEXITCODE -ne 0 -or $branch -notin $allowedFpgaBranches) {
     throw "M3 FPGA build requires an approved M4 branch; current '$branch'."
 }
