@@ -1,43 +1,52 @@
 /*
- * A2FPGA ESP32-S3 Firmware (Simplified)
+ * A2FPGA ESP32-S3 Firmware — a2mega co-processor
  *
- * Minimal firmware for ESP32-S3 to FPGA communication via Octal SPI.
- * This version excludes LCD_CAM, radio, tone generator, and ES5503 emulation.
+ * Port of the a2n20v2-Enhanced BL616 feature set to the a2mega's
+ * ESP32-S3-MINI-1-N8 (see boards/a2mega/docs/ESP32_ENHANCED_PORT.md):
+ *   - Octal SPI (8-bit parallel) communication with the FPGA
+ *   - On-screen menu + console (gamepad-driven via the FPGA usb_hid_host)
+ *   - Disk-image serving from the micro-SD card (Disk II + ProDOS HDD)
+ *   - Uthernet II (W5100) MACRAW bridge to WiFi
+ *   - FPGA core self-update from a file on the SD card
+ *   - USB JTAG bridge for PC-driven FPGA programming (openFPGALoader)
+ *   - Serial forwarding to FPGA; CLI mode for diagnostics ("+++")
  *
- * Features:
- *   - Octal SPI (8-bit parallel) communication with FPGA
- *   - USB JTAG bridge for FPGA programming
- *   - Serial forwarding to FPGA
- *   - CLI mode for diagnostics (enter with "+++")
- *
- * Board: ESP32-S3 (Adafruit QT Py ESP32-S3 or similar)
+ * Board: a2mega (ESP32-S3-MINI-1-N8, 8 MB flash, no PSRAM)
  *
  * Arduino IDE Settings:
- *   - Board: ESP32S3 Dev Module or Adafruit QT Py ESP32-S3
+ *   - Board: ESP32S3 Dev Module
  *   - USB Mode: Hardware CDC and JTAG
  *   - USB CDC On Boot: Enabled
  *   - CPU Frequency: 240MHz
  */
 
 #include <Arduino.h>
+#include <SD_MMC.h>
 #include "driver/gpio.h"
 #include "soc/usb_serial_jtag_reg.h"
 #include "a2fpga_jtag.h"
 #include "a2fpga_spi_service.h"
+#include "a2fpga_regs.h"
+#include "fpga_link.h"
+#include "fpga_screen.h"
+#include "osd_console.h"
+#include "settings.h"
+#include "disk.h"
+#include "menu.h"
+#include "w5100.h"
+#include "wifi_bridge.h"
+#include "fpga_jtag.h"
+#include "fpgaupdate.h"
+#include "ftpd.h"
 #include "esp_err.h"
+#include "esp_wifi.h"
+#include "esp_netif.h"
 #include <ctype.h>
 #include <stdlib.h>
 
 // ============================================================================
-// Pin Assignments (DUMMY - Replace with actual hardware pins)
+// Pin Assignments (a2-mega schematic p.3, "ESP32 & I/O")
 // ============================================================================
-
-// LEDs
-#define PIN_LED0 1
-#define PIN_LED1 2
-
-#define LED_ON  HIGH
-#define LED_OFF LOW
 
 // Serial interface to the FPGA
 #define PIN_RXD  44
@@ -47,34 +56,54 @@
 // Configuration done signal from the FPGA
 #define PIN_FPGA_DONE  48
 
-// JTAG interface to the FPGA
+// JTAG interface to the FPGA (shared: USB bridge and fpga_jtag.c self-update)
 const int PIN_TCK  = 40;
 const int PIN_TMS  = 41;
 const int PIN_TDI  = 42;
 const int PIN_TDO  = 45;
 const int PIN_SRST = 3;  // unused and unconnected, but required by the JTAG bridge
 
+// Micro-SD slot (4-bit SDMMC)
+#define PIN_SD_CLK  37
+#define PIN_SD_CMD  36
+#define PIN_SD_D0   38
+#define PIN_SD_D1   39
+#define PIN_SD_D2   35   // verify at bring-up (schematic pin 31 net inferred)
+#define PIN_SD_D3   34
+#define PIN_SD_DET  46   // low when a card is inserted
+
 // Octal SPI interface to the FPGA
 static const ospi_pins_t OSPI_PINS = {
-    .sclk = 47,      // SPI Clock
-    .d0   = 1,     // Data bit 0 (MOSI in standard SPI mode)
-    .d1   = 2,     // Data bit 1 (MISO in standard SPI mode)
-    .d2   = 4,     // Data bit 2
-    .d3   = 5,     // Data bit 3
-    .d4   = 6,     // Data bit 4
-    .d5   = 7,     // Data bit 5
-    .d6   = 8,     // Data bit 6
-    .d7   = 9,     // Data bit 7
-    .cs   = -1,     // Chip select (-1 if directly controlled)
+    .sclk = 47,     // ESP32_OPI_CLK
+    .d0   = 1,      // ESP32_OPI_D0
+    .d1   = 2,
+    .d2   = 4,
+    .d3   = 5,
+    .d4   = 6,
+    .d5   = 7,
+    .d6   = 8,
+    .d7   = 9,
+    .cs   = -1,     // no CS — the protocol uses sync-pattern framing
 };
 
-static const int SPI_HZ = 20 * 1000 * 1000;  // 20 MHz SPI clock
+static const int SPI_HZ = 4 * 1000 * 1000;  // (reg path is clean at 8 MHz but
+                                             // XFER payload reads outrun the
+                                             // proto's 1-byte read pipeline
+                                             // above ~4 MHz (FF fill) — add a
+                                             // fabric-side prefetch to go higher  // 10 MHz for bring-up: the FPGA read
+                                             // pipeline (2 cycles @ 54 MHz) is marginal
+                                             // against back-to-back 20 MHz RX byte slots
 
 // ============================================================================
 // Global State
 // ============================================================================
 
 bool usb_was_connected = false;
+static bool sd_mounted = false;
+static bool subsystems_up = false;
+static TaskHandle_t disk_task_h = NULL;
+static TaskHandle_t menu_task_h = NULL;
+static bool wifitest_quiesced = false;
 
 // CLI Escape Sequence
 const char* CLI_ESCAPE_SEQUENCE = "+++";
@@ -136,6 +165,16 @@ static void cmd_process(String cmd) {
             Serial.printf("SPI mode: %s\n", a2spi_is_octal() ? "OCTAL" : "STANDARD");
         }
         Serial.printf("USB connected: %s\n", usb_was_connected ? "YES" : "NO");
+        if (a2spi_is_ready()) {
+            uint8_t fs = 0, retries = 0, seq = 0, st = 0;
+            if (a2spi_reg_read_status(0x07, &fs, &st) == ESP_OK) {
+                a2spi_reg_read_status(0x23, &retries, &st);
+                a2spi_reg_read_status(0x24, &seq, &st);
+                Serial.printf("DDR3: %s (retries=%u seq=0x%02X)\n",
+                              (fs & 0x02) ? "CALIBRATED" : "NOT CALIBRATED",
+                              retries, seq);
+            }
+        }
 
     } else if (cmd == "spiinit") {
         Serial.println("[SPI] Initializing Octal SPI...");
@@ -233,6 +272,220 @@ static void cmd_process(String cmd) {
                 }
             }
         }
+
+    } else if (cmd == "viddbg") {
+        // Dump the video-pipeline debug registers (FPGA regs 0x70-0x77)
+        if (!a2spi_is_ready()) {
+            esp_err_t err = a2spi_init_once(SPI2_HOST, &OSPI_PINS, SPI_HZ);
+            if (err != ESP_OK) {
+                Serial.printf("viddbg: init error: %s\n", esp_err_to_name(err));
+                return;
+            }
+        }
+        uint8_t v[9];
+        for (int i = 0; i < 9; i++) {
+            uint8_t st = 0;
+            esp_err_t err = a2spi_reg_read_status((uint8_t)(0x70 + i), &v[i], &st);
+            if (err != ESP_OK) {
+                Serial.printf("viddbg: read 0x%02X error: %s\n", 0x70 + i, esp_err_to_name(err));
+                return;
+            }
+        }
+        Serial.printf("mode 0x%02X: use_vgc=%d SHRG=%d LINEAR=%d STORE80=%d PAGE2=%d MIXED=%d HIRES=%d TEXT=%d\n",
+                      v[0], !!(v[0] & 0x80), !!(v[0] & 0x40), !!(v[0] & 0x20), !!(v[0] & 0x10),
+                      !!(v[0] & 0x08), !!(v[0] & 0x04), !!(v[0] & 0x02), !!(v[0] & 0x01));
+        Serial.printf("C029 writes=%u last=0x%02X\n", v[1], v[2]);
+        Serial.printf("vgc missed hsync/frame=%u  shadow-write drops=%u (sticky)\n", v[3], v[4]);
+        Serial.printf("fb flags=0x%02X  ddr3 resp-fifo overflow=0x%02X (bit=port, sticky)\n", v[5], v[6]);
+        Serial.printf("shadow rd fsm=0x%02X: vid_req=%d is_vgc=%d cache_valid=%d vgc_req=%d state=%d\n",
+                      v[7], !!(v[7] & 0x80), !!(v[7] & 0x40), !!(v[7] & 0x20), !!(v[7] & 0x10), v[7] & 0x07);
+        Serial.printf("vgc stale-word swaps/frame=%u\n", v[8]);
+
+    } else if (cmd.startsWith("wifitest")) {
+        // A/B instrument for the latency investigation: suspend the board's
+        // periodic workload (disk poll @2ms, menu @20ms — both OSPI traffic
+        // adjacent to the antenna and core-1 load) to measure whether our
+        // own activity causes the RTT spikes. "wifitest on" quiesces,
+        // "wifitest off" resumes. Suspending disk serving pauses floppy/HDD
+        // I/O — do not leave it on with the Apple II running from disk.
+        if (cmd.endsWith("on") && !wifitest_quiesced) {
+            if (disk_task_h) vTaskSuspend(disk_task_h);
+            if (menu_task_h) vTaskSuspend(menu_task_h);
+            wifitest_quiesced = true;
+            Serial.println("wifitest: disk+menu tasks SUSPENDED (OSPI quiet)");
+        } else if (cmd.endsWith("off") && wifitest_quiesced) {
+            if (disk_task_h) vTaskResume(disk_task_h);
+            if (menu_task_h) vTaskResume(menu_task_h);
+            wifitest_quiesced = false;
+            Serial.println("wifitest: tasks resumed");
+        } else {
+            Serial.printf("wifitest: %s (usage: wifitest on|off)\n",
+                          wifitest_quiesced ? "QUIESCED" : "normal");
+        }
+
+    } else if (cmd.startsWith("wifiproto")) {
+        // TX rate-pathology A/B: "wifiproto bg" drops all 802.11n/MCS rates,
+        // "wifiproto bgn" restores. Small frames (ARP) always got through
+        // while data frames (ICMP/TCP) died at good RSSI — if bg-only fixes
+        // it, the n-rate path (rate control / AMPDU) is the culprit.
+        esp_err_t perr;
+        if (cmd.endsWith("bgn")) {
+            perr = esp_wifi_set_protocol(WIFI_IF_STA,
+                WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+            Serial.printf("wifiproto: bgn (%s)\n", esp_err_to_name(perr));
+        } else if (cmd.endsWith("bg")) {
+            perr = esp_wifi_set_protocol(WIFI_IF_STA,
+                WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G);
+            Serial.printf("wifiproto: bg-only (%s)\n", esp_err_to_name(perr));
+        } else {
+            uint8_t pr = 0;
+            esp_wifi_get_protocol(WIFI_IF_STA, &pr);
+            Serial.printf("wifiproto: current=0x%02X (b=1 g=2 n=4)\n", pr);
+        }
+
+    } else if (cmd == "net") {
+        wifi_ap_record_t ap;
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
+            Serial.printf("WiFi: associated to %s  RSSI %d\n", (const char*)ap.ssid, ap.rssi);
+        else
+            Serial.println("WiFi: NOT associated");
+        esp_netif_t *nif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        if (nif) {
+            esp_netif_ip_info_t ii;
+            if (esp_netif_get_ip_info(nif, &ii) == ESP_OK)
+                Serial.printf("IP: " IPSTR "  GW: " IPSTR "  MASK: " IPSTR "\n",
+                              IP2STR(&ii.ip), IP2STR(&ii.gw), IP2STR(&ii.netmask));
+        } else {
+            Serial.println("netif: WIFI_STA_DEF not found");
+        }
+        int8_t txp = 0;
+        if (esp_wifi_get_max_tx_power(&txp) == ESP_OK)
+            Serial.printf("max TX power: %.2f dBm (%d)\n", txp * 0.25, txp);
+        wifi_ps_type_t ps;
+        if (esp_wifi_get_ps(&ps) == ESP_OK)
+            Serial.printf("power save: %s\n",
+                          ps == WIFI_PS_NONE ? "NONE" :
+                          ps == WIFI_PS_MIN_MODEM ? "MIN_MODEM" : "MAX_MODEM");
+        extern volatile uint32_t wifi_dbg_rx_total, wifi_dbg_rx_ucast;
+        extern volatile uint32_t wifi_dbg_disconnects, wifi_dbg_last_reason;
+        Serial.printf("rx frames: total=%lu unicast-to-me=%lu\n",
+                      (unsigned long)wifi_dbg_rx_total,
+                      (unsigned long)wifi_dbg_rx_ucast);
+        Serial.printf("disconnects: %lu (last reason %lu)\n",
+                      (unsigned long)wifi_dbg_disconnects,
+                      (unsigned long)wifi_dbg_last_reason);
+
+    } else if (cmd == "fpgaerase") {
+        // Erase the config-flash HEADER blocks only (128KB), via the
+        // SRAM-preserving SPI entry. With no sync word the GW5A boots like a
+        // factory-blank board: quietly unconfigured, JTAG and flash bus free
+        // — which lets the STANDARD openFPGALoader flash flow work again.
+        // The running fabric stays alive (it is in SRAM).
+        Serial.println("fpgaerase: entering SPI mode (fabric stays live)...");
+        if (!fpga_jtag_flash_enter_keepsram()) {
+            Serial.println("fpgaerase: SPI entry failed");
+            return;
+        }
+        bool ok = true;
+        for (uint32_t a = 0; a < 0x20000 && ok; a += 0x10000) {
+            fpga_jtag_spi_xfer(0x06, NULL, NULL, 0);          // WREN
+            uint8_t tx[3] = { (uint8_t)(a >> 16), (uint8_t)(a >> 8), (uint8_t)a };
+            fpga_jtag_spi_xfer(0xD8, tx, NULL, 3);            // block erase
+            ok = false;
+            for (int i = 0; i < 40000; i++) {                 // poll WIP
+                uint8_t st = 0xFF;
+                fpga_jtag_spi_xfer(0x05, NULL, &st, 1);
+                if (!(st & 0x01)) { ok = true; break; }
+            }
+            Serial.printf("fpgaerase: block 0x%05lX %s\n",
+                          (unsigned long)a, ok ? "erased" : "TIMEOUT");
+        }
+        if (ok) {
+            // Read back the header area to confirm FF
+            uint8_t chk[16];
+            fpga_jtag_flash_read(0, chk, sizeof(chk));
+            bool blank = true;
+            for (size_t i = 0; i < sizeof(chk); i++)
+                if (chk[i] != 0xFF) blank = false;
+            Serial.printf("fpgaerase: header readback %s\n",
+                          blank ? "BLANK (FF) — success" : "NOT blank!");
+        }
+        Serial.println("fpgaerase: done; replug, then flash normally");
+
+    } else if (cmd.startsWith("fpgaflash ")) {
+        // Persistent FPGA flash via the on-board bit-bang updater (fpgaupdate/
+        // fpga_jtag). Exists because openFPGALoader's flash flow loses the
+        // SPI bus to the GW5A's config-retry loop whenever the flash already
+        // holds a corrupt image (its own SRAM-erase step re-arms the retry
+        // loop, then its hardcoded-10MHz flash-ID read fails). The bit-bang
+        // path runs at the slow clocks that demonstrably win, with per-page
+        // verify. We hold the recursive link mutex, so driving
+        // fpgaupdate_poll() synchronously here is safe: menu/disk tasks stay
+        // blocked (the FPGA is dark during the write anyway) and osd_log's
+        // lock re-enters.
+        String toks[4];
+        int nt = split_ws(cmd, toks, 4);
+        if (nt < 2) {
+            Serial.println("Usage: fpgaflash <file.bin on SD>");
+            return;
+        }
+        bool keepsram = (nt >= 3 && toks[2] == "keepsram");
+        fpgaupdate_set_keepsram(keepsram);
+        if (keepsram)
+            Serial.println("fpgaflash: keepsram — fabric stays live; flash written under a quiet MSPI bus");
+        if (!fpgaupdate_request(toks[1].c_str())) {
+            Serial.println("fpgaflash: updater busy");
+            return;
+        }
+        fpgaupdate_poll();   // CHECK phase, synchronous
+        Serial.printf("fpgaflash: %s\n", fpgaupdate_message());
+        if (fpgaupdate_state() != FPU_READY)
+            return;
+        Serial.println("fpgaflash: INSTALLING — FPGA goes dark; can take 10+ min; DO NOT power off");
+        fpgaupdate_commit();
+        fpgaupdate_poll();   // INSTALL phase, synchronous; esp_restart() on success
+        Serial.printf("fpgaflash: %s\n", fpgaupdate_message());  // reached only on error
+
+    } else if (cmd.startsWith("ddrd ")) {
+        // Dump DDR3 words via the debug read window (regs 0x34-0x3B).
+        // Usage: ddrd <word_addr> <word_count>   (addr in hex or dec)
+        String toks[16];
+        int nt = split_ws(cmd, toks, 16);
+        if (nt < 3) {
+            Serial.println("Usage: ddrd <word_addr> <words>");
+            return;
+        }
+        if (!a2spi_is_ready()) {
+            esp_err_t err = a2spi_init_once(SPI2_HOST, &OSPI_PINS, SPI_HZ);
+            if (err != ESP_OK) {
+                Serial.printf("ddrd: init error: %s\n", esp_err_to_name(err));
+                return;
+            }
+        }
+        uint32_t addr, count;
+        if (!parse_u32(toks[1], addr) || addr > 0x1FFFFF ||
+            !parse_u32(toks[2], count) || count == 0 || count > 65536) {
+            Serial.println("ddrd: bad args (addr 0..0x1FFFFF, words 1..65536)");
+            return;
+        }
+        a2spi_reg_write(0x34, addr & 0xFF);
+        a2spi_reg_write(0x35, (addr >> 8) & 0xFF);
+        a2spi_reg_write(0x36, (addr >> 16) & 0x1F);
+        for (uint32_t w = 0; w < count; w++) {
+            a2spi_reg_write(0x37, 1);                 // GO (addr auto-incs)
+            uint8_t busy = 1, st;
+            for (int t = 0; t < 100 && busy; t++)
+                a2spi_reg_read_status(0x37, &busy, &st);
+            if (busy) { Serial.printf("\nddrd: timeout at word %lu\n", (unsigned long)w); return; }
+            uint8_t d0, d1, d2, d3;
+            a2spi_reg_read_status(0x38, &d0, &st);
+            a2spi_reg_read_status(0x39, &d1, &st);
+            a2spi_reg_read_status(0x3A, &d2, &st);
+            a2spi_reg_read_status(0x3B, &d3, &st);
+            if ((w & 7) == 0) Serial.printf("\n%06lX:", (unsigned long)(addr + w));
+            Serial.printf(" %02X%02X%02X%02X", d3, d2, d1, d0);
+        }
+        Serial.println("\nddrd: done");
 
     } else if (cmd.startsWith("spir ")) {
         String toks[16];
@@ -367,7 +620,8 @@ static void cmd_process(String cmd) {
         Serial.printf("  TXD:  %d\n", PIN_TXD);
         Serial.println("Other:");
         Serial.printf("  FPGA_DONE: %d\n", PIN_FPGA_DONE);
-        Serial.printf("  LED0: %d\n", PIN_LED0);
+        Serial.printf("  SD:   CLK=%d CMD=%d D0=%d D1=%d D2=%d D3=%d DET=%d\n",
+                      PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0, PIN_SD_D1, PIN_SD_D2, PIN_SD_D3, PIN_SD_DET);
 
     } else if (cmd == "exit") {
         cli_mode = false;
@@ -380,6 +634,7 @@ static void cmd_process(String cmd) {
         Serial.println("  spiinit   - Initialize Octal SPI");
         Serial.println("  spitest   - Run SPI loopback test");
         Serial.println("  spireg <reg> [val]  - Read/write SPI register (0..126)");
+        Serial.println("  viddbg              - Dump video-pipeline debug regs (0x70-0x77)");
         Serial.println("  spir <space> <addr> <len> [inc=1]  - Read from FPGA");
         Serial.println("  spiw <space> <addr> <inc> <b0> [b1 ...]  - Write to FPGA");
         Serial.println("  meminfo   - Show memory usage");
@@ -436,6 +691,190 @@ String check_escape_sequence(char c) {
 }
 
 // ============================================================================
+// Subsystem bring-up
+// ============================================================================
+
+// Apply DHCP/static-IP changes from the menu to the ESP32's WiFi netif.
+// (The Apple II's own IP stack, over the W5100, configures itself.)
+extern "C" void menu_hook_net_apply(void) {
+    a2_settings_t *s = settings();
+    wifi_bridge_config_ip(s->dhcp_enable != 0, s->static_ip, s->static_mask, s->static_gw);
+    Serial.printf("[net] applied %s config\n", s->dhcp_enable ? "DHCP" : "static IP");
+}
+
+static bool mount_sd() {
+    pinMode(PIN_SD_DET, INPUT_PULLUP);
+    SD_MMC.setPins(PIN_SD_CLK, PIN_SD_CMD, PIN_SD_D0, PIN_SD_D1, PIN_SD_D2, PIN_SD_D3);
+    if (!SD_MMC.begin("/sdcard", false)) {
+        // Retry in 1-bit mode in case D1-D3 routing differs on this board spin
+        if (!SD_MMC.begin("/sdcard", true)) {
+            Serial.println("[sd] mount failed");
+            return false;
+        }
+        Serial.println("[sd] mounted (1-bit mode)");
+        return true;
+    }
+    Serial.println("[sd] mounted (4-bit mode)");
+    return true;
+}
+
+// WiFi configuration file: wifi.txt on the SD card (root, with
+// /sdcard/A2FPGA/wifi.txt as a fallback location).
+//   line 1: SSID
+//   line 2: password
+//   lines 3-5 (optional): static IP address, netmask, gateway
+// When lines 3-5 are absent (or unparsable), DHCP is assumed. The parsed
+// configuration is persisted into settings so it survives without the card.
+static bool parse_ip4(const char *str, uint8_t out[4]) {
+    unsigned a, b, c, d;
+    if (sscanf(str, "%u.%u.%u.%u", &a, &b, &c, &d) != 4)
+        return false;
+    if (a > 255 || b > 255 || c > 255 || d > 255)
+        return false;
+    out[0] = a; out[1] = b; out[2] = c; out[3] = d;
+    return true;
+}
+
+static void load_wifi_credentials() {
+    a2_settings_t *s = settings();
+    FILE *f = fopen("/sdcard/wifi.txt", "r");
+    if (!f)
+        f = fopen("/sdcard/A2FPGA/wifi.txt", "r");
+    if (!f)
+        return;
+
+    char line[5][96];
+    int nlines = 0;
+    while (nlines < 5 && fgets(line[nlines], sizeof(line[0]), f)) {
+        line[nlines][strcspn(line[nlines], "\r\n")] = 0;
+        nlines++;
+    }
+    fclose(f);
+
+    if (nlines < 1 || !line[0][0])
+        return;
+
+    const char *ssid = line[0];
+    const char *psk  = (nlines >= 2) ? line[1] : "";
+
+    uint8_t ip[4] = {0}, mask[4] = {0}, gw[4] = {0};
+    bool have_static = (nlines >= 5) &&
+                       parse_ip4(line[2], ip) &&
+                       parse_ip4(line[3], mask) &&
+                       parse_ip4(line[4], gw);
+
+    bool changed = strcmp(s->wifi_ssid, ssid) || strcmp(s->wifi_psk, psk) ||
+                   (s->dhcp_enable != (have_static ? 0 : 1)) ||
+                   (have_static && (memcmp(s->static_ip, ip, 4) ||
+                                    memcmp(s->static_mask, mask, 4) ||
+                                    memcmp(s->static_gw, gw, 4)));
+    if (changed) {
+        strlcpy(s->wifi_ssid, ssid, sizeof(s->wifi_ssid));
+        strlcpy(s->wifi_psk, psk, sizeof(s->wifi_psk));
+        s->dhcp_enable = have_static ? 0 : 1;
+        if (have_static) {
+            memcpy(s->static_ip, ip, 4);
+            memcpy(s->static_mask, mask, 4);
+            memcpy(s->static_gw, gw, 4);
+        }
+        settings_save();
+        Serial.printf("[net] wifi.txt: ssid '%s', %s\n", ssid,
+                      have_static ? "static IP" : "DHCP");
+    }
+}
+
+// Disk service task: image serving + FPGA update state machine. All SD
+// filesystem work (including the menu's directory listings) runs here.
+static void disk_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        disk_poll();
+        fpgaupdate_poll();
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+}
+
+// Menu/UI task: gamepad polling + OSD rendering at ~50 Hz.
+static void menu_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        menu_tick();
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+static void start_subsystems() {
+    if (subsystems_up)
+        return;
+
+    esp_err_t err = a2spi_init_once(SPI2_HOST, &OSPI_PINS, SPI_HZ);
+    if (err != ESP_OK) {
+        Serial.printf("[SPI] init failed: %s\n", esp_err_to_name(err));
+        return;
+    }
+    if (!fpga_link_init()) {
+        Serial.println("[fpga] no A2FP device on the OSPI link; retrying later");
+        return;
+    }
+
+    settings_init();
+    sd_mounted = mount_sd();
+
+    osd_console_show();
+    osd_log("A2MEGA ESP32 %s %s", __DATE__, __TIME__);
+    osd_log(sd_mounted ? "SD CARD MOUNTED" : "NO SD CARD");
+
+    disk_init();
+    menu_init();
+    w5100_init();
+
+    if (sd_mounted)
+        load_wifi_credentials();
+    a2_settings_t *s = settings();
+    if (s->wifi_ssid[0]) {
+        wifi_bridge_config_ip(s->dhcp_enable != 0, s->static_ip,
+                              s->static_mask, s->static_gw);
+        if (wifi_bridge_init(s->wifi_ssid, s->wifi_psk)) {
+            osd_log("WIFI: JOINING %s (%s)", s->wifi_ssid,
+                    s->dhcp_enable ? "DHCP" : "STATIC IP");
+            ftpd_init();   /* FTP file drop for /sdcard once WiFi is up */
+        } else {
+            osd_log("WIFI: INIT FAILED");
+        }
+    } else {
+        osd_log("WIFI: NOT CONFIGURED (WIFI.TXT)");
+    }
+
+    // DDR3 calibration telemetry: status reg bit1 = init_calib_complete,
+    // reg 0x23 = fabric watchdog retry count (nonzero = the reset sequencer
+    // had to re-run calibration this boot — track to correlate failures
+    // with e.g. gamepad rumble load). MUST run before the disk/menu tasks
+    // exist AND under the link mutex: raw a2spi calls racing task traffic
+    // panic the SPI driver (boot-loop, learned the hard way).
+    if (a2spi_is_ready()) {
+        uint8_t fpga_status = 0, ddr3_retries = 0, st = 0;
+        fpga_link_lock();
+        esp_err_t serr = a2spi_reg_read_status(0x07, &fpga_status, &st);
+        esp_err_t rerr = a2spi_reg_read_status(0x23, &ddr3_retries, &st);
+        fpga_link_unlock();
+        if (serr == ESP_OK && !(fpga_status & 0x02)) {
+            Serial.println("[a2fpga] WARNING: DDR3 NOT CALIBRATED");
+            osd_log("WARNING: DDR3 NOT CALIBRATED");
+        }
+        if (serr == ESP_OK && rerr == ESP_OK && ddr3_retries != 0) {
+            Serial.printf("[a2fpga] DDR3 calib retries this boot: %u\n", ddr3_retries);
+            osd_log("DDR3 CALIB RETRIES: %u", ddr3_retries);
+        }
+    }
+
+    xTaskCreatePinnedToCore(disk_task, "disk", 8192, NULL, 5, &disk_task_h, 1);
+    xTaskCreatePinnedToCore(menu_task, "menu", 8192, NULL, 4, &menu_task_h, 1);
+
+    subsystems_up = true;
+    Serial.println("[a2fpga] subsystems up");
+}
+
+// ============================================================================
 // Arduino Setup and Loop
 // ============================================================================
 
@@ -445,17 +884,30 @@ void setup() {
     delay(300);
 
     Serial.printf("A2FPGA ESP32-S3 Firmware (%s %s)\n", __DATE__, __TIME__);
-    Serial.println("Simplified version with Octal SPI support");
+    Serial.println("a2mega co-processor: menu, SD disk serving, WiFi bridge");
     Serial.println("Serial forwarding mode active. Use '+++' to enter CLI mode.");
 
     cli_mode = false;
 
     pinMode(PIN_FPGA_DONE, INPUT_PULLUP);
-    pinMode(PIN_LED0, OUTPUT);
+
+    start_subsystems();
 }
 
 void loop() {
-    digitalWrite(PIN_LED0, digitalRead(PIN_FPGA_DONE));
+    // Late bring-up: keep probing until the FPGA answers on the OSPI link
+    // (it may still be configuring at ESP32 boot).
+    if (!subsystems_up) {
+        static uint32_t last_try = 0;
+        if (millis() - last_try > 500) {
+            last_try = millis();
+            start_subsystems();
+        }
+    } else {
+        // Network servicing (W5100 doorbells + WiFi uplink), same task.
+        w5100_poll();
+        wifi_bridge_poll();
+    }
 
     // Handle USB JTAG connection changes
     bool usb_is_connected = usb_serial_jtag_is_connected();
@@ -470,7 +922,13 @@ void loop() {
     if (cli_mode) {
         if (Serial.available()) {
             String s = Serial.readStringUntil('\n');
+            // Hold the FPGA-link mutex across the whole command: the CLI's
+            // a2spi_* calls otherwise race the disk/menu/w5100 tasks'
+            // transactions on the same SPI device — live-observed as an IDF
+            // spi_device_transmit assert (ret_trans == trans_desc) crash.
+            fpga_link_lock();
             cmd_process(s);
+            fpga_link_unlock();
         }
     } else {
         if (Serial.available()) {

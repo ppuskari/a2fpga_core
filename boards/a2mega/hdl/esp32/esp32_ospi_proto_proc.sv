@@ -22,6 +22,7 @@ module esp32_ospi_proto_proc #(
 
     // Register file interface
     output reg         reg_wr_req,
+    output reg         reg_rd_req,
     output reg  [6:0]  reg_idx,
     output reg  [7:0]  reg_wdata,
     input  wire [7:0]  reg_rdata,
@@ -142,34 +143,51 @@ module esp32_ospi_proto_proc #(
     // TX data management - output on falling edge
     reg [7:0] tx_next;
 
+    // The data bus is SHARED (8-bit bidirectional, no separate MISO): the
+    // FPGA may only drive during genuine response slots, i.e. after a
+    // register-read opcode (data byte, then status byte) and during the
+    // XFER-read dummy (carries the status byte) and payload slots. Driving
+    // anywhere else — as the original port of the serial protocol did with
+    // its status byte — fights the master's push-pull outputs. The master
+    // performs a bus turnaround (TX header phase, then RX clock-only phase)
+    // for every read.
+    reg [1:0] reg_resp_cnt;   // response bytes left to drive for a reg read
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            reg_resp_cnt <= 2'd0;
+        end else if (byte_rx_stb) begin
+            if (st == ST_OPCODE && rx_byte[7] && (rx_byte[6:0] != 7'd127))
+                reg_resp_cnt <= 2'd2;             // [read data][status]
+            else if (reg_resp_cnt != 2'd0)
+                reg_resp_cnt <= reg_resp_cnt - 2'd1;
+        end
+    end
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             data_out <= 8'hFF;
             data_oe <= 0;
         end else if (sclk_fall) begin
-            // Decide what to output next
-            if (st == ST_REG_RW && op_is_read && (op_reg != 7'd127)) begin
+            if (st == ST_XPAY_RD_DMY) begin
+                data_out <= status_byte;   // dummy slot returns real status
+                data_oe <= 1;
+            end else if (st == ST_XPAY_RD) begin
+                data_out <= rd_buf_valid ? rd_buf : 8'hFF;
+                data_oe <= 1;
+            end else if (reg_resp_cnt == 2'd2) begin
+                // Live mux, NOT a value latched at the opcode strobe:
+                // reg_idx settles one clk after the strobe, and this fall is
+                // later still — a latched value is the PREVIOUS command's
+                // register (live-tested failure mode).
                 data_out <= reg_rdata;
                 data_oe <= 1;
-            end else if (load_reg_read_next) begin
-                data_out <= reg_read_value;
+            end else if (reg_resp_cnt == 2'd1) begin
+                data_out <= status_byte;
                 data_oe <= 1;
             end else begin
-                case (st)
-                    ST_XPAY_RD_DMY: begin
-                        data_out <= 8'hFF;  // Dummy byte
-                        data_oe <= 1;
-                    end
-                    ST_XPAY_RD: begin
-                        data_out <= rd_buf_valid ? rd_buf : 8'hFF;
-                        data_oe <= 1;
-                    end
-                    default: begin
-                        data_out <= status_byte;
-                        // Output enable during header phases when master expects response
-                        data_oe <= (st >= ST_OPCODE);
-                    end
-                endcase
+                data_out <= 8'hFF;
+                data_oe <= 0;              // master owns the bus
             end
         end else if (idle_expired) begin
             data_oe <= 0;
@@ -202,6 +220,7 @@ module esp32_ospi_proto_proc #(
             rd_buf_valid <= 0;
             load_reg_read_next <= 0;
             reg_wr_req <= 0;
+            reg_rd_req <= 0;
             reg_idx <= 0;
             reg_wdata <= 0;
             mem_wr_en <= 0;
@@ -214,6 +233,7 @@ module esp32_ospi_proto_proc #(
         end else begin
             // One-shots
             reg_wr_req <= 0;
+            reg_rd_req <= 0;
             mem_wr_en <= 0;
             mem_rd_req <= 0;
             status_align <= 0;
@@ -269,6 +289,7 @@ module esp32_ospi_proto_proc #(
                             if (rx_byte[7]) begin  // READ
                                 reg_read_value <= reg_rdata;
                                 load_reg_read_next <= 1;
+                                reg_rd_req <= 1;
                                 st <= ST_REG_RW;
                             end else begin  // WRITE
                                 st <= ST_REG_RW;
@@ -353,11 +374,11 @@ module esp32_ospi_proto_proc #(
                         if (len_cnt == 0) begin
                             st <= ST_DONE;
                         end else begin
-                            if (mem_space == 3'd0) begin
-                                mem_wr_addr <= addr;
-                                mem_wr_data <= rx_byte;
-                                mem_wr_en <= 1;
-                            end
+                            // Write applies to every space; the connector routes
+                            // mem_space to the right backing store.
+                            mem_wr_addr <= addr;
+                            mem_wr_data <= rx_byte;
+                            mem_wr_en <= 1;
                             len_cnt <= len_cnt - 16'd1;
                             if (sub_inc) addr <= addr + 24'd1;
                             if (len_cnt == 16'd1) st <= ST_DONE;

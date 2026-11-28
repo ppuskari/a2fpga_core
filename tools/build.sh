@@ -10,6 +10,9 @@
 #
 # Environment:
 #   GW_SH     path to gw_sh (default: macOS GowinIDE location)
+#   GPRJ      project file name to use when a board dir has more than one
+#             .gprj (e.g. GPRJ=a2n20v2_enhanced_dualrate.gprj); default is
+#             the first one alphabetically
 #   DRY_RUN=1 print what would run without invoking gw_sh
 #
 # Notes:
@@ -35,8 +38,9 @@ fi
 bdir="$REPO/boards/$board"
 [[ -d "$bdir" ]] || { echo "No such board: '$board' (see boards/)"; exit 2; }
 
-gprj="$(cd "$bdir" && ls *.gprj 2>/dev/null | head -1)"
+gprj="${GPRJ:-$(cd "$bdir" && ls *.gprj 2>/dev/null | head -1)}"
 [[ -n "$gprj" ]] || { echo "No .gprj found in $bdir"; exit 2; }
+[[ -f "$bdir/$gprj" ]] || { echo "No such project file: $bdir/$gprj"; exit 2; }
 proj="${gprj%.gprj}"
 
 case "$stage" in
@@ -82,7 +86,19 @@ fi
     exit 3
 }
 
-( cd "$bdir" && printf 'open_project %s\n%s\nexit\n' "$gprj" "$run" | "$GW_SH" )
+start_epoch="$(date +%s)"
+buildlog="$(mktemp "${TMPDIR:-/tmp}/a2fpga_build.XXXXXX")"
+( cd "$bdir" && printf 'open_project %s\n%s\nexit\n' "$gprj" "$run" | "$GW_SH" ) | tee "$buildlog"
+
+# gw_sh exits 0 even when synthesis/PnR fail — detect ERROR lines ourselves.
+if grep -qE '^ERROR' "$buildlog"; then
+    echo
+    echo "!! gw_sh reported errors — build FAILED (stale artifacts in impl/ do not count):"
+    grep -E '^ERROR' "$buildlog" | head -5
+    rm -f "$buildlog"
+    exit 4
+fi
+rm -f "$buildlog"
 
 # ---- Post-build timing check (required after place & route) ----
 if [[ "$stage" == "all" ]]; then
@@ -91,6 +107,12 @@ if [[ "$stage" == "all" ]]; then
     echo
     if [[ ! -f "$fs" ]]; then
         echo "!! No bitstream produced ($fs). Check the synthesis/PnR log for errors."
+        exit 4
+    fi
+    # A pre-existing bitstream from an earlier build must not pass as success.
+    fs_mtime="$(stat -f %m "$fs" 2>/dev/null || stat -c %Y "$fs" 2>/dev/null)"
+    if [[ -n "$fs_mtime" && "$fs_mtime" -lt "$start_epoch" ]]; then
+        echo "!! Bitstream is STALE (predates this build) — the run did not produce a new one."
         exit 4
     fi
     echo ">> Bitstream: boards/$board/impl/pnr/${proj}.fs"

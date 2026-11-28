@@ -734,11 +734,30 @@ extern void usbh_hubport_release(struct usbh_hubport *hport);
  * or the CPU reads back a stale cached line (all zeros) after the transfer. */
 static USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t sup_status_buf[32];
 
-/* GET_PORT_STATUS clone of the hub driver's static helper. */
+/* GET_PORT_STATUS clone of the hub driver's static helper. The driver's own
+ * wrapper is static, so mirror its roothub split here: an external hub answers
+ * over EP0, while the roothub is served synchronously by the HCD's virtual hub
+ * (usbh_roothub_control), which reports CONNECTION/ENABLE and the LOWSPEED/
+ * HIGHSPEED bits straight out of PORTSC — so the speed derivation below works
+ * unchanged for both. hub->parent is NULL on the roothub; never deref it. */
 static int sup_get_portstatus(struct usbh_hub *hub, uint8_t port,
                               struct hub_port_status *ps)
 {
-    struct usb_setup_packet *setup = hub->parent->setup;
+    struct usb_setup_packet rh_setup;
+    struct usb_setup_packet *setup;
+
+    if (hub->is_roothub) {
+        setup = &rh_setup;
+        setup->bmRequestType = USB_REQUEST_DIR_IN | USB_REQUEST_CLASS |
+                               USB_REQUEST_RECIPIENT_OTHER;
+        setup->bRequest = HUB_REQUEST_GET_STATUS;
+        setup->wValue = 0;
+        setup->wIndex = port;
+        setup->wLength = 4;
+        return usbh_roothub_control(hub->bus, setup, (uint8_t *)ps);
+    }
+
+    setup = hub->parent->setup;
     setup->bmRequestType = USB_REQUEST_DIR_IN | USB_REQUEST_CLASS |
                            USB_REQUEST_RECIPIENT_OTHER;
     setup->bRequest = HUB_REQUEST_GET_STATUS;
@@ -758,7 +777,17 @@ static int sup_get_portstatus(struct usbh_hub *hub, uint8_t port,
  * settled devices never generate one (and this hub has no real per-port
  * power switching, so a power-cycle kick does nothing). Do what the driver
  * would do on a connect change: reset the port, then build and enumerate
- * the child hubport (mirrors usbh_hub_events' connect tail). */
+ * the child hubport (mirrors usbh_hub_events' connect tail).
+ *
+ * Works on the ROOTHUB as well as external hubs, and that is the only rung
+ * that helps when VBUS is held up externally (see usb_vbus_externally_held):
+ * a settled root port sits at CCS=1 with no connect-CHANGE pending, so the
+ * HCD's connect handler never re-fires and the reset must be issued by hand.
+ * usbh_hub_set_feature/clear_feature already dispatch to the HCD's virtual
+ * hub for a roothub, and SET_FEATURE(PORT_RESET) lands in the EHCI driver's
+ * own usbh_reset_port() — clear PE, assert PR, hold 55 ms, release, poll —
+ * so the reset timing is the driver's, not ours. The roothub's nports/bus
+ * fields are populated by usbh_hub_initialize(), so the loop below is safe. */
 static int usb_hub_adopt_ports(struct usbh_hub *hub)
 {
     int adopted = 0;
@@ -808,8 +837,19 @@ static int usb_hub_adopt_ports(struct usbh_hub *hub)
         child->mutex = usb_osal_mutex_create();
 
         if (usbh_enumerate(child) < 0) {
+            /* Log what we got before releasing: usbh_enumerate() fills in
+             * device_desc long before the class-driver step that usually
+             * fails, and usbh_hubport_release() does not clear it. CLASS 09
+             * is a hub, and a hub that reaches this point but will not attach
+             * is almost always one of CherryUSB's two silent -USB_ERR_NOMEM
+             * hard limits: bNbrPorts > CONFIG_USBHOST_MAX_EHPORTS, or
+             * wTotalLength > CONFIG_USBHOST_REQUEST_BUFFER_LEN. Both only
+             * ever print over UART, which no bench machine has attached. */
+            osd_log("USB: PORT %d ENUM FAILED %04X:%04X CLASS %02X",
+                    port + 1, child->device_desc.idVendor,
+                    child->device_desc.idProduct,
+                    child->device_desc.bDeviceClass);
             usbh_hubport_release(child);
-            osd_log("USB: PORT %d ENUM FAILED", port + 1);
         } else {
             adopted++;
         }
@@ -858,6 +898,47 @@ static int usb_leaf_count(struct usbh_hub *hub)
     }
     return n;
 }
+
+/* BL616 USB block registers used by the enumeration supervisor. */
+#define USB_PORTSC_ADDR  0x20072030u   /* bit0 = CCS, root-port connect status */
+#define USB_OTG_CSR_ADDR 0x20072080u   /* bit5 = A_BUS_DROP_HOV, bit4 = A_BUS_REQ_HOV */
+
+/* Is something other than us driving VBUS? A self-powered hub that back-feeds
+ * the rail (USB-C PD-passthrough hubs do this by design) leaves us unable to
+ * power-cycle the downstream tree at all, which makes every VBUS-based
+ * recovery rung inert.
+ *
+ * The OTG core cannot answer this directly: bflb_usb_phy_init() puts VBUS-valid
+ * into SOFTWARE-FORCED mode (sets PDS_REG_USB_VBUS_VALID_FORCE, clears
+ * VALID_FROM_PHY and VALID_FROM_GPIO), so the valid bit reads asserted no
+ * matter what the rail is actually doing — reading it back would tell us
+ * nothing. Probe the effect instead: drop VBUS briefly and watch the root port.
+ * A rail we own collapses the device's D+ pull-up and CCS clears; if CCS
+ * survives the drop, someone else is holding VBUS up.
+ *
+ * 300 ms is for pull-up collapse only, not the full >1 s discharge the VBUS
+ * CYCLE rung needs, so this stays cheap enough to run once per stall episode. */
+static bool usb_vbus_externally_held(void)
+{
+    volatile uint32_t *otg = (volatile uint32_t *)USB_OTG_CSR_ADDR;
+    uint32_t v;
+
+    v = *otg;
+    *otg = (v | (1u << 5)) & ~(1u << 4);       /* DROP=1, REQ=0 -> VBUS off */
+    usb_osal_msleep(300);
+    bool held = (*(volatile uint32_t *)USB_PORTSC_ADDR & 1u) != 0;
+    v = *otg;
+    *otg = (v & ~(1u << 5)) | (1u << 4);       /* DROP=0, REQ=1 -> VBUS on  */
+    /* Let the port re-register the connect before returning: the caller runs
+     * an adopt pass immediately, and at 50 ms the root port still reported no
+     * CONNECTION, so the first rung was silently wasted (observed on the bench
+     * as ROOT PORT 1/5 -> ADOPTED 0 with no ADOPTING line, then a working
+     * ROOT PORT 2/5 eight seconds later). */
+    usb_osal_msleep(500);
+
+    return held;
+}
+
 void disk_poll(void)
 {
     /* Stamp the actual Apple /RES release the moment it is observable -- the
@@ -865,9 +946,11 @@ void disk_poll(void)
      * write, so poll from the top of every tick rather than from the release
      * path (which made the stamp an upper bound). One reg read per 2 ms tick,
      * and only until the release is seen. */
-    if (!bt_reset_released() &&
-        (fpga_spi_reg_read(0x06) & FPGA_STATUS_A2BUS_RESET_N))
-        bt_mark(BT_RST_RELEASED);
+    if (!bt_reset_released()) {
+        const uint8_t status = fpga_spi_reg_read(0x06);
+        if (status != 0xFFu && (status & FPGA_STATUS_A2BUS_RESET_N))
+            bt_mark(BT_RST_RELEASED);
+    }
 
     if (g_remount_req) {
         g_remount_req = false;
@@ -883,70 +966,62 @@ void disk_poll(void)
      * still boots. The FPGA has its own 15 s backstop should we never write. */
     {
         static bool s_released = false;
+        static uint64_t next_retry_us = 0;
         if (!s_released) {
             bool any = false;
             for (int v = 0; v < NDRV; v++) any = any || g_mounted[v];
             for (int u = 0; u < NHDD; u++) any = any || g_hdd_mounted[u];
-            if (any) bt_mark(BT_MOUNT_FOUND);   /* first volume seen (pre-release) */
-            if ((any && !g_remount_req) ||
-                bflb_mtimer_get_time_us() > 7000000u) {
-                /* Fallback slot-map apply: normally main() already programmed
-                 * and strobed the map (readback-verified, g_slots_applied_early)
-                 * and /RES released on that strobe per the reset contract. Only
-                 * if the early apply could not be confirmed do we program here
-                 * -- this late in boot the SPI link is proven good (the mounts
-                 * above ran over it), and the Apple II is STILL held in reset
-                 * (the gateware waits for the 0x6B strobe), so the reconfig
-                 * remains race-free. Never re-strobe once applied: the Apple
-                 * is running by then and a slotmaker reconfig mid-run would
-                 * glitch card decode. 0xFF = hardware default. */
-                if (!g_slots_applied_early) {
+            if (any) bt_mark(BT_MOUNT_FOUND);
+            const uint64_t now_us = bflb_mtimer_get_time_us();
+            const bool deadline = now_us > 7000000u;
+            if ((deadline || (any && !g_remount_req)) &&
+                now_us >= next_retry_us) {
+                next_retry_us = now_us + 100000u;
+                /* 0x6B may release /RES: verify audio FIRST. */
+                const bool audio_ok = menu_audio_apply_saved_before_release();
+                bool slots_ok = g_slots_applied_early;
+                if (!slots_ok && audio_ok && !bt_reset_released()) {
+                    slots_ok = true;
                     for (int i = 0; i < 8; i++) {
-                        uint8_t c = settings()->slot_cards[i];
-                        if (c == 0xFF)
-                            c = settings_slot_hw_defaults[i];
-                        fpga_spi_reg_write((uint8_t)(0x60 + i), c);
+                        uint8_t c = settings_slot_effective(i);
+                        bool good = false;
+                        for (int a = 0; a < 5 && !good; a++) {
+                            fpga_spi_reg_write((uint8_t)(0x60 + i), c);
+                            good = fpga_spi_reg_read((uint8_t)(0x60 + i)) == c;
+                        }
+                        slots_ok = slots_ok && good;
                     }
-                    fpga_spi_reg_write(0x6B, 1);   /* slotmaker reconfig strobe */
-                    bt_mark(BT_SLOTS_APPLIED);
+                    if (slots_ok) {
+                        fpga_spi_reg_write(REG_CARDROM_REL, 1);
+                        fpga_spi_reg_write(0x6B, 1);
+                        g_slots_applied_early = true;
+                        bt_mark(BT_SLOTS_APPLIED);
+                    }
                 }
-                osd_log("SLOTS: %d %d %d %d %d %d %d %d",
-                        fpga_spi_reg_read(0x60), fpga_spi_reg_read(0x61),
-                        fpga_spi_reg_read(0x62), fpga_spi_reg_read(0x63),
-                        fpga_spi_reg_read(0x64), fpga_spi_reg_read(0x65),
-                        fpga_spi_reg_read(0x66), fpga_spi_reg_read(0x67));
-
-                /* AUDIOCFG COLD: M641 reports early-main SPI writes can
-                 * be dropped. Storage has now mounted over the same
-                 * link, so retry the saved 0x6F mode with A3 readback
-                 * BEFORE CardROM and Apple /RES release. 0x6F is live
-                 * and lock-free; this does not alter the slot map,
-                 * Apple reset, USB scheduling or physical Disk II. */
-                menu_audio_apply_saved_before_release();
-
-                /* Release the CardROM INH overlay BEFORE the Apple II
-                 * starts: releasing after opens a race where the CPU's
-                 * first $FFFC fetch reads the CardROM stub vector and the
-                 * machine strands in the keyboard stub until a manual
-                 * reset. (The CardROM is also parameter-disabled in HDL
-                 * until the keyboard-snoop bootstrap is finished.) */
-                fpga_spi_reg_write(REG_CARDROM_REL, 1);
-
-                /* Robust A2_RST_RELEASE: the single 0x2E write has been observed
-                 * to get LOST on the SPI link -> the FPGA never sees it and
-                 * falls through to its 15 s backstop instead of releasing here.
-                 * Write, read back reg 0x2E bit0 (a2_rst_release_r), and retry
-                 * until it sticks. Bounded, one-time, microsecond-scale. */
-                bt_mark(BT_RST_WRITE);
-                int rst_ok = 0;
-                for (int a = 0; a < 5; a++) {
-                    fpga_spi_reg_write(0x2E, 1);        /* A2_RST_RELEASE */
-                    if (fpga_spi_reg_read(0x2E) & 0x01) { rst_ok = 1; break; }
-                    bflb_mtimer_delay_us(50);
+                /* Retry without blocking disk/media service. At the existing
+                 * seven-second deadline, explicitly allow degraded boot;
+                 * never strobe an unverified map or re-strobe a running bus. */
+                if ((audio_ok && slots_ok) || deadline || bt_reset_released()) {
+                    if (!audio_ok || !slots_ok)
+                        osd_log("M4 BOOT DEGRADED: AUDIO=%u SLOTS=%u",
+                                (unsigned)audio_ok, (unsigned)slots_ok);
+                    osd_log("SLOTS: %d %d %d %d %d %d %d %d",
+                            fpga_spi_reg_read(0x60), fpga_spi_reg_read(0x61),
+                            fpga_spi_reg_read(0x62), fpga_spi_reg_read(0x63),
+                            fpga_spi_reg_read(0x64), fpga_spi_reg_read(0x65),
+                            fpga_spi_reg_read(0x66), fpga_spi_reg_read(0x67));
+                    fpga_spi_reg_write(REG_CARDROM_REL, 1);
+                    bt_mark(BT_RST_WRITE);
+                    int rst_ok = 0;
+                    for (int a = 0; a < 5; a++) {
+                        fpga_spi_reg_write(0x2E, 1);
+                        if (fpga_spi_reg_read(0x2E) & 0x01) { rst_ok = 1; break; }
+                        bflb_mtimer_delay_us(50);
+                    }
+                    s_released = true;
+                    osd_log("A2: RESET RELEASED%s%s", any ? "" : " (NO MEDIA)",
+                            rst_ok ? "" : " (0x2E UNCONFIRMED)");
                 }
-                s_released = true;
-                osd_log("A2: RESET RELEASED%s%s", any ? "" : " (NO MEDIA)",
-                        rst_ok ? "" : " (0x2E UNCONFIRMED)");
             }
         }
         /* (BT_RST_RELEASED is stamped at the top of disk_poll, independent of
@@ -1068,25 +1143,49 @@ void disk_poll(void)
     {
         static uint32_t sup_cnt;
         static int      stall_s, attempts;
+        static bool     vbus_held;
         if (++sup_cnt >= 500) {          /* ~1 s of 2 ms polls */
             sup_cnt = 0;
-            uint32_t portsc = *(volatile uint32_t *)(0x20072030u);
+            uint32_t portsc = *(volatile uint32_t *)USB_PORTSC_ADDR;
             int leaves = usb_leaf_count(&g_usbhost_bus[0].hcd.roothub);
             if ((portsc & 1u) && leaves == 0)
                 stall_s++;
             else {
                 stall_s = 0;
-                if (leaves > 0)
-                    attempts = 0;
+                if (leaves > 0) {
+                    attempts  = 0;
+                    vbus_held = false;
+                }
             }
             if (stall_s >= 8 && attempts < 5) {
                 attempts++;
                 stall_s = 0;
+
+                /* Probe VBUS ownership once per stall episode. If an external
+                 * source holds the rail we skip the VBUS CYCLE rung entirely:
+                 * it cannot drop a rail it does not drive, so it would burn
+                 * two attempts (~2.5 s each) doing provably nothing. */
+                if (attempts == 1) {
+                    vbus_held = usb_vbus_externally_held();
+                    if (vbus_held)
+                        osd_log("USB: VBUS HELD EXTERNALLY");
+                }
+
                 struct usbh_hub *stalled =
                     find_stalled_hub(&g_usbhost_bus[0].hcd.roothub);
-                if (stalled && attempts <= 2) {
+                if (stalled && attempts == 1) {
                     osd_log("USB: ENUM STALLED - ADOPT %d/5", attempts);
                     int n = usb_hub_adopt_ports(stalled);
+                    osd_log("USB: ADOPTED %d DEVICE(S)", n);
+                } else if (attempts <= 2 || (vbus_held && attempts <= 4)) {
+                    /* Root-port rung. The failure this catches is a root port
+                     * that is settled at CCS=1 with no connect-CHANGE pending
+                     * — the HCD's connect handler only fires on the change, so
+                     * nothing ever enumerates and the hub device itself never
+                     * gets an address. Needs no VBUS control, so it is the one
+                     * rung that still works against a back-fed rail. */
+                    osd_log("USB: ENUM STALLED - ROOT PORT %d/5", attempts);
+                    int n = usb_hub_adopt_ports(&g_usbhost_bus[0].hcd.roothub);
                     osd_log("USB: ADOPTED %d DEVICE(S)", n);
                 } else if (attempts <= 4) {
                     /* Real power cycle for the downstream tree: >1 s VBUS
@@ -1097,7 +1196,7 @@ void disk_poll(void)
                      * and the whole tree enumerates as on a cold boot. */
                     osd_log("USB: ENUM STALLED - VBUS CYCLE %d/5", attempts);
                     volatile uint32_t *otg =
-                        (volatile uint32_t *)(0x20072080u);
+                        (volatile uint32_t *)USB_OTG_CSR_ADDR;
                     uint32_t v = *otg;
                     v |= (1u << 5);            /* USB_A_BUS_DROP_HOV */
                     v &= ~(1u << 4);           /* USB_A_BUS_REQ_HOV  */

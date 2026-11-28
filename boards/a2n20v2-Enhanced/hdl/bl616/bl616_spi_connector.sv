@@ -47,6 +47,7 @@ module bl616_spi_connector #(
     input  wire        sdram_init_complete_i,
     output wire        mcu_ready_o,
     output wire        standalone_o,   // high once standalone fallback engages (no BL616)
+    output wire        mcu_access_stb_o, // pulses on any MCU register transaction (liveness watchdog feed)
     output wire [39:0] scratch_o,      // 5 MCU scratch regs packed {s4,s3,s2,s1,s0} (0x07,0x0C-0x0F)
     output wire [1:0]  audio_mode_o,   // FPGA-accepted boot selection
     input  wire [1:0]  audio_active_route_i, // A3 live mixer-select identity
@@ -74,6 +75,11 @@ module bl616_spi_connector #(
     output wire        fifo_pop,
     output reg  [2:0]  capture_mode_o,
     output reg         capture_enable_o,
+    output reg         oneshot_o,
+    output reg         trig_enable_o,
+    output reg  [15:0] trig_addr_o,
+    output reg  [15:0] trig_mask_o,
+    input  wire        trig_matched_i,
 
     // Uthernet2 (W5100) backing store -- SPI memory SPACE 3 (port B of the card)
     output wire        w5100_host_wr,
@@ -199,12 +205,26 @@ module bl616_spi_connector #(
     // -------------------------------------------------------
     // MCU ready detection -- latches on first STATUS register read
     // -------------------------------------------------------
+    // MCU-alive latch. Historically this required a read of STATUS (0x06),
+    // but the protocol processor answers status reads from its internal
+    // fast path without pulsing reg_rd_req — so the latch never fired, the
+    // standalone fallback engaged on every boot, and (critically) the
+    // "MCU absent" reset escape released the Apple II at 3 s regardless of
+    // whether storage was mounted — the cold-boot half-booted-garbage bug.
+    // Any register transaction proves the MCU is alive (the firmware
+    // writes debug scratch registers within milliseconds of boot).
     reg mcu_ready_r;
     assign mcu_ready_o = mcu_ready_r;
+    // Same "any transaction proves the MCU is alive" signal, but continuous:
+    // feeds the FPGA-side liveness watchdog (mcu_status_led) that turns the
+    // WS2812 blinking red when the firmware goes silent (wedged update, dead
+    // app region). Status fast-path reads don't pulse these (see above), but
+    // disk_poll's data-register reads every ~2 ms do.
+    assign mcu_access_stb_o = reg_rd_req || reg_wr_req;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)
             mcu_ready_r <= 1'b0;
-        else if (reg_rd_req && reg_idx == 7'h06)
+        else if (reg_rd_req || reg_wr_req)
             mcu_ready_r <= 1'b1;
     end
 
@@ -247,8 +267,10 @@ module bl616_spi_connector #(
     //   - the absolute backstop expires (MCU alive but never released).
     localparam RST_MCU_ALIVE_WAIT = CLOCK_SPEED_HZ * 3;   // MCU first SPI contact
     localparam RST_HOLD_BACKSTOP  = CLOCK_SPEED_HZ * 15;  // never hold forever
+    localparam RST_NATIVE_HOLD    = CLOCK_SPEED_HZ / 4;   // ~250 ms: native-like minimum
     localparam RST_CW = $clog2(RST_HOLD_BACKSTOP + 1);
     reg               a2_rst_release_r;   // set by reg 0x2E write
+    reg               slots_configured_r; // set by reg 0x6B (slot reconfig strobe)
     reg [RST_CW-1:0]  rst_hold_cnt_r;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n || audio_boot_rearm_pulse_r)
@@ -258,8 +280,16 @@ module bl616_spi_connector #(
     end
     wire rst_mcu_absent_w = !mcu_ready_r &&
                             (rst_hold_cnt_r >= RST_MCU_ALIVE_WAIT[RST_CW-1:0]);
+    // RESET CONTRACT: Apple /RES releases only after the slot map has been
+    // loaded and the virtual cards know which slots they occupy -- i.e. on the
+    // firmware's 0x6B reconfig strobe (slots_configured_r). Fallbacks keep a
+    // machine bootable in every failure mode: explicit 0x2E release (legacy /
+    // manual), MCU-absent (standalone Apple, 3 s), and the 15 s absolute
+    // backstop (MCU alive but never configures). Note the release only reaches
+    // the wire once the bridge SM is running (`ready` below), so the effective
+    // earliest release is max(bridge start, slot strobe).
     assign a2bus_control_if.reset_hold =
-        !(a2_rst_release_r || rst_mcu_absent_w ||
+        !(slots_configured_r || a2_rst_release_r || rst_mcu_absent_w ||
           rst_hold_cnt_r >= RST_HOLD_BACKSTOP[RST_CW-1:0]);
 
     // -------------------------------------------------------
@@ -359,7 +389,17 @@ module bl616_spi_connector #(
     // -------------------------------------------------------
     // Interface assignments -- A2 bus control
     // -------------------------------------------------------
-    assign a2bus_control_if.ready = a2bus_ready_r || standalone_r;
+    // Bus-ready: the firmware's explicit reg 0x30 write, the standalone
+    // fallback, or the ~250 ms native timer. The bridge SM parks in IO_INIT
+    // (driving nothing -- Apple /RES stays held by the CPLD's power-on
+    // default) until `ready`; the 0x30 write is issued in early main() where
+    // SPI writes are occasionally LOST, and falling all the way to the 15 s
+    // backstop wedged startup. The native timer starts the bridge (and thus
+    // makes /RES release reachable) independent of that fragile write; the
+    // actual release still waits for the slot-map strobe per the reset
+    // contract above.
+    assign a2bus_control_if.ready = a2bus_ready_r || standalone_r ||
+                                    (rst_hold_cnt_r >= RST_NATIVE_HOLD[RST_CW-1:0]);
     assign cardrom_release_o = cardrom_release_r;
 
     // -------------------------------------------------------
@@ -457,17 +497,32 @@ module bl616_spi_connector #(
     reg [WF_AW:0] wf_wptr_r, wf_rptr_r; // extra MSB distinguishes full vs empty
     wire          wf_empty = (wf_wptr_r == wf_rptr_r);
 
-    // Read cache: serve sequential byte reads of a word from one SDRAM read
-    reg [31:0] rdc_word_r;
-    reg [20:0] rdc_waddr_r;
-    reg        rdc_valid_r;
+    // Read cache, two slots: slot 0 = current word, slot 1 = prefetched
+    // next word. XFER reads stream sequential bytes against a hard SPI
+    // byte deadline (~2us at 4 MHz); a single-word cache made byte 0 of
+    // every word a full SDRAM round trip against that deadline, and under
+    // port contention (framebuffer line fetches, storage arbitration) a
+    // late response made the protocol FSM emit a stale byte and shift the
+    // rest of the stream — seen on hardware as corrupted HDD write-backs.
+    // Prefetching word+1 while bytes 1-3 of the current word stream out
+    // turns the deadline into ~6us and makes sequential reads all-hit.
+    reg [31:0] rdc_word_r  [1:0];
+    reg [20:0] rdc_waddr_r [1:0];
+    reg        rdc_valid_r [1:0];
 
-    // Pending / in-flight read (held until the port is available, never dropped)
+    // Pending / in-flight demand read (held until served, never dropped)
     reg        rd_pending_r;
     reg [20:0] rd_waddr_r;
     reg [1:0]  rd_bsel_r;
     reg        rd_inflight_r;       // SDRAM read issued, awaiting mem_if.ready
     reg [1:0]  rd_inflight_bsel_r;
+    reg        rd_inflight_pf_r;    // in-flight read is a prefetch (no SPI response)
+    reg        rd_inflight_slot_r;  // cache slot the completion fills
+
+    // Prefetch request (speculative next word for sequential XFER streams)
+    reg        pf_pending_r;
+    reg [20:0] pf_waddr_r;
+    reg        pf_slot_r;
 
     // SDRAM read response byte (to the read mux)
     reg        sdram_rd_resp_valid_r;
@@ -500,14 +555,22 @@ module bl616_spi_connector #(
             acc_idle_r  <= 8'd0;
             wf_wptr_r   <= '0;
             wf_rptr_r   <= '0;
-            rdc_word_r  <= 32'd0;
-            rdc_waddr_r <= 21'd0;
-            rdc_valid_r <= 1'b0;
+            rdc_word_r[0]  <= 32'd0;
+            rdc_word_r[1]  <= 32'd0;
+            rdc_waddr_r[0] <= 21'd0;
+            rdc_waddr_r[1] <= 21'd0;
+            rdc_valid_r[0] <= 1'b0;
+            rdc_valid_r[1] <= 1'b0;
             rd_pending_r  <= 1'b0;
             rd_waddr_r    <= 21'd0;
             rd_bsel_r     <= 2'd0;
             rd_inflight_r <= 1'b0;
             rd_inflight_bsel_r <= 2'd0;
+            rd_inflight_pf_r   <= 1'b0;
+            rd_inflight_slot_r <= 1'b0;
+            pf_pending_r <= 1'b0;
+            pf_waddr_r   <= 21'd0;
+            pf_slot_r    <= 1'b0;
             sdram_rd_resp_valid_r <= 1'b0;
             sdram_rd_resp_data_r  <= 8'h00;
             mem_if_wr_r <= 1'b0;
@@ -521,19 +584,21 @@ module bl616_spi_connector #(
             mem_if_rd_r <= 1'b0;
             sdram_rd_resp_valid_r <= 1'b0;
 
-            // ---- 1) Capture SDRAM read completion ----
+            // ---- 1) Capture SDRAM read completion (demand or prefetch) ----
             if (mem_if.ready && rd_inflight_r) begin
-                rdc_word_r    <= mem_if.q[31:0];
-                rdc_waddr_r   <= rd_waddr_r;
-                rdc_valid_r   <= 1'b1;
+                rdc_word_r[rd_inflight_slot_r]  <= mem_if.q[31:0];
+                rdc_waddr_r[rd_inflight_slot_r] <= mem_if_addr_r;
+                rdc_valid_r[rd_inflight_slot_r] <= 1'b1;
                 rd_inflight_r <= 1'b0;
-                case (rd_inflight_bsel_r)
-                    2'd0: sdram_rd_resp_data_r <= mem_if.q[7:0];
-                    2'd1: sdram_rd_resp_data_r <= mem_if.q[15:8];
-                    2'd2: sdram_rd_resp_data_r <= mem_if.q[23:16];
-                    2'd3: sdram_rd_resp_data_r <= mem_if.q[31:24];
-                endcase
-                sdram_rd_resp_valid_r <= 1'b1;
+                if (!rd_inflight_pf_r) begin
+                    case (rd_inflight_bsel_r)
+                        2'd0: sdram_rd_resp_data_r <= mem_if.q[7:0];
+                        2'd1: sdram_rd_resp_data_r <= mem_if.q[15:8];
+                        2'd2: sdram_rd_resp_data_r <= mem_if.q[23:16];
+                        2'd3: sdram_rd_resp_data_r <= mem_if.q[31:24];
+                    endcase
+                    sdram_rd_resp_valid_r <= 1'b1;
+                end
             end
 
             // ---- 2) Accept XFER writes (never stalls: accumulator + FIFO) ----
@@ -576,9 +641,11 @@ module bl616_spi_connector #(
                         acc_word_r  <= 32'd0;
                     end
                 end
-                // Invalidate read cache on write to the cached word
-                if (rdc_valid_r && (mem_wr_addr[23:2] == rdc_waddr_r))
-                    rdc_valid_r <= 1'b0;
+                // Invalidate read cache on write to a cached word
+                if (rdc_valid_r[0] && (mem_wr_addr[23:2] == rdc_waddr_r[0]))
+                    rdc_valid_r[0] <= 1'b0;
+                if (rdc_valid_r[1] && (mem_wr_addr[23:2] == rdc_waddr_r[1]))
+                    rdc_valid_r[1] <= 1'b0;
             end else if (acc_valid_r && (acc_idle_r >= ACC_IDLE_FLUSH || rd_pending_r)) begin
                 // Flush the final partial word: end-of-burst, or to order before a
                 // pending read (write-before-read). Single accumulator-flush site,
@@ -594,24 +661,52 @@ module bl616_spi_connector #(
                 acc_idle_r <= acc_idle_r + 8'd1;
             end
 
-            // ---- 3) Accept a read request: cache hit serves now, else mark pending ----
+            // ---- 3) Accept a read request: cache hit serves now, else mark pending.
+            //         Sequential streams also trigger a speculative prefetch of the
+            //         next word into the other slot. ----
             if (mem_rd_req && (mem_rd_space == 3'd1)) begin
-                if (rdc_valid_r && (mem_rd_addr[23:2] == rdc_waddr_r)) begin
+                if (rdc_valid_r[0] && (mem_rd_addr[23:2] == rdc_waddr_r[0])) begin
                     case (mem_rd_addr[1:0])
-                        2'd0: sdram_rd_resp_data_r <= rdc_word_r[7:0];
-                        2'd1: sdram_rd_resp_data_r <= rdc_word_r[15:8];
-                        2'd2: sdram_rd_resp_data_r <= rdc_word_r[23:16];
-                        2'd3: sdram_rd_resp_data_r <= rdc_word_r[31:24];
+                        2'd0: sdram_rd_resp_data_r <= rdc_word_r[0][7:0];
+                        2'd1: sdram_rd_resp_data_r <= rdc_word_r[0][15:8];
+                        2'd2: sdram_rd_resp_data_r <= rdc_word_r[0][23:16];
+                        2'd3: sdram_rd_resp_data_r <= rdc_word_r[0][31:24];
                     endcase
                     sdram_rd_resp_valid_r <= 1'b1;
+                    // Past the first byte of this word and the next word is not
+                    // cached: prefetch it into the other slot.
+                    if (mem_rd_addr[1:0] != 2'd0 &&
+                        !(rdc_valid_r[1] && rdc_waddr_r[1] == (mem_rd_addr[23:2] + 21'd1)))
+                    begin
+                        pf_pending_r <= 1'b1;
+                        pf_waddr_r   <= mem_rd_addr[23:2] + 21'd1;
+                        pf_slot_r    <= 1'b1;
+                    end
+                end else if (rdc_valid_r[1] && (mem_rd_addr[23:2] == rdc_waddr_r[1])) begin
+                    case (mem_rd_addr[1:0])
+                        2'd0: sdram_rd_resp_data_r <= rdc_word_r[1][7:0];
+                        2'd1: sdram_rd_resp_data_r <= rdc_word_r[1][15:8];
+                        2'd2: sdram_rd_resp_data_r <= rdc_word_r[1][23:16];
+                        2'd3: sdram_rd_resp_data_r <= rdc_word_r[1][31:24];
+                    endcase
+                    sdram_rd_resp_valid_r <= 1'b1;
+                    if (mem_rd_addr[1:0] != 2'd0 &&
+                        !(rdc_valid_r[0] && rdc_waddr_r[0] == (mem_rd_addr[23:2] + 21'd1)))
+                    begin
+                        pf_pending_r <= 1'b1;
+                        pf_waddr_r   <= mem_rd_addr[23:2] + 21'd1;
+                        pf_slot_r    <= 1'b0;
+                    end
                 end else begin
                     rd_pending_r <= 1'b1;
                     rd_waddr_r   <= mem_rd_addr[23:2];
                     rd_bsel_r    <= mem_rd_addr[1:0];
+                    pf_pending_r <= 1'b0;   // demand read supersedes any stale prefetch
                 end
             end
 
-            // ---- 4) SDRAM arbiter: writes drain before reads (preserves ordering) ----
+            // ---- 4) SDRAM arbiter: writes drain before reads (preserves
+            //         ordering); demand reads before prefetches ----
             if (mem_if.available && !mem_if_wr_r && !mem_if_rd_r && !rd_inflight_r) begin
                 if (!wf_empty) begin
                     // Pop one queued word -> SDRAM write
@@ -626,7 +721,17 @@ module bl616_spi_connector #(
                     mem_if_rd_r   <= 1'b1;
                     rd_inflight_r <= 1'b1;
                     rd_inflight_bsel_r <= rd_bsel_r;
+                    rd_inflight_pf_r   <= 1'b0;
+                    rd_inflight_slot_r <= 1'b0;
                     rd_pending_r  <= 1'b0;
+                end else if (pf_pending_r && !acc_valid_r) begin
+                    // Idle -> speculative prefetch of the next stream word
+                    mem_if_addr_r <= pf_waddr_r;
+                    mem_if_rd_r   <= 1'b1;
+                    rd_inflight_r <= 1'b1;
+                    rd_inflight_pf_r   <= 1'b1;
+                    rd_inflight_slot_r <= pf_slot_r;
+                    pf_pending_r  <= 1'b0;
                 end
             end
         end
@@ -864,6 +969,13 @@ module bl616_spi_connector #(
             7'h17: reg_rdata = {7'b0, col80_r};
             7'h18: reg_rdata = {7'b0, altchar_r};
             7'h19: reg_rdata = {7'b0, shrg_mode_r};
+            // bus-event FIFO trigger (freeze-on-match)
+            7'h1A: reg_rdata = {6'b0, trig_matched_i, trig_enable_o};
+            7'h1B: reg_rdata = trig_addr_o[7:0];
+            7'h1C: reg_rdata = trig_addr_o[15:8];
+            7'h1D: reg_rdata = trig_mask_o[7:0];
+            7'h1E: reg_rdata = trig_mask_o[15:8];
+            7'h1F: reg_rdata = {7'b0, oneshot_o};
 
             // Page 2: Video colors & keyboard
             7'h20: reg_rdata = {4'b0, text_color_r};
@@ -1010,6 +1122,7 @@ module bl616_spi_connector #(
             keycode_r         <= 8'd0;
             a2bus_ready_r     <= 1'b0;
             a2_rst_release_r  <= 1'b0;
+            slots_configured_r <= 1'b0;
             cardrom_release_r <= 1'b0;
             a2_reset_r        <= 1'b0;
             a2_cmd_r          <= 8'd0;
@@ -1039,7 +1152,16 @@ module bl616_spi_connector #(
             led_o            <= 5'd0;
             ws2812_o         <= 1'b0;
             capture_mode_o   <= 3'd0;
-            capture_enable_o <= 1'b0;
+            // Debug-friendly defaults: capture armed from config with oneshot
+            // set, so the FIFO always holds the FIRST 512 bus cycles after
+            // /RES release (reset-vector fetch + boot run-up) with no MCU
+            // involvement -- free field boot-forensics. Firmware/telnet can
+            // flip to rolling (0x1F=0) or disable capture (0x79=0) at will.
+            capture_enable_o <= 1'b1;
+            oneshot_o        <= 1'b1;
+            trig_enable_o    <= 1'b0;
+            trig_addr_o      <= 16'd0;
+            trig_mask_o      <= 16'd0;
             fifo_reg_pop_r   <= 1'b0;
             sd_cs_n_r        <= 1'b1;
             sd_slow_clk_r    <= 1'b1;
@@ -1165,7 +1287,10 @@ module bl616_spi_connector #(
                     end
                     7'h68: led_o    <= reg_wdata[4:0];
                     7'h69: ws2812_o <= reg_wdata[0];
-                    7'h6B: slot_reconfig_r <= 1'b1; // slots ONLY
+                    7'h6B: begin
+                        slot_reconfig_r    <= 1'b1;
+                        slots_configured_r <= 1'b1;  // reset contract: slot map is in -> /RES may release
+                    end
 
                     // SD card registers
                     7'h6C: begin
@@ -1188,6 +1313,7 @@ module bl616_spi_connector #(
                         // a mode 0..3 does not reset, rearm, or lock anything.
                         if (reg_wdata == 8'hF0) begin
                             a2_rst_release_r <= 1'b0;
+                            slots_configured_r <= 1'b0;
                             audio_boot_rearm_pulse_r <= 1'b1;
                                         end else if (reg_wdata[7:2] == 6'd0) begin
                             audio_mode_r <= reg_wdata[1:0];
@@ -1198,6 +1324,12 @@ module bl616_spi_connector #(
                     7'h77: fifo_reg_pop_r  <= 1'b1;  // FIFO_POP
                     7'h78: capture_mode_o   <= reg_wdata[2:0];
                     7'h79: capture_enable_o <= reg_wdata[0];
+                    7'h1A: trig_enable_o     <= reg_wdata[0];
+                    7'h1B: trig_addr_o[7:0]  <= reg_wdata;
+                    7'h1C: trig_addr_o[15:8] <= reg_wdata;
+                    7'h1D: trig_mask_o[7:0]  <= reg_wdata;
+                    7'h1E: trig_mask_o[15:8] <= reg_wdata;
+                    7'h1F: oneshot_o         <= reg_wdata[0];
 
                     // Uthernet2 doorbell clear (write-1-to-clear sockets 0-3)
                     7'h7A: w5100_cmd_clr_r <= reg_wdata[3:0];

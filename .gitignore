@@ -1,6 +1,7 @@
 .vscode/
 .obsidian/
 *.user
+.venv/
 impl/gwsynthesis/*
 !impl/gwsynthesis/*.cfg
 impl/temp/*
@@ -45,6 +46,7 @@ src/cardrom/cardrom
 !/.claude/hooks/
 /boards/a2p25/src/esp32/build
 /boards/a2p25/src/a2fpga_esp32/build
+/boards/a2mega/src/a2fpga_esp32/build
 /boards/a2p25/src/esp32_usb_jtag/build
 /boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware/build/*
 !/boards/a2n20v2-Enhanced/src/a2n20_bl616/firmware/build/build_out/
@@ -63,3 +65,6 @@ src/cardrom/cardrom
 /boards/a2n20v2-Enhanced/hdl/piano_c3_attack.mem
 /boards/a2n20v2-Enhanced/hdl/piano_c3_sustain.mem
 /boards/a2n20v2-Enhanced/hdl/piano_multisustain.mem
+
+# Verilator build output of the simulation benches
+sim/**/obj_dir/

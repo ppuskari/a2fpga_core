@@ -1199,9 +1199,15 @@ int main(void)
     dbg_stage(STG_SPI_INIT);
     dbg_set(F_SPI_INIT);
 
-    bool ready = fpga_spi_wait_ready(2000);
+    /* From a cold power-up the FPGA is still loading its bitstream (~2.9 s at
+     * the 2.5 MHz MSPI rate) long after the BL616 reaches main(). Every
+     * FPGA-facing write below (bus-ready, slot map, /RES release) is lost if
+     * issued before config-done, so wait for a genuine answer (device ID +
+     * status, see fpga_spi_wait_ready) with generous margin over the load. */
+    bool ready = fpga_spi_wait_ready(8000);
     dbg_stage(STG_FPGA_READY);
     if (ready) dbg_set(F_FPGA_READY);
+    else printf("FPGA SPI: not ready after 8 s -- continuing degraded\r\n");
     bt_mark(BT_FPGA_READY);   /* config + SDRAM ready: FPGA-facing work can begin */
 
     /* Assert bus-ready NOW, as early as possible: this lets apple_bus run
@@ -1241,7 +1247,7 @@ int main(void)
      * releasing Apple /RES, without changing slot/reset sequencing.
      * Unlike the old A3 FPGA, the current 0x6F has NO audio lock.
      * NEVER issue F0, 0x2E, or 0x6B as part of audio selection. */
-    menu_audio_apply_saved_early();
+    const bool audio_ok = menu_audio_apply_saved_early();
 
     /* Apply the persisted slot map EARLY -- the gateware gates the Apple II
      * /RES release on the 0x6B reconfig strobe (reset contract: the Apple
@@ -1255,9 +1261,7 @@ int main(void)
     {
         int ok = 1;
         for (int i = 0; i < 8; i++) {
-            uint8_t c = settings()->slot_cards[i];
-            if (c == 0xFF)
-                c = settings_slot_hw_defaults[i];
+            uint8_t c = settings_slot_effective(i);
             int good = 0;
             for (int a = 0; a < 5 && !good; a++) {
                 fpga_spi_reg_write((uint8_t)(0x60 + i), c);
@@ -1265,12 +1269,14 @@ int main(void)
             }
             ok &= good;
         }
-        if (ok) {
+        if (ready && audio_ok && ok) {
+            fpga_spi_reg_write(REG_CARDROM_REL, 1);
             fpga_spi_reg_write(0x6B, 1);   /* reconfig strobe -> /RES may release */
             g_slots_applied_early = true;
             bt_mark(BT_SLOTS_APPLIED);
         } else {
-            osd_log("SLOTS: EARLY APPLY UNCONFIRMED (deferred to mount path)");
+            osd_log("M4 BOOT: DEFER SLOTS READY=%u AUDIO=%u MAP=%u",
+                    (unsigned)ready, (unsigned)audio_ok, (unsigned)ok);
         }
     }
     osd_log("USB HOST: WAITING FOR DEVICE...");

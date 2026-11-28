@@ -57,16 +57,15 @@ module media_mailbox_slot3 #(
     wire apple_wr=apple_sel_i && !apple_rw_n_i && apple_write_strobe_i;
     assign apple_read_o=apple_sel_i && apple_rw_n_i;
 
-    // M1 bring-up: force flip-flops rather than invoking Gowin's RAM
-    // inference engine.  The register array is 256*8=2048 bits, and
-    // Gowin can otherwise infer an incompatible RAM read/write mode.
-    // Reconsider BRAM only after both physical Apple buses are proven.
-    reg [7:0] fifo [0:DEPTH-1] /* synthesis syn_ramstyle = "registers" */;
+    // M4: synchronous RAM read with next-head prefetch and explicit
+    // collision forwarding. No memory reset or asynchronous RAM reads.
+    reg [7:0] fifo [0:DEPTH-1] /* synthesis syn_ramstyle = "block_ram" */;
     reg [FIFO_AW:0] wrptr_r,rdptr_r;
     // M2 response FIFO; retire a read only after its Apple bus phase ends.
-    reg [7:0] reply_fifo[0:DEPTH-1] /* synthesis syn_ramstyle = "registers" */;
+    reg [7:0] reply_fifo[0:DEPTH-1] /* synthesis syn_ramstyle = "block_ram" */;
     reg [FIFO_AW:0] reply_wrptr_r,reply_rdptr_r;
     reg reply_read_seen_r;
+    reg reply_read_had_byte_r;
     reg [7:0] reply_read_latched_r;
     reg reply_overflow_r;
     wire [FIFO_AW:0] reply_count_w=reply_wrptr_r-reply_rdptr_r;
@@ -101,6 +100,47 @@ module media_mailbox_slot3 #(
                     spi_wr_data_i==8'hA5 && !cmd_pending_r;
 
     wire reply_byte_select=apple_sel_i && apple_rw_n_i && apple_reg_i==4'h5;
+
+    // Preload the head before the Apple read phase or SPI pop. At a pop,
+    // fetch the next head on the same clock edge as the pointer advances.
+    // Explicit forwarding makes same-address read/write independent of
+    // the inferred RAM's collision mode (notably empty -> nonempty).
+    wire reply_clear_w=spi_wr_i && spi_wr_addr_i==24'h800031 &&
+                       spi_wr_data_i==8'hA5;
+    wire fifo_push_w=rst_n && !reset_fifo && fifo_wr && count_w<DEPTH_W;
+    wire fifo_pop_w=rst_n && !reset_fifo && stream_pop && count_w!=0;
+    wire reply_push_w=rst_n && !reply_clear_w && spi_wr_i &&
+                     spi_wr_addr_i==24'h800030 && reply_count_w<DEPTH_W;
+    wire reply_pop_w=rst_n && !reply_clear_w && !apple_sel_i &&
+                    reply_read_seen_r && reply_read_had_byte_r && reply_available_w;
+    wire [FIFO_AW-1:0] fifo_fetch_addr_w=
+        rdptr_r[FIFO_AW-1:0]+{{(FIFO_AW-1){1'b0}},fifo_pop_w};
+    wire [FIFO_AW-1:0] reply_fetch_addr_w=
+        reply_rdptr_r[FIFO_AW-1:0]+{{(FIFO_AW-1){1'b0}},reply_pop_w};
+    reg [7:0] fifo_ram_q, reply_ram_q;
+    reg [7:0] fifo_forward_q, reply_forward_q;
+    reg fifo_forward_valid_q, reply_forward_valid_q;
+
+    always @(posedge clk) begin
+        if(fifo_push_w)
+            fifo[wrptr_r[FIFO_AW-1:0]]<=fifo_wdata;
+        fifo_ram_q<=fifo[fifo_fetch_addr_w];
+    end
+    always @(posedge clk) begin
+        if(reply_push_w)
+            reply_fifo[reply_wrptr_r[FIFO_AW-1:0]]<=spi_wr_data_i;
+        reply_ram_q<=reply_fifo[reply_fetch_addr_w];
+    end
+    always @(posedge clk) begin
+        fifo_forward_valid_q<=fifo_push_w &&
+            (wrptr_r[FIFO_AW-1:0]==fifo_fetch_addr_w);
+        reply_forward_valid_q<=reply_push_w &&
+            (reply_wrptr_r[FIFO_AW-1:0]==reply_fetch_addr_w);
+        if(fifo_push_w) fifo_forward_q<=fifo_wdata;
+        if(reply_push_w) reply_forward_q<=spi_wr_data_i;
+    end
+    wire [7:0] fifo_head_w=fifo_forward_valid_q ? fifo_forward_q : fifo_ram_q;
+    wire [7:0] reply_head_w=reply_forward_valid_q ? reply_forward_q : reply_ram_q;
     wire [7:0] status_w={
         reply_available_w,cmd_rejected_r,mcu_status_r[2],
         mcu_status_r[1],(|fifo_overflow_r),cmd_pending_r,
@@ -119,7 +159,7 @@ module media_mailbox_slot3 #(
             4'h3:apple_rdata_o=status_w;
             4'h4:apple_rdata_o=cmd_r;
             4'h5:apple_rdata_o=reply_read_seen_r ? reply_read_latched_r :
-                                  (reply_available_w ? reply_fifo[reply_rdptr_r[FIFO_AW-1:0]] : 8'h00);
+                                  (reply_available_w ? reply_head_w : 8'h00);
             4'h6:apple_rdata_o=free16_w[7:0];
             4'h7:apple_rdata_o=free16_w[15:8];
             4'h8:apple_rdata_o=count16_w[7:0];
@@ -163,6 +203,7 @@ module media_mailbox_slot3 #(
             wrptr_r<=0;rdptr_r<=0;
             reply_wrptr_r<=0;reply_rdptr_r<=0;
             reply_read_seen_r<=0;reply_read_latched_r<=0;
+            reply_read_had_byte_r<=0;
             reply_overflow_r<=0;
             cmd_r<=0;cmd_seq_r<=0;ack_seq_r<=0;cmd_result_r<=0;
             mcu_status_r<=0;cmd_pending_r<=0;cmd_rejected_r<=0;
@@ -177,11 +218,12 @@ module media_mailbox_slot3 #(
             // when an accelerated Apple IIgs stretches a read bus phase.
             if(reply_byte_select && !reply_read_seen_r) begin
                 reply_read_seen_r<=1'b1;
-                reply_read_latched_r<=reply_available_w ?
-                    reply_fifo[reply_rdptr_r[FIFO_AW-1:0]]:8'h00;
+                reply_read_had_byte_r<=reply_available_w;
+                reply_read_latched_r<=reply_available_w ? reply_head_w:8'h00;
             end else if(!apple_sel_i && reply_read_seen_r) begin
                 reply_read_seen_r<=1'b0;
-                if(reply_available_w)
+                reply_read_had_byte_r<=1'b0;
+                if(reply_pop_w)
                     reply_rdptr_r<=reply_rdptr_r+1'b1;
             end
             if(apple_sel_i && apple_rw_n_i && !apple_selected_d)
@@ -194,7 +236,7 @@ module media_mailbox_slot3 #(
                 spi_rd_valid_o<=1'b1;
                 if(!spi_rd_addr_i[23]) begin
                     if(count_w!=0) begin
-                        spi_rd_data_o<=fifo[rdptr_r[FIFO_AW-1:0]];
+                        spi_rd_data_o<=fifo_head_w;
                         rdptr_r<=rdptr_r+1'b1;
                     end else
                         spi_rd_data_o<=8'hFF;
@@ -242,7 +284,6 @@ module media_mailbox_slot3 #(
 
             if(fifo_wr) begin
                 if(count_w<DEPTH) begin
-                    fifo[wrptr_r[FIFO_AW-1:0]]<=fifo_wdata;
                     wrptr_r<=wrptr_r+1'b1;
                 end else if(fifo_overflow_r!=16'hFFFF)
                     fifo_overflow_r<=fifo_overflow_r+1'b1;
@@ -260,13 +301,12 @@ module media_mailbox_slot3 #(
                     // M2 response path, separate from upload FIFO.
                     24'h800030:begin
                         if(reply_count_w<DEPTH_W) begin
-                            reply_fifo[reply_wrptr_r[FIFO_AW-1:0]]<=spi_wr_data_i;
                             reply_wrptr_r<=reply_wrptr_r+1'b1;
                         end else reply_overflow_r<=1'b1;
                     end
                     24'h800031:if(spi_wr_data_i==8'hA5) begin
                         reply_wrptr_r<=0;reply_rdptr_r<=0;
-                        reply_read_seen_r<=0;reply_overflow_r<=0;
+                        reply_read_seen_r<=0;reply_read_had_byte_r<=0;reply_overflow_r<=0;
                     end
                     default:begin end
                 endcase

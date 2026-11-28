@@ -13,7 +13,7 @@ create_generated_clock -name clk_pixel_x5 -source [get_ports {clk}] -master_cloc
 create_generated_clock -name clk_logic -source [get_ports {clk}] -master_clock clk -divide_by 25 -multiply_by 27 [get_pins {clocks_pll/PLLA_inst/CLKOUT2}]
 
 // DDR3 internal clocks -- 324 MHz memory, 81 MHz app clock
-create_clock -name clk4x -period 3.086 -waveform {0 1.543} [get_pins {pll_ddr3_inst/u_pll/PLLA_inst/CLKOUT2}]
+create_clock -name clk4x -period 3.086 -waveform {0 1.543} [get_pins {pll_ddr3_inst/PLLA_inst/CLKOUT2}]
 create_clock -name clk1x -period 12.346 -waveform {0 6.173} [get_pins {u_ddr3/gw3_top/u_ddr_phy_top/fclkdiv/CLKOUT}]
 
 // DDR3 IP internal clocks: clk1x (app) and clk4x (PHY) are managed by the
@@ -49,3 +49,15 @@ set_clock_groups -asynchronous -group [get_clocks {clk_pixel_x5}] -group [get_cl
 // clk_logic and clk_pixel are from the same PLL but at different frequencies.
 // CDC between them uses double-flop synchronizers; mark async for STA.
 set_clock_groups -asynchronous -group [get_clocks {clk_pixel}] -group [get_clocks {clk_logic}]
+
+// USB host clock -- 60 MHz from dedicated pll_usb (50 MHz * 24 / 20)
+create_generated_clock -name clk_usb -source [get_ports {clk}] -master_clock clk -divide_by 5 -multiply_by 6 [get_pins {pll_usb_inst/PLLA_inst/CLKOUT0}]
+
+// clk_usb -- own PLL, self-contained USB domain; async to everything.
+// HID outputs must cross into consumer domains via double-flop synchronizers.
+set_clock_groups -asynchronous -group [get_clocks {clk_usb}] -group [get_clocks {clk}]
+set_clock_groups -asynchronous -group [get_clocks {clk_usb}] -group [get_clocks {clk_logic}]
+set_clock_groups -asynchronous -group [get_clocks {clk_usb}] -group [get_clocks {clk_pixel}]
+set_clock_groups -asynchronous -group [get_clocks {clk_usb}] -group [get_clocks {clk_pixel_x5}]
+set_clock_groups -asynchronous -group [get_clocks {clk_usb}] -group [get_clocks {clk4x}]
+set_clock_groups -asynchronous -group [get_clocks {clk_usb}] -group [get_clocks {clk1x}]

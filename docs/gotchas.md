@@ -61,6 +61,31 @@ working in these areas. **When you discover a new one, add it here** — that's 
   fixed with wide 128-bit writes + write port priority) vs. *moving distortion* (timing margin
   at 432 MHz). Diagnose which class before chasing a fix.
 
+## GW5A BSRAM inference (a2mega)
+
+- **One address per BSRAM port.** An inferred dual-port array where one port uses a
+  *different* address for writes vs. reads (e.g. `if (wr) mem[waddr] <= d; else q <= mem[raddr];`)
+  needs a third address port, cannot map to a physical DPB, and — since GW5A has **no
+  distributed RAM** (`WARN IF0005`) — silently explodes into LUTs/FFs (hundreds of thousands of
+  LUTs; synthesis then grinds for tens of minutes before `ERROR RP0006`). Mux the address by
+  direction instead. Two R/W ports with one address each (the `hdd.sv`/`uthernet2.sv` pattern)
+  infer fine.
+- **The GW5AT-60 has 118 BSRAMs and the a2mega uses nearly all of them.** Any new BSRAM must
+  reclaim one first. Note the biggest pool — the Ensoniq 64KB wavetable (32 BSRAMs) — is NOT
+  simply movable to DDR3: the DOC has a hard ~838 ns per-fetch deadline (timeout = audible
+  silence) and DDR3 tail latency (burst queue + refresh + CDC) misses it; that is why it was
+  moved to BSRAM in the first place. Much of the a2mega's BSRAM spend (CDC FIFOs, line-buffer
+  lead, DOC wavetable, disk buffers) is deliberate latency insulation against DDR3 variance.
+- **Do NOT convert `ddr3_port_cdc`'s FIFOs to registers to save BSRAM.** GW5A has no
+  distributed RAM, so shallow FIFOs land in BSRAM and look like easy savings — but FF-array
+  buffers crossing independent clocks **corrupt data on GW5AT** (the debugged "8-char rippling
+  band" bug; see the comments in `hdl/ddr3/ddr3_port_cdc.sv` and the DDR3 project notes).
+  BSRAM's physically independent clock ports are the fix. Only *single-clock* small FIFOs
+  (e.g. `framebuffer_480p`'s rd_fifo) may use `syn_ramstyle="registers"`.
+- **`gw_sh` exits 0 on fatal errors.** `tools/build.sh` now greps for `ERROR` lines and rejects
+  stale bitstreams; don't bypass it — a raw gw_sh run can leave a previous build's bitstream
+  and timing report in `impl/pnr/` looking like a success.
+
 ## SDRAM clock phase (ghosting) — historical
 
 - A ghosting artifact on the GW2AR traced to the SDRAM read clock phase (`PSDA_SEL` in the PLL).
@@ -72,3 +97,34 @@ working in these areas. **When you discover a new one, add it here** — that's 
 - [setup-gowin-cli.md](setup-gowin-cli.md) — build & timing-check procedure
 - [architecture.md](architecture.md) — the pipeline these traps live in
 - `boards/<board>/TODO.md` — current, board-specific open issues
+
+## a2mega: recovering from a corrupt/interrupted config-flash write (GW5A)
+
+An interrupted `openFPGALoader` flash write leaves a half-written image. The
+GW5A then retries booting it, and every subsequent standard flash attempt
+fails at "Read ID failed" — because openFPGALoader's **flash phase defaults
+to a 10 MHz JTAG clock through the ESP32 bridge, which does not work on this
+board**; 500 kHz does (proven repeatedly: dumps, JEDEC ID, bulk erase).
+
+**Decision rule: whenever the board is in an INDETERMINATE state where
+flash corruption is possible** — a flash write errored or was interrupted,
+the FPGA stops configuring at power-on (no DONE/READY LEDs), or JTAG flash
+operations fail unexpectedly — **do not iterate on writes: bulk-erase first**
+(`--freq 500000 --bulk-erase`), then flash normally. A blank flash returns
+the board to well-understood factory behavior; a half-written image creates
+the failure spiral documented above.
+
+Recovery recipe (validated 2026-07-10):
+1. `openFPGALoader -c esp32s3 --freq 500000 --bulk-erase`  (JEDEC ID reads
+   clean at this speed; the chip is a Winbond W25Q64)
+2. Replug the board USB (fresh power window; the chain usually goes dark
+   after any flash-phase operation).
+3. `tools/flash.sh a2mega` — with the flash blank the board behaves factory-
+   fresh and the standard full-speed write + verify completes first try.
+
+While the flash is corrupt the board remains fully usable via SRAM loads
+(`tools/flash.sh a2mega --sram`, first-try reliable in a fresh power
+window). Related: the ESP32's bit-bang GW5A SPI-flash path (fpgaupdate /
+fpgaflash CLI) is NOT yet silicon-validated — its status reads returned
+busy/0xFF in both entry modes; do not rely on it until debugged against
+openFPGALoader's working 500 kHz sequence.

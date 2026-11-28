@@ -24,6 +24,21 @@
 `define ENSONIQ
 `define BL616_SPI
 
+// DUAL_RATE_SDRAM: run the SDRAM controller at 108 MHz (GS-style split clock,
+// PLL 27->108 + CLKDIV2 for the 54 MHz logic clock, mem_port_cdc on every
+// port). Prerequisite for the beam-accurate framebuffer. Leave undefined for
+// the shipping single 54 MHz domain; the a2n20v2_enhanced_dualrate.gprj
+// project defines it via top_dualrate.sv and uses the matching .sdc.
+//`define DUAL_RATE_SDRAM
+
+// VIDEO_FRAMEBUFFER: render Apple/SHR video in Apple II native timing
+// (scan_timer) into an SDRAM framebuffer read out at HDMI rate — the GS
+// board's beam-accurate architecture. Fetch jitter lands in the buffer,
+// never on glass, and beam-racing software displays correctly. Requires
+// DUAL_RATE_SDRAM; used by a2n20v2_enhanced_fb.gprj via top_fb.sv (whose
+// file list also selects the f18a `_fb` VHDL variants).
+//`define VIDEO_FRAMEBUFFER
+
 `include "datetime.svh"
 
 module top #(
@@ -88,13 +103,18 @@ module top #(
     parameter bit HDD_ENABLE = 0,
     parameter bit [7:0] HDD_ID = 6,
 
+    // Videx VideoTerm 80-column card: framebuffer (_fb) builds only, and
+    // only ever in slot 3 of an Apple ][+ (enforced in videx_card).
+    parameter bit VIDEX_ENABLE = 0, // M4: defer until slot-3 ownership is explicit
+    parameter bit [7:0] VIDEX_ID = 7,
+
     parameter bit ENSONIQ_ENABLE = 1,
     parameter bit ENSONIQ_MONO_MIX = 0, // If true, mono mix is used instead of stereo
 
     parameter bit CLEAR_APPLE_VIDEO_RAM = 1,    // Clear video ram on startup
     parameter bit SHADOW_ALL_MEMORY = 0,        // Shadoow all memory in SDRAM, not just video ram
     parameter bit HDMI_SLEEP_ENABLE = 0,        // Sleep HDMI output on CPU stop
-    parameter bit FORCE_DEBUG_OVERLAY = 1,      // Always show the debug overlay on the HDMI output
+    parameter bit FORCE_DEBUG_OVERLAY = 0,      // Always show the debug overlay on the HDMI output
     parameter bit IRQ_OUT_ENABLE = 1,           // Allow driving IRQ to Apple bus
     parameter bit BUS_DATA_OUT_ENABLE = 1,      // Allow driving data to Apple bus
 
@@ -187,7 +207,6 @@ module top #(
     // Clocks
 
     wire clk_logic_w;
-    wire clk_logic_p_w;
     wire clk_logic_lock_w;
     wire clk_pixel_w;
     wire clk_hdmi_w;
@@ -195,8 +214,33 @@ module top #(
     wire hdmi_rst_n_w;
     wire a2_2M;
 
-    // PLL - 54hz from 27
+    wire clk_sdram_w;      // SDRAM controller clock (== clk_logic_w single-rate)
+    wire clk_sdram_p_w;    // phase-shifted SDRAM output clock
     wire clk_pixel_pll_w;  // raw clkoutd from PLL
+
+`ifdef DUAL_RATE_SDRAM
+    // PLL - 108 MHz from 27 (split clock: SDRAM at 108, logic at 54)
+    clk_logic_108 clk_logic_inst (
+        .clkout(clk_sdram_w),  //output clkout (108 MHz)
+        .lock(clk_logic_lock_w),  //output lock
+        .clkoutp(clk_sdram_p_w),  //output clkoutp (108 MHz phase-shifted)
+        .clkoutd(clk_pixel_pll_w),  //output clkoutd (27 MHz)
+        .reset(~rst_n),  //input reset
+        .clkin(clk)  //input clkin
+    );
+
+    // 108 MHz -> 54 MHz logic clock
+    CLKDIV clkdiv2_inst(
+        .CLKOUT(clk_logic_w),
+        .HCLKIN(clk_sdram_w),
+        .RESETN(rst_n),
+        .CALIB(1'b0)
+    );
+    defparam clkdiv2_inst.DIV_MODE = "2";
+    defparam clkdiv2_inst.GSREN = "false";
+`else
+    // PLL - 54hz from 27
+    wire clk_logic_p_w;
     clk_logic clk_logic_inst (
         .clkout(clk_logic_w),  //output clkout
         .lock(clk_logic_lock_w),  //output lock
@@ -205,6 +249,10 @@ module top #(
         .reset(~rst_n),  //input reset
         .clkin(clk)  //input clkin
     );
+
+    assign clk_sdram_w = clk_logic_w;
+    assign clk_sdram_p_w = clk_logic_p_w;
+`endif
 
     // Force pixel clock onto global clock network via BUFG.
     // Pin 13 (spi_sclk) is a clock-capable pin whose routing conflicts with
@@ -253,26 +301,52 @@ module top #(
     // SDRAM Controller signals
     wire sdram_init_complete;
 
+`ifdef DUAL_RATE_SDRAM
+    localparam int MEM_CLOCK_MHZ = 108;
+`else
+    localparam int MEM_CLOCK_MHZ = MEM_MHZ;
+`endif
+
     // SDRAM ports, lower number is higher priority
+`ifdef VIDEO_FRAMEBUFFER
+    // Framebuffer config (requires ENSONIQ + BL616_SPI). sdram_ports'
+    // arbitration cone fails 108 MHz above 7 ports, so the three storage
+    // clients (MCU XFER, Disk II window, HDD window) share one port through
+    // mem_port_arb.
+    // The DOC has the hardest real-time deadline in the system (missed
+    // oscillator fetches are audible pops), so it sits directly behind the
+    // framebuffer ports. Video reads and CPU writes are latency-tolerant
+    // here: the framebuffer absorbs late line priming (active-keyed writer)
+    // and the shadow write path queues through a FIFO.
+    localparam FB_READ_PORT      = 0;   // framebuffer line reads (display)
+    localparam FB_WRITE_PORT     = 1;   // framebuffer pixel writes
+    localparam DOC_MEM_PORT      = 2;
+    localparam GLU_MEM_PORT      = 3;
+    localparam VIDEO_MEM_PORT    = 4;   // shadow reads (apple_video_gen + VGC via arbiter)
+    localparam MAIN_MEM_PORT     = 5;   // CPU shadow/aux writes
+    localparam STORAGE_MEM_PORT  = 6;   // MCU + Disk II + HDD via mem_port_arb
+    localparam NUM_PORTS         = 7;
+`else
     localparam VIDEO_MEM_PORT = 0;
     localparam MAIN_MEM_PORT = 1;
-`ifdef ENSONIQ
+    `ifdef ENSONIQ
     localparam GLU_MEM_PORT = 3;
     localparam DOC_MEM_PORT = 2;
-    `ifdef BL616_SPI
+        `ifdef BL616_SPI
     localparam MCU_MEM_PORT = 4;
     localparam DISK_MEM_PORT = 5;   // Disk II track-on-demand window (read)
     localparam HDD_MEM_PORT = 6;    // ProDOS HDD block window (read/write)
     localparam NUM_PORTS = 7;
-    `else
+        `else
     localparam NUM_PORTS = 4;
-    `endif
-`else
-    `ifdef BL616_SPI
+        `endif
+    `else
+        `ifdef BL616_SPI
     localparam MCU_MEM_PORT = 2;
     localparam NUM_PORTS = 3;
-    `else
+        `else
     localparam NUM_PORTS = 2;
+        `endif
     `endif
 `endif
 
@@ -283,6 +357,11 @@ module top #(
 
     // SDRAM memory map — word address offsets (32-bit word addressing)
     // Applied per-port inside sdram_ports via PORT_BASE_ADDR parameter.
+    // NOTE: the video/main shadow port address is {bank, a2_addr[15:1]}.
+    // Bank 0 = Apple shadow (words 0x0000-0x7FFF); bank 1 = the MCU's
+    // private display space (words 0x8000-0xFFFF; OSD text page at word
+    // 0x8200 = byte 0x20800, see firmware fpga_screen.c). Do NOT allocate
+    // SDRAM regions in words 0x8000-0xFFFF.
     localparam [PORT_ADDR_WIDTH-1:0] SHADOW_WORD_BASE  = 21'h000000;  // 0MB
 `ifdef ENSONIQ
     localparam [PORT_ADDR_WIDTH-1:0] ENSONIQ_WORD_BASE = 21'h010000;  // 128KB
@@ -295,8 +374,11 @@ module top #(
     // after the Disk II track windows. The MCU streams a block here via XFER
     // SPACE 1; unit u's window is byte 0x204000 + u*0x200.
     localparam [PORT_ADDR_WIDTH-1:0] HDD_WORD_BASE     = 21'h081000;  // byte 0x204000
+    // Framebuffer pixel storage (VIDEO_FRAMEBUFFER config): 1.5MB in, well
+    // above every other region.
+    localparam [PORT_ADDR_WIDTH-1:0] FB_WORD_BASE      = 21'h180000;  // byte 0x600000
 
-    // Signals for the multiple ports
+    // Signals for the multiple ports (client side, 54 MHz logic domain)
     mem_port_if #(
         .PORT_ADDR_WIDTH(PORT_ADDR_WIDTH),
         .DATA_WIDTH(DATA_WIDTH),
@@ -304,12 +386,29 @@ module top #(
         .PORT_OUTPUT_WIDTH(PORT_OUTPUT_WIDTH)
     ) mem_ports[NUM_PORTS-1:0]();
 
+`ifdef DUAL_RATE_SDRAM
+    // SDRAM-side port interfaces (108 MHz domain)
+    mem_port_if #(
+        .PORT_ADDR_WIDTH(PORT_ADDR_WIDTH),
+        .DATA_WIDTH(DATA_WIDTH),
+        .DQM_WIDTH(DQM_WIDTH),
+        .PORT_OUTPUT_WIDTH(PORT_OUTPUT_WIDTH)
+    ) mem_ports_sdram[NUM_PORTS-1:0]();
+
+    wire sdram_init_complete_raw;  // from sdram_ports (108 MHz domain)
+`endif
+
     sdram_ports #(
-        .CLOCK_SPEED_MHZ(MEM_MHZ),
+        .CLOCK_SPEED_MHZ(MEM_CLOCK_MHZ),
         .NUM_PORTS(NUM_PORTS),
         .PORT_ADDR_WIDTH(PORT_ADDR_WIDTH),
         .PORT_OUTPUT_WIDTH(PORT_OUTPUT_WIDTH),
-`ifdef ENSONIQ
+`ifdef VIDEO_FRAMEBUFFER
+        .PORT_BASE_ADDR('{FB_WORD_BASE, FB_WORD_BASE,
+                          ENSONIQ_WORD_BASE, ENSONIQ_WORD_BASE,
+                          SHADOW_WORD_BASE, SHADOW_WORD_BASE,
+                          SHADOW_WORD_BASE}),
+`elsif ENSONIQ
     `ifdef BL616_SPI
         .PORT_BASE_ADDR('{SHADOW_WORD_BASE, SHADOW_WORD_BASE,
                           ENSONIQ_WORD_BASE, ENSONIQ_WORD_BASE,
@@ -330,7 +429,13 @@ module top #(
         .CAS_LATENCY(2),
         .SETTING_REFRESH_TIMER_NANO_SEC(15000),
         .SETTING_T_WR_MIN_WRITE_AUTO_PRECHARGE_RECOVERY_NANO_SEC(16),
+`ifdef DUAL_RATE_SDRAM
+        .SETTING_USE_FAST_INPUT_REGISTER(1),
+        .BURST_LENGTH(2),
+        .READ_BURST_LENGTH(8),
+`else
         .BURST_LENGTH(1),
+`endif
         .PORT_BURST_LENGTH(1),
         .DATA_WIDTH(DATA_WIDTH),
         .ROW_WIDTH(11),
@@ -338,12 +443,18 @@ module top #(
         .PRECHARGE_BIT(10),
         .DQM_WIDTH(DQM_WIDTH)
     ) sdram_ports (
-        .clk(clk_logic_w),
-        .sdram_clk(clk_logic_p_w),
+        .clk(clk_sdram_w),
+        .sdram_clk(clk_sdram_p_w),
         .reset(!device_reset_n_w),
+`ifdef DUAL_RATE_SDRAM
+        .init_complete(sdram_init_complete_raw),
+
+        .ports(mem_ports_sdram),
+`else
         .init_complete(sdram_init_complete),
 
         .ports(mem_ports),
+`endif
 
         .SDRAM_DQ(IO_sdram_dq),
         .SDRAM_A(O_sdram_addr),
@@ -356,6 +467,38 @@ module top #(
         .SDRAM_CKE(O_sdram_cke),
         .SDRAM_CLK(O_sdram_clk)
     );
+
+`ifdef DUAL_RATE_SDRAM
+    // CDC wrappers: 54 MHz clients <-> 108 MHz SDRAM
+    generate
+        for (genvar mem_cdc_i = 0; mem_cdc_i < NUM_PORTS; mem_cdc_i++) begin : mem_cdc
+            mem_port_cdc #(
+                .PORT_ADDR_WIDTH(PORT_ADDR_WIDTH),
+                .DATA_WIDTH(DATA_WIDTH),
+                .DQM_WIDTH(DQM_WIDTH),
+                .PORT_OUTPUT_WIDTH(PORT_OUTPUT_WIDTH)
+            ) cdc_inst (
+                .clk_client(clk_logic_w),   // 54 MHz
+                .clk_sdram(clk_sdram_w),    // 108 MHz
+                .rst_n(device_reset_n_w),
+                .client(mem_ports[mem_cdc_i]),
+                .sdram(mem_ports_sdram[mem_cdc_i])
+            );
+        end
+    endgenerate
+
+    // Sync sdram_init_complete from 108 MHz -> 54 MHz (2FF synchronizer)
+    reg sdram_init_sync1, sdram_init_sync2;
+    always @(posedge clk_logic_w or negedge device_reset_n_w) begin
+        if (!device_reset_n_w) begin
+            {sdram_init_sync1, sdram_init_sync2} <= 2'b0;
+        end else begin
+            sdram_init_sync1 <= sdram_init_complete_raw;
+            sdram_init_sync2 <= sdram_init_sync1;
+        end
+    end
+    assign sdram_init_complete = sdram_init_sync2;
+`endif
 
     // Interface to Apple II
 
@@ -442,10 +585,19 @@ module top #(
     wire [12:0] vgc_address_w;
     wire vgc_rd_w;
     wire [31:0] vgc_data_w;
+    wire vgc_ready_w;
+    wire [7:0] wq_drops_w;      // shadow write-queue drops (diagnostics)
+    wire [7:0] aux_wr_cnt_w;    // captured aux/SHR writes (diagnostics)
+    wire [7:0] m2b0_wr_cnt_w;   // captured m2b0 writes (diagnostics)
 
     apple_memory_sdram #(
         .VGC_MEMORY(IIE_SPEECH_VIDEO_TRIM ? 0 : 1),
-        .SHADOW_ALL_MEMORY(SHADOW_ALL_MEMORY)
+        .SHADOW_ALL_MEMORY(SHADOW_ALL_MEMORY),
+`ifdef DUAL_RATE_SDRAM
+        .VGC_IN_SDRAM(1)
+`else
+        .VGC_IN_SDRAM(0)
+`endif
     ) apple_memory (
         .a2bus_if(a2bus_if),
         .a2mem_if(a2mem_if),
@@ -462,7 +614,11 @@ module top #(
         .vgc_active_i(vgc_active_w),
         .vgc_address_i(vgc_address_w),
         .vgc_rd_i(vgc_rd_w),
-        .vgc_data_o(vgc_data_w)
+        .vgc_data_o(vgc_data_w),
+        .vgc_ready_o(vgc_ready_w),
+        .wq_drops_o(wq_drops_w),
+        .aux_wr_cnt_o(aux_wr_cnt_w),
+        .m2b0_wr_cnt_o(m2b0_wr_cnt_w)
     );
 
     // Slots
@@ -510,32 +666,17 @@ module top #(
     // BL616 SPI Controller (replaces PicoSOC)
     // -------------------------------------------------------
 
-    wire cardrom_release_w;
-    wire [0:7] cardrom_d_w;
-    wire cardrom_rd;
-    wire cardrom_rd_raw_w;
-    wire cardrom_inh_n_raw_w;
     wire standalone_w;   // from bl616_spi_connector: no BL616 detected
 
-    CardROM cardrom (
-        .a2bus_if(a2bus_if),
-        .data_o(cardrom_d_w),
-        .rd_en_o(cardrom_rd_raw_w),
-        .inh_n_o(cardrom_inh_n_raw_w),
-        .req_rom_release_i(cardrom_release_w)
-    );
-
-    // Neutralize the CardROM (force INH inactive, no bus drive) when either:
-    //   - standalone_w: no BL616, so no bootstrap handshake exists to release
-    //     the card ROM — it would otherwise keep INH asserted and overlay the
-    //     Apple monitor ROM at $F8xx, crashing the Apple during disk boot.
-    //     standalone_w engages with a2bus_control_if.ready (bridge init), so
-    //     INH is forced inactive before the bridge ever drives it.
-    //   - sw_gs (Apple IIgs): the INH-based ROM-overlay bootstrap mechanism
-    //     does not work on the IIgs, so the card ROM must never activate there.
-    wire cardrom_disable_w = standalone_w || a2bus_if.sw_gs;
-    assign inh_n_w    = cardrom_disable_w ? 1'b1 : cardrom_inh_n_raw_w;
-    assign cardrom_rd = cardrom_disable_w ? 1'b0 : cardrom_rd_raw_w;
+    // CardROM excised: when active it overlaid the Apple $F8xx monitor ROM
+    // region (driving the data bus and asserting /INH). That collided with an
+    // Apple Language Card's own F8 ROM — both drove $F800-$FFFF at the reset
+    // vector / DOS cold-start, corrupting the fetch and hanging the machine
+    // (deterministic; a pure-RAM language card had no F8 ROM so was immune).
+    // The mechanism also never worked on the IIgs. Removed entirely rather
+    // than parameter-disabled so no stale/optimized-away logic can linger.
+    // /INH is left permanently released (open-drain high via the bridge).
+    assign inh_n_w = 1'b1;
 
     video_control_if video_control_if();
     f18a_gpu_if f18a_gpu_if();
@@ -550,6 +691,33 @@ module top #(
     assign f18a_gpu_if.rwe = 1'b0;
     assign f18a_gpu_if.raddr = 13'b0;
     assign f18a_gpu_if.gstatus = 7'b0;
+
+`ifdef VIDEO_FRAMEBUFFER
+    // Storage clients (MCU XFER, Disk II window, HDD window) share one
+    // controller port — see the port map note. MCU first (it streams whole
+    // tracks/blocks and the others wait on its acks anyway).
+    mem_port_if #(
+        .PORT_ADDR_WIDTH(PORT_ADDR_WIDTH),
+        .DATA_WIDTH(DATA_WIDTH),
+        .DQM_WIDTH(DQM_WIDTH),
+        .PORT_OUTPUT_WIDTH(PORT_OUTPUT_WIDTH)
+    ) storage_ports[2:0] ();
+
+    mem_port_arb #(
+        .NUM_CLIENTS(3),
+        .PORT_ADDR_WIDTH(PORT_ADDR_WIDTH),
+        .DATA_WIDTH(DATA_WIDTH),
+        .DQM_WIDTH(DQM_WIDTH),
+        .PORT_OUTPUT_WIDTH(PORT_OUTPUT_WIDTH),
+        // Replaces the PORT_BASE_ADDR each client's dedicated port had
+        .CLIENT_BASE_ADDR('{SHADOW_WORD_BASE, DISK_WORD_BASE, HDD_WORD_BASE})
+    ) storage_arb (
+        .clk_i(clk_logic_w),
+        .rst_n_i(device_reset_n_w),
+        .clients(storage_ports),
+        .controller(mem_ports[STORAGE_MEM_PORT])
+    );
+`endif
 
     drive_volume_if volumes[2]();
 
@@ -568,7 +736,11 @@ module top #(
         .slot_if(slot_if),
         .data_o(diskii_d_w),
         .rd_en_o(diskii_rd),
+`ifdef VIDEO_FRAMEBUFFER
+        .ram_disk_if(storage_ports[1]),
+`else
         .ram_disk_if(mem_ports[DISK_MEM_PORT]),
+`endif
         .volumes(volumes)
     );
 
@@ -590,7 +762,11 @@ module top #(
         .slot_if(slot_if),
         .data_o(hdd_d_w),
         .rd_en_o(hdd_rd),
+`ifdef VIDEO_FRAMEBUFFER
+        .ram_hdd_if(storage_ports[2]),
+`else
         .ram_hdd_if(mem_ports[HDD_MEM_PORT]),
+`endif
         .volumes(hdd_volumes)
     );
 
@@ -602,6 +778,11 @@ module top #(
     wire        fifo_pop_w;
     wire [2:0]  capture_mode_w;
     wire        capture_enable_w;
+    wire        trig_enable_w;
+    wire [15:0] trig_addr_w;
+    wire [15:0] trig_mask_w;
+    wire        trig_matched_w;
+    wire        oneshot_w;
 
     a2bus_event_fifo #(
         .ENABLE(1'b1)
@@ -613,13 +794,19 @@ module top #(
         .fifo_rdata(fifo_rdata_w),
         .fifo_pop(fifo_pop_w),
         .capture_enable(capture_enable_w),
-        .capture_mode(capture_mode_w)
+        .capture_mode(capture_mode_w),
+        .trig_enable(trig_enable_w),
+        .trig_addr(trig_addr_w),
+        .trig_mask(trig_mask_w),
+        .trig_matched(trig_matched_w),
+        .oneshot(oneshot_w)
     );
 
     // BL616 SPI connector -- drives LED and WS2812 internally
     wire [4:0] mcu_led_w;
     wire       mcu_ws2812_w;
     wire       mcu_ready_w;
+    wire       mcu_access_stb_w;  // any MCU SPI transaction (liveness watchdog feed)
     wire [39:0] mcu_scratch_w;   // 5 MCU scratch regs {s4,s3,s2,s1,s0} for debug overlay
 
     // Uthernet2 (W5100) backing-store host link (SPI SPACE 3 <-> card port B)
@@ -657,15 +844,20 @@ module top #(
         .slotmaker_config_if(slotmaker_config_if),
         .volumes(volumes),
         .hdd_volumes(hdd_volumes),
+`ifdef VIDEO_FRAMEBUFFER
+        .mem_if(storage_ports[0]),
+`else
         .mem_if(mem_ports[MCU_MEM_PORT]),
+`endif
         .sdram_init_complete_i(sdram_init_complete),
         .mcu_ready_o(mcu_ready_w),
         .standalone_o(standalone_w),
+        .mcu_access_stb_o(mcu_access_stb_w),
         .scratch_o(mcu_scratch_w),
         .audio_mode_o(mcu_audio_mode_w),
         .audio_active_route_i(audio_active_route_w),
-        .cardrom_active_i(!inh_n_w),
-        .cardrom_release_o(cardrom_release_w),
+        .cardrom_active_i(1'b0),        // CardROM excised
+        .cardrom_release_o(),           // CardROM excised
         .button_i(s2),
         .led_o(mcu_led_w),
         .ws2812_o(mcu_ws2812_w),
@@ -680,6 +872,11 @@ module top #(
         .fifo_pop(fifo_pop_w),
         .capture_mode_o(capture_mode_w),
         .capture_enable_o(capture_enable_w),
+        .oneshot_o(oneshot_w),
+        .trig_enable_o(trig_enable_w),
+        .trig_addr_o(trig_addr_w),
+        .trig_mask_o(trig_mask_w),
+        .trig_matched_i(trig_matched_w),
         .w5100_host_wr(u2_host_wr_w),
         .w5100_host_addr(u2_host_addr_w),
         .w5100_host_wdata(u2_host_wdata_w),
@@ -714,7 +911,32 @@ module top #(
         .media_spi_rd_data_i(media_spi_rd_data_w)
     );
 
-    assign ws2812 = mcu_ws2812_w;
+    // WS2812 status LED: FPGA-side MCU liveness watchdog + boot-progression
+    // colors from the stage codes the firmware already writes to scratch reg
+    // 0x07. Replaces the raw reg-0x69 bit (mcu_ws2812_w), which no firmware
+    // ever wrote and which can't speak the WS2812 serial protocol anyway.
+    // Blinking red = MCU silent >10 s (wedged update / dead app region) — the
+    // user-visible failure signal that needs no DebugOverlay.
+    wire [23:0] mcu_led_rgb_w;
+
+    mcu_status_led #(
+        .CLK_HZ(CLOCK_SPEED_HZ)
+    ) mcu_status_led_inst (
+        .clk(clk_logic_w),
+        .rst_n(device_reset_n_w),
+        .mcu_access_stb_i(mcu_access_stb_w),
+        .standalone_i(standalone_w),
+        .stage_i(mcu_scratch_w[7:0]),
+        .rgb_o(mcu_led_rgb_w)
+    );
+
+    ws2812 #(
+        .CLK_FRE(CLOCK_SPEED_HZ)
+    ) ws2812_inst (
+        .clk(clk_logic_w),
+        .rgb(mcu_led_rgb_w),
+        .WS2812(ws2812)
+    );
 
 `else
 
@@ -781,9 +1003,7 @@ module top #(
 
     assign a2bus_control_if.ready = 1'b1;
 
-    wire [0:7] cardrom_d_w = 8'b0;
-    wire cardrom_rd = 1'b0;
-    assign inh_n_w = 1'b1;
+    assign inh_n_w = 1'b1;   // CardROM excised
 
 
     assign spi_miso = 1'b1;
@@ -822,12 +1042,397 @@ module top #(
     wire [9:0] hdmi_y;
 
     // Apple-side RGB + active that feed the SuperSprite compositor. Driven by
-    // either the legacy raster-locked generators (USE_PIXEL_STREAM=0) or the
-    // pixel_stream / direct_display generators (USE_PIXEL_STREAM=1).
+    // the legacy raster-locked generators (USE_PIXEL_STREAM=0), the
+    // pixel_stream / direct_display generators (USE_PIXEL_STREAM=1), or the
+    // framebuffer writers (VIDEO_FRAMEBUFFER).
     wire [7:0] ssp_apple_r_w;
     wire [7:0] ssp_apple_g_w;
     wire [7:0] ssp_apple_b_w;
     wire       ssp_apple_active_w;
+
+    // SuperSprite composited output + scanline flag (hoisted above the video
+    // pipeline: the framebuffer writers consume rgb_*_w, which the SSP
+    // produces further down)
+    wire [7:0] rgb_r_w;
+    wire [7:0] rgb_g_w;
+    wire [7:0] rgb_b_w;
+    wire scanlines_w;
+
+    // Videx bus response (driven inside VIDEO_FRAMEBUFFER, tied off otherwise)
+    wire [7:0] videx_d_w;
+    wire       videx_rd;
+
+`ifdef VIDEO_FRAMEBUFFER
+
+    // =====================================================================
+    // Framebuffer path (the GS board's architecture): generators run in
+    // Apple II native timing from scan_timer, SuperSprite composites in the
+    // clk_logic domain inside the write path, and the SDRAM framebuffer is
+    // read out at HDMI rate. Beam-racing software displays correctly, and
+    // SDRAM fetch jitter lands in the buffer instead of on glass.
+    // =====================================================================
+
+    wire [8:0] scanline_w;
+    wire       hsync_w;
+    wire       vsync_w;
+
+    wire [7:0] scan_dbg_vbl_correct_w;
+    wire [7:0] scan_dbg_vertcnt_correct_w;
+
+    scan_timer #(
+        .VGC_VERTCNT_LOCK(1),
+        .VGC_VBL_LOCK(1),
+        .RESYNC_THRESHOLD(2)
+    ) scan_timer (
+        .a2bus_if(a2bus_if),
+        .scanline_o(scanline_w),
+        .hsync_o(hsync_w),
+        .vsync_o(vsync_w),
+        .pixel_o(),
+        .dbg_vbl_correct_o(scan_dbg_vbl_correct_w),
+        .dbg_vertcnt_correct_o(scan_dbg_vertcnt_correct_w)
+    );
+
+    // Border color: 4-bit palette index to RGB666, VDP backdrop override
+    wire [3:0] vdp_border_r_w, vdp_border_g_w, vdp_border_b_w;
+    wire vdp_border_active_w;
+
+    wire border_gsp_w = a2bus_if.sw_gs;
+    wire [4:0] border_idx_w = {border_gsp_w, a2mem_if.BORDER_COLOR};
+    wire [11:0] border_palette_w [0:31];
+    assign border_palette_w = '{
+        12'h000, 12'h924, 12'h42a, 12'hd4e,   // Apple II  0-3
+        12'h064, 12'h888, 12'h39e, 12'hcbf,   //           4-7
+        12'h450, 12'hc73, 12'h888, 12'hfac,   //           8-11
+        12'h3c2, 12'hcd6, 12'h7ec, 12'hfff,   //          12-15
+        12'h000, 12'hd03, 12'h009, 12'hd2d,   // IIgs      0-3
+        12'h072, 12'h555, 12'h22f, 12'h6af,   //           4-7
+        12'h850, 12'hf60, 12'haaa, 12'hf98,   //           8-11
+        12'h1d0, 12'hff0, 12'h4f9, 12'hfff    //          12-15
+    };
+    wire [11:0] border_rgb444_w = border_palette_w[border_idx_w];
+    wire [17:0] apple_border_rgb666_w = {
+        border_rgb444_w[11:8], 2'b00,
+        border_rgb444_w[7:4],  2'b00,
+        border_rgb444_w[3:0],  2'b00
+    };
+    wire [17:0] vdp_border_rgb666_w = {vdp_border_r_w, 2'b00,
+                                       vdp_border_g_w, 2'b00,
+                                       vdp_border_b_w, 2'b00};
+    wire [17:0] border_rgb666_w = vdp_border_active_w ? vdp_border_rgb666_w
+                                                      : apple_border_rgb666_w;
+
+    // --- Apple II generator -> framebuffer writer (SSP composited in) ---
+    wire        fb_we_w;
+    wire [17:0] fb_data_w;
+    wire        fb_vsync_w;
+    wire        vgc_fb_we_w;
+    wire [17:0] vgc_fb_data_w;
+    wire        vgc_fb_vsync_w;
+
+    pixel_stream_if apple_ps();
+
+    apple_video_gen #(
+        .VRAM_READ_LATENCY(16),      // SDRAM via mem_port_cdc
+        .PIXEL_START_TICK(10)        // fixed start for deterministic SSP overlay
+    ) apple_video_gen (
+        .clk_i(clk_logic_w),
+        .reset_n_i(system_reset_n_w),
+
+        .a2mem_if(a2mem_if),
+        .video_control_if(video_control_if),
+        .sw_gs_i(sw_gs_w),
+
+        .pixel_stream(apple_ps),
+
+        .video_address_o(video_address_w),
+        .video_bank_o(video_bank_w),
+        .video_rd_o(video_rd_w),
+        .video_data_i(video_data_w),
+        .video_ready_i(video_ready_w)
+    );
+
+    framebuffer_writer #(
+        .GAP_CYCLES(4)
+    ) apple_fb_writer (
+        .clk_i(clk_logic_w),
+        .reset_n_i(system_reset_n_w),
+
+        .pixel_stream(apple_ps),
+
+        .scanline_i(scanline_w),
+        .hsync_i(hsync_w),
+        .vsync_i(vsync_w),
+
+        .fb_we_o(fb_we_w),
+        .fb_data_o(fb_data_w),
+        .fb_vsync_o(fb_vsync_w),
+
+        .apple_r_o(ssp_apple_r_w),
+        .apple_g_o(ssp_apple_g_w),
+        .apple_b_o(ssp_apple_b_w),
+        .apple_active_o(ssp_apple_active_w),
+
+        .ssp_r_i(rgb_r_w),
+        .ssp_g_i(rgb_g_w),
+        .ssp_b_i(rgb_b_w),
+        .ssp_active_i(1'b1)
+    );
+
+    // --- VGC (SHR) generator -> its own framebuffer writer ---
+    pixel_stream_if vgc_ps();
+
+    vgc_gen vgc_gen (
+        .clk_i(clk_logic_w),
+        .reset_n_i(system_reset_n_w),
+
+        .a2mem_if(a2mem_if),
+        .video_control_if(video_control_if),
+
+        .pixel_stream(vgc_ps),
+
+        .vgc_active_o(vgc_active_w),
+        .vgc_address_o(vgc_address_w),
+        .vgc_rd_o(vgc_rd_w),
+        .vgc_data_i(vgc_data_w),
+        .vgc_ready_i(vgc_ready_w),
+        .dbg_missed_hsync_o()
+    );
+
+    framebuffer_writer #(
+        .GAP_CYCLES(4)
+    ) vgc_fb_writer (
+        .clk_i(clk_logic_w),
+        .reset_n_i(system_reset_n_w),
+
+        .pixel_stream(vgc_ps),
+
+        .scanline_i(scanline_w),
+        .hsync_i(hsync_w),
+        .vsync_i(vsync_w),
+
+        .fb_we_o(vgc_fb_we_w),
+        .fb_data_o(vgc_fb_data_w),
+        .fb_vsync_o(vgc_fb_vsync_w),
+
+        .apple_r_o(),
+        .apple_g_o(),
+        .apple_b_o(),
+        .apple_active_o(),
+        .ssp_r_i(8'd0),
+        .ssp_g_i(8'd0),
+        .ssp_b_i(8'd0),
+        .ssp_active_i(1'b0)
+    );
+
+    // --- Videx VideoTerm 80-column (slot 3, Apple ][+) -> its own writer ---
+    wire        videx_mode_w;
+    wire [7:0]  videx_r10_w, videx_r11_w;
+    wire [10:0] videx_start_w, videx_cursor_w;
+    wire        videx_gen_rd_w;
+    wire [8:0]  videx_gen_addr_w;
+    wire [31:0] videx_gen_data_w;
+    wire        videx_gen_valid_w;
+    wire        videx_rom_en_w;
+
+    videx_card #(
+        .ID(VIDEX_ID),
+        .ENABLE(VIDEX_ENABLE)
+    ) videx_card (
+        .a2bus_if(a2bus_if),
+        .a2mem_if(a2mem_if),
+        .slot_if(slot_if),
+
+        .data_o(videx_d_w),
+        .rd_en_o(videx_rd),
+        .rom_en_o(videx_rom_en_w),
+
+        .videx_mode_o(videx_mode_w),
+        .crtc_r10_o(videx_r10_w),
+        .crtc_r11_o(videx_r11_w),
+        .start_addr_o(videx_start_w),
+        .cursor_addr_o(videx_cursor_w),
+
+        .gen_rd_i(videx_gen_rd_w),
+        .gen_addr_i(videx_gen_addr_w),
+        .gen_data_o(videx_gen_data_w),
+        .gen_valid_o(videx_gen_valid_w)
+    );
+
+    pixel_stream_if videx_ps();
+    wire videx_frame_active_w;
+
+    videx_gen videx_gen (
+        .clk_i(clk_logic_w),
+        .reset_n_i(system_reset_n_w),
+
+        .a2mem_if(a2mem_if),
+        .sw_gs_i(sw_gs_w),
+
+        .pixel_stream(videx_ps),
+
+        .videx_mode_i(videx_mode_w),
+        .crtc_r10_i(videx_r10_w),
+        .crtc_r11_i(videx_r11_w),
+        .start_addr_i(videx_start_w),
+        .cursor_addr_i(videx_cursor_w),
+
+        .vram_rd_o(videx_gen_rd_w),
+        .vram_addr_o(videx_gen_addr_w),
+        .vram_data_i(videx_gen_data_w),
+        .vram_valid_i(videx_gen_valid_w),
+
+        .videx_active_o(videx_frame_active_w)
+    );
+
+    wire        videx_fb_we_w;
+    wire [17:0] videx_fb_data_w;
+    wire        videx_fb_vsync_w;
+
+    framebuffer_writer #(
+        .GAP_CYCLES(4)
+    ) videx_fb_writer (
+        .clk_i(clk_logic_w),
+        .reset_n_i(system_reset_n_w),
+
+        .pixel_stream(videx_ps),
+
+        .scanline_i(scanline_w),
+        .hsync_i(hsync_w),
+        .vsync_i(vsync_w),
+
+        .fb_we_o(videx_fb_we_w),
+        .fb_data_o(videx_fb_data_w),
+        .fb_vsync_o(videx_fb_vsync_w),
+
+        .apple_r_o(),
+        .apple_g_o(),
+        .apple_b_o(),
+        .apple_active_o(),
+        .ssp_r_i(8'd0),
+        .ssp_g_i(8'd0),
+        .ssp_b_i(8'd0),
+        .ssp_active_i(1'b0)
+    );
+
+    // Framebuffer source mux — apple or SHR, latched at the frame boundary.
+    // Must go through the video_control_if override: when the MCU takeover
+    // (boot console / menu) forces text mode while the machine is in SHR
+    // (GS/OS flips SHRG during boot), the console renders into the APPLE
+    // plane — latching raw SHRG here kept displaying the stale VGC plane
+    // as garbage.
+    reg use_vgc_r;
+    reg use_videx_r;
+    always @(posedge clk_logic_w) begin
+        if (vsync_w) begin
+            use_vgc_r   <= video_control_if.shrg_mode(a2mem_if.SHRG_MODE);
+            // Videx plane (640x216) whenever the card is live in 80-col mode,
+            // except while the MCU console/menu owns the screen (it renders
+            // into the APPLE plane). Same vsync edge videx_gen latches its
+            // own mode on, so plane and content switch together.
+            use_videx_r <= videx_mode_w && !video_control_if.enable;
+        end
+    end
+
+    wire fb_we_mux_w          = use_videx_r ? videx_fb_we_w    : use_vgc_r ? vgc_fb_we_w    : fb_we_w;
+    wire [17:0] fb_data_mux_w = use_videx_r ? videx_fb_data_w  : use_vgc_r ? vgc_fb_data_w  : fb_data_w;
+    wire fb_vsync_mux_w       = use_videx_r ? videx_fb_vsync_w : use_vgc_r ? vgc_fb_vsync_w : fb_vsync_w;
+
+    wire [10:0] fb_width_w  = (use_videx_r || use_vgc_r) ? 11'd640 : 11'd560;
+    wire [9:0]  fb_height_w = use_videx_r ? 10'd216 : use_vgc_r ? 10'd200 : 10'd192;
+
+    // VDP raster counter for SuperSprite — synced to scan_timer; the f18a
+    // `_fb` VHDL variants (selected by this config's file list) take this
+    // external raster instead of free-running. HMAX matches f18a_vga_cont_fb.
+    localparam VDP_HMAX = 10'd856;
+
+    reg [9:0] vdp_cx;
+    reg [1:0] vdp_div;
+
+    always @(posedge clk_logic_w) begin
+        if (hsync_w) begin
+            vdp_cx <= 10'd0;
+            vdp_div <= 2'd0;
+        end else begin
+            vdp_div <= vdp_div + 2'd1;
+            if (vdp_div == 2'd3 && vdp_cx < VDP_HMAX) begin
+                vdp_cx <= vdp_cx + 10'd1;
+            end
+        end
+    end
+
+    // SDRAM framebuffer: write accumulate (clk_logic) + line-fetch readout
+    // at HDMI rate (clk_pixel)
+    wire [7:0] fb_r_w, fb_g_w, fb_b_w;
+    wire [7:0] fb_dbg_fifo_overflow_w;
+    wire [7:0] fb_dbg_late_line_w;
+    wire [7:0] fb_dbg_line_not_ready_w;
+    wire [7:0] fb_dbg_line_lag_max_w;
+
+    // Blank the display until there is meaningful content. The first frame
+    // is rendered immediately from power-up SDRAM noise, so gating on the
+    // first frame alone still flashed garbage; hold dark until the MCU
+    // takeover asserts (console cleared and shown) or the Apple II has been
+    // released from reset — whichever comes first — and a frame has been
+    // written since.
+    reg fb_display_live_r;
+    always @(posedge clk_logic_w) begin
+        if (!device_reset_n_w)
+            fb_display_live_r <= 1'b0;
+        else if (video_control_if.enable || !a2bus_control_if.reset_hold)
+            fb_display_live_r <= 1'b1;
+    end
+    // Two vsyncs after going live = one COMPLETE frame painted in between.
+    // Gating on the first vsync alone still flashed raw SDRAM noise: a
+    // vsync is a frame boundary, not proof the writer has painted anything.
+    reg [1:0] fb_seen_frame_cnt_r;
+    always @(posedge clk_logic_w) begin
+        if (!device_reset_n_w) fb_seen_frame_cnt_r <= 2'd0;
+        else if (fb_display_live_r && fb_vsync_mux_w && fb_seen_frame_cnt_r != 2'd2)
+            fb_seen_frame_cnt_r <= fb_seen_frame_cnt_r + 2'd1;
+    end
+    wire fb_seen_frame_r = (fb_seen_frame_cnt_r == 2'd2);
+    reg fb_seen_frame_p1_r, fb_seen_frame_pix_r;
+    always @(posedge clk_pixel_w) begin
+        fb_seen_frame_p1_r  <= fb_seen_frame_r;
+        fb_seen_frame_pix_r <= fb_seen_frame_p1_r;
+    end
+
+    sdram_framebuffer #(
+        .TEST_PATTERN(0),
+        .THRESHOLD_DIAG(0)
+    ) sdram_framebuffer (
+        .clk(clk_logic_w),
+        .clk_pixel(clk_pixel_w),
+        .rst_n(device_reset_n_w),
+
+        .fb_vsync(fb_vsync_mux_w),
+        .fb_we(fb_we_mux_w),
+        .fb_data(fb_data_mux_w),
+        .fb_width(fb_width_w),
+        .fb_height(fb_height_w),
+
+        .fb_write_port(mem_ports[FB_WRITE_PORT]),
+        .fb_read_port(mem_ports[FB_READ_PORT]),
+
+        .hdmi_cx({1'b0, hdmi_x}),
+        .hdmi_cy(hdmi_y),
+
+        .r_o(fb_r_w),
+        .g_o(fb_g_w),
+        .b_o(fb_b_w),
+
+        .border_color(border_rgb666_w),
+        .scanline_en(scanlines_w),
+        .sleep_i(sleep_w),
+
+        .dbg_fifo_overflow_o(fb_dbg_fifo_overflow_w),
+        .dbg_late_line_o(fb_dbg_late_line_w),
+        .dbg_line_not_ready_o(fb_dbg_line_not_ready_w),
+        .dbg_line_lag_max_o(fb_dbg_line_lag_max_w)
+    );
+
+`else
 
     generate if (!USE_PIXEL_STREAM) begin : gen_legacy_video
 
@@ -1006,19 +1611,9 @@ module top #(
         // --- VGC (Super Hi-Res) generator + direct display ---
         pixel_stream_if vgc_ps();
 
-        // BSRAM read-ready for vgc_gen: it captures one cycle after asserting
-        // vgc_rd_o, but the SHR aux sdpram32 has a 2-cycle read latency, so
-        // present a ready pulse 2 cycles after the read request.
-        reg vgc_rd_d1_r, vgc_rd_d2_r;
-        always @(posedge clk_logic_w) begin
-            if (!system_reset_n_w) begin
-                vgc_rd_d1_r <= 1'b0;
-                vgc_rd_d2_r <= 1'b0;
-            end else begin
-                vgc_rd_d1_r <= vgc_rd_w;
-                vgc_rd_d2_r <= vgc_rd_d1_r;
-            end
-        end
+        // Read-ready for vgc_gen comes from apple_memory_sdram: a fixed
+        // 2-cycle sdpram32 latency in BSRAM mode, or the real SDRAM port
+        // ready when VGC_IN_SDRAM (dual-rate config).
 
         vgc_gen vgc_gen (
             .clk_i(clk_logic_w),
@@ -1033,7 +1628,7 @@ module top #(
             .vgc_address_o(vgc_address_w),
             .vgc_rd_o(vgc_rd_w),
             .vgc_data_i(vgc_data_w),
-            .vgc_ready_i(vgc_rd_d2_r),
+            .vgc_ready_i(vgc_ready_w),
             .dbg_missed_hsync_o()
         );
 
@@ -1057,10 +1652,13 @@ module top #(
             .video_b_o(dd_vgc_b_w)
         );
 
-        // Select Apple II vs Super Hi-Res, latched once per frame.
+        // Select Apple II vs Super Hi-Res, latched once per frame. Goes
+        // through the video_control_if override so the MCU takeover shows
+        // the Apple plane (where the console/menu renders) even when the
+        // machine itself is in SHR mode.
         reg use_vgc_r;
         always @(posedge clk_logic_w) begin
-            if (apple_ps.vsync) use_vgc_r <= a2mem_if.SHRG_MODE;
+            if (apple_ps.vsync) use_vgc_r <= video_control_if.shrg_mode(a2mem_if.SHRG_MODE);
         end
 
         assign ps_r_w      = use_vgc_r ? dd_vgc_r_w : dd_apple_r_w;
@@ -1103,8 +1701,14 @@ module top #(
 
     end endgenerate
 
+    assign videx_d_w = 8'd0;   // Videx is framebuffer-only
+    assign videx_rd  = 1'b0;
+
+`endif  // !VIDEO_FRAMEBUFFER
+
     wire [15:0] sg_audio_l;
     wire [15:0] sg_audio_r;
+    wire [7:0] glu_drops_w;     // GLU write-queue drops (diagnostics)
 `ifdef ENSONIQ
     wire [7:0] sg_d_w;
     wire sg_rd_w;
@@ -1363,9 +1967,11 @@ wire [7:0] doc_128k_status_w;
 ),
     
         .glu_mem_if(mem_ports[GLU_MEM_PORT]),
-        .doc_mem_if(mem_ports[DOC_MEM_PORT])
+        .doc_mem_if(mem_ports[DOC_MEM_PORT]),
+        .glu_wq_drops_o(glu_drops_w)
     );
 `else
+    assign glu_drops_w = 8'd0;
     assign sg_audio_l = 16'b0;
     assign sg_audio_r = 16'b0;
     wire [7:0] doc_osc_en_w = 8'h00; // Default value when ENSONIQ is disabled
@@ -1386,11 +1992,7 @@ wire [7:0] doc_128k_status_w;
     wire [9:0] ssp_audio_w;
     wire vdp_unlocked_w;
     wire [3:0] vdp_gmode_w;
-    wire scanlines_w;
-
-    wire [7:0] rgb_r_w;
-    wire [7:0] rgb_g_w;
-    wire [7:0] rgb_b_w;
+    // (rgb_*_w and scanlines_w are declared above the video pipeline)
 
     // The disabled SuperSprite's F18A can otherwise survive synthesis
     // through its scanline output, even with ENABLE=0.  In the IIe-only
@@ -1409,8 +2011,14 @@ wire [7:0] doc_128k_status_w;
         .rd_en_o(ssp_rd),
         .irq_n_o(vdp_irq_n),
 
+`ifdef VIDEO_FRAMEBUFFER
+        // clk_logic domain, raster from scan_timer (f18a _fb variants)
+        .screen_x_i(vdp_cx),
+        .screen_y_i({1'b0, scanline_w}),
+`else
         .screen_x_i(hdmi_x),
         .screen_y_i(hdmi_y),
+`endif
         .apple_vga_r_i(ssp_apple_r_w),
         .apple_vga_g_i(ssp_apple_g_w),
         .apple_vga_b_i(ssp_apple_b_w),
@@ -1428,12 +2036,25 @@ wire [7:0] doc_128k_status_w;
         .vdp_unlocked_o(vdp_unlocked_w),
         .vdp_gmode_o(vdp_gmode_w),
 
+`ifdef VIDEO_FRAMEBUFFER
+        .vdp_border_r_o(vdp_border_r_w),
+        .vdp_border_g_o(vdp_border_g_w),
+        .vdp_border_b_o(vdp_border_b_w),
+        .vdp_border_active_o(vdp_border_active_w),
+`endif
+
         .f18a_gpu_if(f18a_gpu_if),
 
         .ssp_audio_o(ssp_audio_w)
     );
 
     end else begin : gen_no_supersprite
+`ifdef VIDEO_FRAMEBUFFER
+        assign vdp_border_r_w = 4'd0;
+        assign vdp_border_g_w = 4'd0;
+        assign vdp_border_b_w = 4'd0;
+        assign vdp_border_active_w = 1'b0;
+`endif
         assign ssp_d_w = 8'h00;
         assign ssp_rd = 1'b0;
         assign vdp_irq_n = 1'b1;
@@ -1631,33 +2252,46 @@ wire [7:0] doc_128k_status_w;
     wire u2_rd;
     wire u2_irq_n;
 
-    Uthernet2 #(
-        .ENABLE(UTHERNET2_ENABLE),
-        .ID(UTHERNET2_ID)
-    ) uthernet2 (
-        .a2bus_if(a2bus_if),
-        .slot_if(slot_if),
+    // M4: do not elaborate the host-accessible W5100 backing RAM
+    // when this build explicitly disables the card.
+    generate if (UTHERNET2_ENABLE) begin : gen_uthernet2
+        Uthernet2 #(
+            .ENABLE(UTHERNET2_ENABLE),
+            .ID(UTHERNET2_ID)
+        ) uthernet2 (
+            .a2bus_if(a2bus_if),
+            .slot_if(slot_if),
 
-        .data_o(u2_d_w),
-        .rd_en_o(u2_rd),
-        .irq_n_o(u2_irq_n),
+            .data_o(u2_d_w),
+            .rd_en_o(u2_rd),
+            .irq_n_o(u2_irq_n),
 
-        .w5100_host_wr(u2_host_wr_w),
-        .w5100_host_addr(u2_host_addr_w),
-        .w5100_host_wdata(u2_host_wdata_w),
-        .w5100_host_rdata(u2_host_rdata_w),
-        .cmd_pending_o(u2_cmd_pending_w),
-        .cmd_pending_clr(u2_cmd_clr_w),
-        .dbg_portb_wr_count(u2_dbg_wr_count_w),
-        .dbg_portb_last_addr(u2_dbg_last_addr_w),
-        .dbg_portb_last_wdata(u2_dbg_last_wdata_w)
-    );
+            .w5100_host_wr(u2_host_wr_w),
+            .w5100_host_addr(u2_host_addr_w),
+            .w5100_host_wdata(u2_host_wdata_w),
+            .w5100_host_rdata(u2_host_rdata_w),
+            .cmd_pending_o(u2_cmd_pending_w),
+            .cmd_pending_clr(u2_cmd_clr_w),
+            .dbg_portb_wr_count(u2_dbg_wr_count_w),
+            .dbg_portb_last_addr(u2_dbg_last_addr_w),
+            .dbg_portb_last_wdata(u2_dbg_last_wdata_w)
+        );
+    end else begin : gen_no_uthernet2
+        assign u2_d_w = 8'h00;
+        assign u2_rd = 1'b0;
+        assign u2_irq_n = 1'b1;
+        assign u2_host_rdata_w = 8'h00;
+        assign u2_cmd_pending_w = 4'b0;
+        assign u2_dbg_wr_count_w = 16'b0;
+        assign u2_dbg_last_addr_w = 16'b0;
+        assign u2_dbg_last_wdata_w = 8'b0;
+    end endgenerate
 
     // Data output
 
     wire mb_bus_rd_w = mb_rd && audio_mb_enabled_w;
     assign data_out_en_w = media_apple_rd_w || ssp_rd || mb_bus_rd_w ||
-        sg_rd_w || ssc_rd || u2_rd || diskii_rd || hdd_rd || cardrom_rd;
+        sg_rd_w || ssc_rd || u2_rd || diskii_rd || hdd_rd || videx_rd;
 
     assign data_out_w = media_apple_rd_w ? media_apple_data_w :
         ssc_rd ? ssc_d_w :
@@ -1667,7 +2301,7 @@ wire [7:0] doc_128k_status_w;
         u2_rd ? u2_d_w :
         diskii_rd ? diskii_d_w :
         hdd_rd ? hdd_d_w :
-        cardrom_rd ? cardrom_d_w :
+        videx_rd ? videx_d_w :
         a2bus_if.data;
 
     // Interrupts
@@ -1741,33 +2375,6 @@ wire [7:0] doc_128k_status_w;
     end
     endfunction
 
-    // In Shared, combine the native DOC and real AY PSG at unity before
-    // HDMI's native +3dB calibration. Enhanced remains exactly M641.
-    wire signed [16:0] shared_pcm_l_w =
-        $signed({sg_audio_l[15],sg_audio_l}) +
-        $signed({mb_fx_pcm_l[15],mb_fx_pcm_l});
-    wire signed [16:0] shared_pcm_r_w =
-        $signed({sg_audio_r[15],sg_audio_r}) +
-        $signed({mb_fx_pcm_r[15],mb_fx_pcm_r});
-    wire signed [15:0] shared_mix_l_w =
-        shared_pcm_l_w > 17'sd32767 ? 16'sh7FFF :
-        shared_pcm_l_w < -17'sd32768 ? 16'sh8000 : shared_pcm_l_w[15:0];
-    wire signed [15:0] shared_mix_r_w =
-        shared_pcm_r_w > 17'sd32767 ? 16'sh7FFF :
-        shared_pcm_r_w < -17'sd32768 ? 16'sh8000 : shared_pcm_r_w[15:0];
-
-    // Preserve the P4 DOC/native-AY FX selector and its calibrated
-    // downstream 8x HDMI gain (-2 dBFS ceiling). Mix speech upstream of
-    // audio_out at 1/8 amplitude in MB_DOC mode to compensate for that gain.
-    // This avoids applying an unintended second 8x boost to P5 speech.
-    wire signed [15:0] mb_music_base_l_w =
-        audio_enhanced_w ? (mb_fx_ay_l_w ? mb_fx_pcm_l : sg_audio_l) :
-        audio_original_w ? mb_original_ay_music_gain(mb_fx_pcm_l) :
-        audio_shared_w ? shared_mix_l_w : sg_audio_l;
-    wire signed [15:0] mb_music_base_r_w =
-        audio_enhanced_w ? (mb_fx_ay_r_w ? mb_fx_pcm_r : sg_audio_r) :
-        audio_original_w ? mb_original_ay_music_gain(mb_fx_pcm_r) :
-        audio_shared_w ? shared_mix_r_w : sg_audio_r;
     // Widen before gain to avoid 16-bit wraparound; compensate for the
     // downstream music HDMI 8x gain only in MB-DOC mode. A value of 3
     // targets the measured ~9.3dB shortfall in voice2.wav relative to
@@ -1780,12 +2387,70 @@ wire [7:0] doc_128k_status_w;
         (mb_speech_pre_mix_w > 32'sd32767) ? 16'sh7FFF :
         (mb_speech_pre_mix_w < -32'sd32768) ? 16'sh8000 :
         mb_speech_pre_mix_w[15:0];
+    // M4-P2D2: pipeline the feed-forward mixer, not the AY DC feedback.
+    // Capture all parallel sources and route predicates on the same edge.
+    reg signed [15:0] p2d2_fx_l_r, p2d2_fx_r_r;
+    reg [15:0] p2d2_doc_l_r, p2d2_doc_r_r;
+    reg signed [15:0] p2d2_speech_s1_r;
+    reg p2d2_enhanced_r, p2d2_original_r, p2d2_shared_r;
+    reg p2d2_fx_sel_l_r, p2d2_fx_sel_r_r;
+    reg signed [15:0] p2d2_music_l_r, p2d2_music_r_r, p2d2_speech_s2_r;
+
+    // In Shared, combine the native DOC and real AY PSG at unity before
+    // HDMI's native +3dB calibration. Enhanced remains exactly M641.
+    wire signed [16:0] shared_pcm_l_w =
+        $signed({p2d2_doc_l_r[15],p2d2_doc_l_r}) +
+        $signed({p2d2_fx_l_r[15],p2d2_fx_l_r});
+    wire signed [16:0] shared_pcm_r_w =
+        $signed({p2d2_doc_r_r[15],p2d2_doc_r_r}) +
+        $signed({p2d2_fx_r_r[15],p2d2_fx_r_r});
+    wire signed [15:0] shared_mix_l_w =
+        shared_pcm_l_w > 17'sd32767 ? 16'sh7FFF :
+        shared_pcm_l_w < -17'sd32768 ? 16'sh8000 : shared_pcm_l_w[15:0];
+    wire signed [15:0] shared_mix_r_w =
+        shared_pcm_r_w > 17'sd32767 ? 16'sh7FFF :
+        shared_pcm_r_w < -17'sd32768 ? 16'sh8000 : shared_pcm_r_w[15:0];
+
+    // Preserve the P4 DOC/native-AY FX selector and its calibrated
+    // downstream 8x HDMI gain (-2 dBFS ceiling). Mix speech upstream of
+    // audio_out at 1/8 amplitude in MB_DOC mode to compensate for that gain.
+    // This avoids applying an unintended second 8x boost to P5 speech.
+    wire signed [15:0] mb_music_base_l_w =
+        p2d2_enhanced_r ? (p2d2_fx_sel_l_r ? p2d2_fx_l_r : p2d2_doc_l_r) :
+        p2d2_original_r ? mb_original_ay_music_gain(p2d2_fx_l_r) :
+        p2d2_shared_r ? shared_mix_l_w : p2d2_doc_l_r;
+    wire signed [15:0] mb_music_base_r_w =
+        p2d2_enhanced_r ? (p2d2_fx_sel_r_r ? p2d2_fx_r_r : p2d2_doc_r_r) :
+        p2d2_original_r ? mb_original_ay_music_gain(p2d2_fx_r_r) :
+        p2d2_shared_r ? shared_mix_r_w : p2d2_doc_r_r;
+    always @(posedge clk_logic_w) begin
+        if (!device_reset_n_w) begin
+            p2d2_fx_l_r <= 0; p2d2_fx_r_r <= 0;
+            p2d2_doc_l_r <= 0; p2d2_doc_r_r <= 0;
+            p2d2_speech_s1_r <= 0;
+            p2d2_enhanced_r <= 0; p2d2_original_r <= 0; p2d2_shared_r <= 0;
+            p2d2_fx_sel_l_r <= 0; p2d2_fx_sel_r_r <= 0;
+            p2d2_music_l_r <= 0; p2d2_music_r_r <= 0; p2d2_speech_s2_r <= 0;
+        end else begin
+            p2d2_fx_l_r <= mb_fx_pcm_l; p2d2_fx_r_r <= mb_fx_pcm_r;
+            p2d2_doc_l_r <= sg_audio_l; p2d2_doc_r_r <= sg_audio_r;
+            p2d2_speech_s1_r <= mb_speech_mix_w;
+            p2d2_enhanced_r <= audio_enhanced_w;
+            p2d2_original_r <= audio_original_w;
+            p2d2_shared_r <= audio_shared_w;
+            p2d2_fx_sel_l_r <= mb_fx_ay_l_w; p2d2_fx_sel_r_r <= mb_fx_ay_r_w;
+            p2d2_music_l_r <= mb_music_base_l_w;
+            p2d2_music_r_r <= mb_music_base_r_w;
+            p2d2_speech_s2_r <= p2d2_speech_s1_r;
+        end
+    end
+
     wire signed [16:0] mb_speech_sum_l_w =
-        $signed({mb_music_base_l_w[15], mb_music_base_l_w}) +
-        $signed({mb_speech_mix_w[15], mb_speech_mix_w});
+        $signed({p2d2_music_l_r[15], p2d2_music_l_r}) +
+        $signed({p2d2_speech_s2_r[15], p2d2_speech_s2_r});
     wire signed [16:0] mb_speech_sum_r_w =
-        $signed({mb_music_base_r_w[15], mb_music_base_r_w}) +
-        $signed({mb_speech_mix_w[15], mb_speech_mix_w});
+        $signed({p2d2_music_r_r[15], p2d2_music_r_r}) +
+        $signed({p2d2_speech_s2_r[15], p2d2_speech_s2_r});
     assign core_audio_l_w =
         (mb_speech_sum_l_w > 17'sd32767) ? 16'sh7FFF :
         (mb_speech_sum_l_w < -17'sd32768) ? 16'sh8000 :
@@ -1802,8 +2467,42 @@ wire [7:0] doc_128k_status_w;
 
 
 
-    // CDC FIFO to shift audio to the pixel clock domain from the logic clock domain
+    // CDC to shift audio to the pixel clock domain from the logic clock domain
 
+`ifdef DUAL_RATE_SDRAM
+    // Audio CDC: 54 MHz (CLKDIV2) -> 108 MHz (PLL CLKOUT) -> 27 MHz (PLL CLKOUTD)
+    //
+    // Stage 1: 54->108 MHz is safe because CLKDIV2 guarantees every 54 MHz edge
+    //          IS a 108 MHz edge. The 108 MHz register captures stable data.
+    // Stage 2: 108->27 MHz is safe because both come from the same PLL
+    //          (CLKOUT and CLKOUTD), with PLL-guaranteed phase alignment.
+    //
+    // A direct 54->27 MHz cdc_sampling would be broken here because CLKDIV2
+    // output (54 MHz) and PLL CLKOUTD (27 MHz) don't have a PLL-guaranteed
+    // phase relationship — their alignment depends on the asynchronous
+    // CLKDIV2 RESETN timing. (See the identical structure in the GS board.)
+
+    // Register the 4-input adder result to break the timing path
+    reg signed [15:0] core_audio_l_r, core_audio_r_r;
+    always @(posedge clk_logic_w) begin
+        core_audio_l_r <= core_audio_l_w;
+        core_audio_r_r <= core_audio_r_w;
+    end
+
+    // Stage 1: 54 MHz -> 108 MHz (CLKDIV2 alignment guarantee)
+    reg signed [15:0] audio_l_sdram_r, audio_r_sdram_r;
+    always @(posedge clk_sdram_w) begin
+        audio_l_sdram_r <= core_audio_l_r;
+        audio_r_sdram_r <= core_audio_r_r;
+    end
+
+    // Stage 2: 108 MHz -> 27 MHz (PLL CLKOUT/CLKOUTD phase guarantee)
+    reg [15:0] cdc_audio_l, cdc_audio_r;
+    always @(posedge clk_pixel_w) begin
+        cdc_audio_l <= audio_l_sdram_r;
+        cdc_audio_r <= audio_r_sdram_r;
+    end
+`else
     wire [15:0] cdc_audio_l;
     wire [15:0] cdc_audio_r;
 
@@ -1826,6 +2525,7 @@ wire [7:0] doc_128k_status_w;
         .data_in(core_audio_r_w),
         .data_out(cdc_audio_r)
     );
+`endif
 
     localparam [31:0] aflt_rate = 7_056_000;
     localparam [39:0] acx  = 4258969;
@@ -2007,10 +2707,21 @@ wire [15:0] audio_sample_word[1:0];
     end
     endfunction
 
-    wire hdmi_gain_clip_w = audio_enhanced_w ?
+    // M4-P2D: register the mode in the related 27 MHz pixel domain.
+    // Keep the 54 MHz ownership controls unchanged. This direct registered
+    // transfer is timed by STA for Standard; revisit for DualRate.
+    reg [1:0] hdmi_mode_pixel_r;
+    always @(posedge clk_pixel_w) begin
+        if (!device_reset_n_w) hdmi_mode_pixel_r <= 2'd0;
+        else hdmi_mode_pixel_r <= mcu_audio_mode_w;
+    end
+    wire hdmi_enhanced_w = AUDIO_MODE_MB_DOC && (hdmi_mode_pixel_r == 2'd0);
+    wire hdmi_original_w = AUDIO_MODE_MB_DOC && (hdmi_mode_pixel_r == 2'd1);
+
+    wire hdmi_gain_clip_w = hdmi_enhanced_w ?
         (mb_doc_gain_would_limit($signed(audio_sample_word_raw[0])) ||
          mb_doc_gain_would_limit($signed(audio_sample_word_raw[1]))) :
-        audio_original_w ?
+        hdmi_original_w ?
         (mb_original_gain_would_limit($signed(audio_sample_word_raw[0])) ||
          mb_original_gain_would_limit($signed(audio_sample_word_raw[1]))) :
         (hdmi_gain_would_saturate($signed(audio_sample_word_raw[0])) ||
@@ -2030,8 +2741,9 @@ wire [15:0] audio_sample_word[1:0];
     logic [7:0] hdmi_clip_history_r;
 
     wire pcm_hdmi_mix_over_peak_w;
-    wire hdmi_clip_sample_event_w =
-        clk_audio_w && (hdmi_gain_clip_w || pcm_hdmi_mix_over_peak_w);
+    reg hdmi_gain_clip_stage_r, hdmi_final_clip_r;
+    reg hdmi_tick_stage_r, hdmi_tick_final_r;
+    wire hdmi_clip_sample_event_w = hdmi_tick_final_r && hdmi_final_clip_r;
 
     always_ff @(posedge clk_pixel_w) begin
         if (!device_reset_n_w) begin
@@ -2059,18 +2771,56 @@ wire [15:0] audio_sample_word[1:0];
     // Existing calibrated DOC/MB/SSI path. Remains bit-for-bit identical
     // when the new MOD stream is stopped (PCM zeros).
     wire signed [15:0] audio_core_gained_l_w, audio_core_gained_r_w;
-    assign audio_core_gained_l_w = audio_enhanced_w ?
+    assign audio_core_gained_l_w = hdmi_enhanced_w ?
         mb_doc_gain_minus_2db($signed(audio_sample_word_raw[0])) :
-        audio_original_w ?
+        hdmi_original_w ?
         mb_original_final_minus_2db($signed(audio_sample_word_raw[0])) :
         hdmi_gain_plus_3db($signed(audio_sample_word_raw[0]));
 
-    assign audio_core_gained_r_w = audio_enhanced_w ?
+    assign audio_core_gained_r_w = hdmi_enhanced_w ?
         mb_doc_gain_minus_2db($signed(audio_sample_word_raw[1])) :
-        audio_original_w ?
+        hdmi_original_w ?
         mb_original_final_minus_2db($signed(audio_sample_word_raw[1])) :
         hdmi_gain_plus_3db($signed(audio_sample_word_raw[1]));
 
+
+    // Capture the exact native/MOD stereo pair at the original sample strobe.
+    // The delayed output strobe is used only by HDMI and its diagnostics.
+    reg signed [15:0] hdmi_gain_l_r, hdmi_gain_r_r;
+    reg signed [15:0] hdmi_mod_l_r, hdmi_mod_r_r;
+    wire signed [15:0] hdmi_mix_l_w, hdmi_mix_r_w;
+    reg signed [15:0] hdmi_final_l_r, hdmi_final_r_r;
+    always @(posedge clk_pixel_w) begin
+        if (!device_reset_n_w) begin
+            hdmi_tick_stage_r <= 1'b0;
+            hdmi_tick_final_r <= 1'b0;
+            hdmi_gain_l_r <= 16'sd0;
+            hdmi_gain_r_r <= 16'sd0;
+            hdmi_mod_l_r <= 16'sd0;
+            hdmi_mod_r_r <= 16'sd0;
+            hdmi_gain_clip_stage_r <= 1'b0;
+            hdmi_final_l_r <= 16'sd0;
+            hdmi_final_r_r <= 16'sd0;
+            hdmi_final_clip_r <= 1'b0;
+        end else begin
+            hdmi_tick_stage_r <= clk_audio_w;
+            hdmi_tick_final_r <= hdmi_tick_stage_r;
+            if (clk_audio_w) begin
+                hdmi_gain_l_r <= audio_core_gained_l_w;
+                hdmi_gain_r_r <= audio_core_gained_r_w;
+                hdmi_mod_l_r <= $signed(pcm_audio_l_pixel_w);
+                hdmi_mod_r_r <= $signed(pcm_audio_r_pixel_w);
+                hdmi_gain_clip_stage_r <= hdmi_gain_clip_w;
+            end
+            if (hdmi_tick_stage_r) begin
+                hdmi_final_l_r <= hdmi_mix_l_w;
+                hdmi_final_r_r <= hdmi_mix_r_w;
+                hdmi_final_clip_r <= hdmi_gain_clip_stage_r || pcm_hdmi_mix_over_peak_w;
+            end
+        end
+    end
+    assign audio_sample_word[0] = hdmi_final_l_r;
+    assign audio_sample_word[1] = hdmi_final_r_r;
 
     // M3 experimental output balance: the BL616's post-HxCMOD limiter
     // already calibrates MOD PCM to -2 dBFS. Do not halve it again here.
@@ -2080,12 +2830,12 @@ wire [15:0] audio_sample_word[1:0];
     // guard, NOT a transparent lookahead compressor; overlapping loud
     // sources may require master bus gain management in a later stage.
     mcu_pcm_hdmi_mix #(.PEAK_CEILING(26028)) pcm_hdmi_mix (
-        .native_l_i(audio_core_gained_l_w),
-        .native_r_i(audio_core_gained_r_w),
-        .mod_l_i($signed(pcm_audio_l_pixel_w)),
-        .mod_r_i($signed(pcm_audio_r_pixel_w)),
-        .mix_l_o(audio_sample_word[0]),
-        .mix_r_o(audio_sample_word[1]),
+        .native_l_i(hdmi_gain_l_r),
+        .native_r_i(hdmi_gain_r_r),
+        .mod_l_i(hdmi_mod_l_r),
+        .mod_r_i(hdmi_mod_r_r),
+        .mix_l_o(hdmi_mix_l_w),
+        .mix_r_o(hdmi_mix_r_w),
         .over_peak_o(pcm_hdmi_mix_over_peak_w)
     );
 
@@ -2097,7 +2847,7 @@ wire [15:0] audio_sample_word[1:0];
         .clk_pixel_i(clk_pixel_w),
         .clk_logic_i(clk_logic_w),
         .reset_n_i(device_reset_n_w),
-        .sample_tick_i(clk_audio_w),
+        .sample_tick_i(hdmi_tick_final_r),
         .sample_l_i($signed(audio_sample_word[0])),
         .sample_r_i($signed(audio_sample_word[1])),
         .clip_history_i(hdmi_clip_history_r),
@@ -2131,6 +2881,24 @@ wire [15:0] audio_sample_word[1:0];
         // MCU/BL616 debug instrumentation: 5 scratch regs (0x07,0x0C-0x0F) the
         // firmware writes over SPI. hex[0]=stage, [1]=btn-lo, [2]=btn-hi,
         // [3]=event counter (heartbeat), [4]=status flags.
+`ifdef VIDEO_FRAMEBUFFER
+        // Framebuffer diagnostics: overlay shows the glitch counters live.
+        // hex[0]=fw stage, [1]=heartbeat, [2]=CAPTURED AUX/SHR WRITES
+        // (rolling; frozen while an SHR game draws = writes not reaching
+        // the bus capture), [3]=CAPTURED M2B0 WRITES (IIgs bank-E1 style),
+        // [4]=line not ready, [5]=max line lag, [6]=shadow write-queue
+        // drops, [7]=GLU write-queue drops.
+        .hex_values ({
+            mcu_scratch_w[7:0],
+            mcu_scratch_w[31:24],
+            aux_wr_cnt_w,
+            m2b0_wr_cnt_w,
+            fb_dbg_line_not_ready_w,
+            fb_dbg_line_lag_max_w,
+            wq_drops_w,
+            glu_drops_w
+        }),
+`else
         .hex_values ({
            // mcu_scratch_w[7:0],     // scratch0: firmware stage code
            // mcu_scratch_w[15:8],    // scratch1: XInput button low byte
@@ -2148,6 +2916,7 @@ wire [15:0] audio_sample_word[1:0];
             // $13 unlocked with bank 1 populated.
             doc_128k_status_w
         }),
+`endif
 
         .hex_values_2 ({
             // DOC channel-address mask from the last 125 ms slice.
@@ -2171,9 +2940,8 @@ wire [15:0] audio_sample_word[1:0];
 
 
         // Bit row 0 = what the FPGA + firmware think the MCU is doing:
-        //   bit0 = mcu_ready (FPGA saw MCU read STATUS 0x06), bit1 = standalone
+        //   bit0 = mcu_ready (FPGA saw MCU register traffic), bit1 = standalone
         //   (watchdog fired, no MCU), bits2-7 = firmware status flags (scratch4).
-       // .debug_bits_0_i ({mcu_scratch_w[37:32], standalone_w, mcu_ready_w}),
         // Bit row 1 = live XInput button low byte (each press lights a block).
        // .debug_bits_1_i (mcu_scratch_w[15:8]),
 // Oscillator-output and mixer-entry activity from the last completed
@@ -2219,9 +2987,17 @@ wire [15:0] audio_sample_word[1:0];
         .screen_x_i     (hdmi_x),
         .screen_y_i     (hdmi_y),
 
+`ifdef VIDEO_FRAMEBUFFER
+        // Framebuffer readout (clk_pixel); the scanline effect is applied
+        // inside sdram_framebuffer via its scanline_en input.
+        .r_i            (fb_seen_frame_pix_r ? fb_r_w : 8'h00),
+        .g_i            (fb_seen_frame_pix_r ? fb_g_w : 8'h00),
+        .b_i            (fb_seen_frame_pix_r ? fb_b_w : 8'h00),
+`else
         .r_i            (scanline_en ? {1'b0, rgb_r_w[7:1]} : rgb_r_w),
         .g_i            (scanline_en ? {1'b0, rgb_g_w[7:1]} : rgb_g_w),
         .b_i            (scanline_en ? {1'b0, rgb_b_w[7:1]} : rgb_b_w),
+`endif
 
         .r_o            (debug_r_w),
         .g_o            (debug_g_w),
@@ -2246,7 +3022,7 @@ wire [15:0] audio_sample_word[1:0];
     ) hdmi (
         .clk_pixel_x5(clk_hdmi_w),
         .clk_pixel(clk_pixel_w),
-        .clk_audio(clk_audio_w),
+        .clk_audio(hdmi_tick_final_r),
         .rgb({
             debug_r_w,
             debug_g_w,

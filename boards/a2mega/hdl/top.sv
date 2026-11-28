@@ -37,6 +37,15 @@ module top #(
     parameter bit SUPERSERIAL_IRQ_ENABLE = 1,
     parameter bit [7:0] SUPERSERIAL_ID = 3,
 
+    parameter bit DISK_II_ENABLE = 1,
+    parameter bit [7:0] DISK_II_ID = 4,
+
+    parameter bit UTHERNET2_ENABLE = 1,
+    parameter bit [7:0] UTHERNET2_ID = 5,
+
+    parameter bit HDD_ENABLE = 1,
+    parameter bit [7:0] HDD_ID = 6,
+
     parameter bit ENSONIQ_ENABLE = 1,
     parameter bit ENSONIQ_MONO_MIX = 0, // If true, mono mix is used instead of stereo
 
@@ -123,7 +132,11 @@ module top #(
 
     // ESP32 Octal SPI interface
     input         esp_sclk,
-    inout  [7:0]  esp_data
+    inout  [7:0]  esp_data,
+
+    // USB-A host port (direct GPIO, BANK3)
+    inout usb_dp,
+    inout usb_dm
 
 );
 
@@ -133,7 +146,6 @@ module top #(
 
     // Clocks
 
-    wire clk_logic_ddr_w;           // 54 MHz from CLKDIV2 (kept for debug, no longer drives logic)
     wire clk_logic_pll_w;           // 54 MHz from board PLL CLKOUT2 (independent of DDR3)
     wire clk_logic_w = clk_logic_pll_w;  // logic runs on independent PLL
     wire clk_lock_w;
@@ -146,6 +158,16 @@ module top #(
         .clkout0(clk_pixel_w), //output clkout0 (27 MHz pixel clock)
         .clkout1(clk_hdmi_w), //output clkout1 (135 MHz TMDS)
         .clkout2(clk_logic_pll_w), //output clkout2 (54 MHz logic — independent of DDR3)
+        .clkin(clk) //input clkin
+    );
+
+    // Dedicated USB host clock — usb_hid_host needs crystal-accurate 60 MHz
+    wire clk_usb_w;
+    wire usb_pll_lock_w;
+
+    pll_usb pll_usb_inst (
+        .lock(usb_pll_lock_w),
+        .clkout0(clk_usb_w), //output clkout0 (60 MHz USB host clock)
         .clkin(clk) //input clkin
     );
 
@@ -213,6 +235,10 @@ module top #(
 
     a2bus_if a2bus_if ();
 
+    // Apple II bus control (reset hold/release) — driven by the ESP32 OSPI
+    // connector so the Apple II waits in RESET until disk mounts are ready.
+    a2bus_control_if a2bus_control_if();
+
     wire sleep_w;
 
     wire irq_n_w;
@@ -271,6 +297,8 @@ module top #(
         .a2_dma_in_n(a2_dma_in_n),
         .irq_n_i(1'b1),
 
+        .reset_hold_i(a2bus_control_if.reset_hold),
+
         .sleep_o(sleep_w)
     );
 
@@ -320,17 +348,30 @@ module top #(
     wire [31:0] vgc_data_w;
     wire vgc_ready_w;
 
-    // DDR3 memory port allocation (single unified array for all clients):
-    //   0 = FB write (highest priority — prevents FIFO overflow/pixel drops)
-    //   1 = FB read  (scanline prefetch, line-buffer absorbs latency)
-    //   2 = Shadow read  (apple_video_gen)
-    //   3 = Shadow write (CPU)
+    // DDR3 memory port allocation (single unified array for all clients).
+    //
+    // Priority = latency criticality, NOT bandwidth. apple_video_gen and
+    // vgc_gen are hard-real-time: they emit pixels at fixed cadence from a
+    // single-word prefetch, so a shadow read that misses its ~500ns slot
+    // makes the shifter reuse the previous word — seen on hardware as
+    // "sparkle" (occasional misses: moving misplaced pixels on static
+    // screens, worst during disk loads) or wholesale shape garble (chronic
+    // misses during SHR). No counter fires: the data is correct, merely
+    // late. Every other client tolerates latency by construction: the FB
+    // writer has a deep accumulator FIFO, the FB reader prefetches whole
+    // lines into a line buffer, CPU shadow writes sit in a 16-deep FIFO
+    // (drops instrumented at dbg reg 0x74).
+    //
+    //   0 = Shadow read  (apple_video_gen + vgc_gen — latency-critical)
+    //   1 = Shadow write (CPU; FIFO absorbs stalls, drops counted)
+    //   2 = FB write     (accumulator FIFO; overflow counted per frame)
+    //   3 = FB read      (line-buffered prefetch; line-not-ready counted)
     //   4 = DOC (Ensoniq wavetable read)
     //   5 = GLU (Ensoniq write)
-    localparam FB_WRITE_PORT   = 0;
-    localparam FB_READ_PORT    = 1;
-    localparam SHADOW_READ_PORT  = 2;
-    localparam SHADOW_WRITE_PORT = 3;
+    localparam SHADOW_READ_PORT  = 0;
+    localparam SHADOW_WRITE_PORT = 1;
+    localparam FB_WRITE_PORT   = 2;
+    localparam FB_READ_PORT    = 3;
     localparam DOC_MEM_PORT      = 4;
     localparam GLU_MEM_PORT      = 5;
     localparam NUM_DDR3_PORTS    = 6;
@@ -365,8 +406,11 @@ module top #(
         .vgc_data_o(vgc_data_w),
         .vgc_ready_o(vgc_ready_w),
 
-        .dbg_shadow_drop_o(shadow_dbg_drop_w)
+        .dbg_shadow_drop_o(shadow_dbg_drop_w),
+        .dbg_rd_state_o(shadow_dbg_rd_state_w)
     );
+
+    wire [7:0] shadow_dbg_rd_state_w;
 
     // Slots
 
@@ -382,10 +426,9 @@ module top #(
         .slot_if(slot_if)
     );
 
-    assign slotmaker_config_if.slot = 3'b0;
-    assign slotmaker_config_if.wr = 1'b0;
-    assign slotmaker_config_if.card_i = 8'b0;
-    assign slotmaker_config_if.reconfig = 1'b0;
+    // Slot configuration is driven by the ESP32 OSPI connector (regs
+    // 0x30-0x33); the slotmaker keeps its slots.hex defaults until the ESP32
+    // reconfigures it.
 
     // Video
 
@@ -436,6 +479,7 @@ module top #(
     wire [17:0] vgc_fb_data_w;
     wire        vgc_fb_vsync_w;
     wire [7:0]  vgc_dbg_missed_hsync_w;
+    wire [7:0]  vgc_dbg_starved_w;
     wire [7:0]  shadow_dbg_drop_w;
 
     wire [7:0] rgb_r_w;
@@ -510,7 +554,8 @@ module top #(
         .vgc_data_i(vgc_data_w),
         .vgc_ready_i(vgc_ready_w),
 
-        .dbg_missed_hsync_o(vgc_dbg_missed_hsync_w)
+        .dbg_missed_hsync_o(vgc_dbg_missed_hsync_w),
+        .dbg_starved_o(vgc_dbg_starved_w)
     );
 
     framebuffer_writer #(
@@ -563,6 +608,14 @@ module top #(
 
     // 64KB sound RAM backed by BSRAM (DDR3 ports kept but idle)
 
+    // With USE_BSRAM=1 the DOC never touches DDR3 — park its interface on a
+    // dummy instance and give port 4 to the ESP32 DDR3 debug read window.
+    mem_port_if #(.PORT_ADDR_WIDTH(21), .DATA_WIDTH(32), .DQM_WIDTH(4), .PORT_OUTPUT_WIDTH(32))
+        doc_idle_if();
+    assign doc_idle_if.available = 1'b0;
+    assign doc_idle_if.ready     = 1'b0;
+    assign doc_idle_if.q         = 32'd0;
+
     sound_glu #(
         .ENABLE(ENSONIQ_ENABLE),
         .MONO_MIX(ENSONIQ_MONO_MIX),
@@ -580,7 +633,39 @@ module top #(
         .debug_osc_halt_o(doc_osc_halt_w),
 
         .glu_mem_if(ddr3_mem_ports[GLU_MEM_PORT]),
-        .doc_mem_if(ddr3_mem_ports[DOC_MEM_PORT])
+        .doc_mem_if(doc_idle_if)
+    );
+
+    wire [20:0] dbg_mem_addr_w;
+    wire        dbg_mem_go_w;
+    wire        dbg_mem_busy_w;
+    wire [31:0] dbg_mem_data_w;
+
+    // Discrete member wiring — passing ddr3_mem_ports[4] into a module port
+    // hits Gowin's interface-array flattening bug (see ddr3_ports.sv note);
+    // the first build attempt with an interface port killed the OSPI link.
+    wire        dbg_mem_rd_w;
+    wire [20:0] dbg_mem_port_addr_w;
+
+    assign ddr3_mem_ports[DOC_MEM_PORT].rd      = dbg_mem_rd_w;
+    assign ddr3_mem_ports[DOC_MEM_PORT].wr      = 1'b0;
+    assign ddr3_mem_ports[DOC_MEM_PORT].addr    = dbg_mem_port_addr_w;
+    assign ddr3_mem_ports[DOC_MEM_PORT].data    = 32'd0;
+    assign ddr3_mem_ports[DOC_MEM_PORT].byte_en = 4'b1111;
+    assign ddr3_mem_ports[DOC_MEM_PORT].burst   = 1'b0;
+
+    ddr3_debug_reader u_ddr3_dbg_reader (
+        .clk    (clk_logic_w),
+        .rst_n  (device_reset_n_w),
+        .mem_rd_o        (dbg_mem_rd_w),
+        .mem_addr_o      (dbg_mem_port_addr_w),
+        .mem_available_i (ddr3_mem_ports[DOC_MEM_PORT].available),
+        .mem_ready_i     (ddr3_mem_ports[DOC_MEM_PORT].ready),
+        .mem_q_i         (ddr3_mem_ports[DOC_MEM_PORT].q),
+        .addr_i (dbg_mem_addr_w),
+        .req_i  (dbg_mem_go_w),
+        .busy_o (dbg_mem_busy_w),
+        .data_o (dbg_mem_data_w)
     );
 
     // SuperSprite
@@ -747,18 +832,117 @@ module top #(
         .uart_tx_o(ssc_uart_tx)
     );
 
+    // Disk II controller (track-on-demand). drive_ii drives the drive side of
+    // volumes[] (lba/blk_cnt/rd) on a seek; the ESP32 (esp32_ospi_connector
+    // volume regs 0x40-0x5F) streams the requested track into the SPACE 4
+    // BSRAM window via XFER, then pulses ack.
+
+    drive_volume_if volumes[2]();
+
+    mem_port_if #(
+        .PORT_ADDR_WIDTH(21),
+        .DATA_WIDTH(32),
+        .DQM_WIDTH(4),
+        .PORT_OUTPUT_WIDTH(32)
+    ) disk_ram_if ();
+
+    wire [7:0] diskii_d_w;
+    wire diskii_rd;
+
+    DiskII #(
+        .ENABLE(DISK_II_ENABLE),
+        .ID(DISK_II_ID)
+    ) diskii (
+        .a2bus_if(a2bus_if),
+        .slot_if(slot_if),
+        .data_o(diskii_d_w),
+        .rd_en_o(diskii_rd),
+        .ram_disk_if(disk_ram_if),
+        .volumes(volumes)
+    );
+
+    // ProDOS hard disk (block device). The card requests one 512-byte block
+    // at a time over hdd_volumes[] (compact regs 0x26-0x2D); the ESP32 serves
+    // it from a .hdv/.po image into the SPACE 5 BSRAM window via XFER, then
+    // pulses ack and the card streams it to the 6502 through its sector
+    // buffer.
+
+    drive_volume_if hdd_volumes[2]();
+
+    mem_port_if #(
+        .PORT_ADDR_WIDTH(21),
+        .DATA_WIDTH(32),
+        .DQM_WIDTH(4),
+        .PORT_OUTPUT_WIDTH(32)
+    ) hdd_ram_if ();
+
+    wire [7:0] hdd_d_w;
+    wire hdd_rd;
+
+    HDD #(
+        .ENABLE(HDD_ENABLE),
+        .ID(HDD_ID)
+    ) hdd (
+        .a2bus_if(a2bus_if),
+        .slot_if(slot_if),
+        .data_o(hdd_d_w),
+        .rd_en_o(hdd_rd),
+        .ram_hdd_if(hdd_ram_if),
+        .volumes(hdd_volumes)
+    );
+
+    // Uthernet II (W5100) Ethernet card. The ESP32 services the MACRAW
+    // bridge over XFER SPACE 3 + doorbell reg 0x7A, forwarding frames to
+    // WiFi.
+
+    wire [7:0] u2_d_w;
+    wire u2_rd;
+    wire u2_irq_n;
+
+    wire        u2_host_wr_w;
+    wire [15:0] u2_host_addr_w;
+    wire [7:0]  u2_host_wdata_w;
+    wire [7:0]  u2_host_rdata_w;
+    wire [3:0]  u2_cmd_pending_w;
+    wire [3:0]  u2_cmd_clr_w;
+
+    Uthernet2 #(
+        .ENABLE(UTHERNET2_ENABLE),
+        .ID(UTHERNET2_ID)
+    ) uthernet2 (
+        .a2bus_if(a2bus_if),
+        .slot_if(slot_if),
+
+        .data_o(u2_d_w),
+        .rd_en_o(u2_rd),
+        .irq_n_o(u2_irq_n),
+
+        .w5100_host_wr(u2_host_wr_w),
+        .w5100_host_addr(u2_host_addr_w),
+        .w5100_host_wdata(u2_host_wdata_w),
+        .w5100_host_rdata(u2_host_rdata_w),
+        .cmd_pending_o(u2_cmd_pending_w),
+        .cmd_pending_clr(u2_cmd_clr_w),
+        .dbg_portb_wr_count(),
+        .dbg_portb_last_addr(),
+        .dbg_portb_last_wdata()
+    );
+
     // Data output
 
-    assign data_out_en_w = ssp_rd || mb_rd || ssc_rd;
+    assign data_out_en_w = ssp_rd || mb_rd || ssc_rd || u2_rd || diskii_rd || hdd_rd;
 
     assign data_out_w = ssc_rd ? ssc_d_w :
         ssp_rd ? ssp_d_w :
         mb_rd ? mb_d_w :
+        u2_rd ? u2_d_w :
+        diskii_rd ? diskii_d_w :
+        hdd_rd ? hdd_d_w :
         a2bus_if.data;
 
     // Interrupts
 
-    assign irq_n_w = mb_irq_n && vdp_irq_n && ssc_irq_n;
+    assign irq_n_w = mb_irq_n && vdp_irq_n && ssc_irq_n && u2_irq_n;
 
     // Audio
 
@@ -870,19 +1054,134 @@ module top #(
     wire pll_lock_w;
     wire pll_stop_w;
 
-    pll_ddr3 pll_ddr3_inst (
+    // Raw PLLA wrapper (no PLL_INIT): on GW5AT-60 the DDR3 IP's pll_stop
+    // output MUST actually stop memory_clk during init — the controller's
+    // Sync_mod stops the clock, releases its dividers, and restarts it to
+    // phase-align the /4 domains (IPUG281 §4.4.4). The 60K PLLA has no
+    // enclk, so pll_stop acts through the PLL's mDRP port via
+    // pll_mDRP_intf. The previous generated wrapper routed the mDRP bus
+    // through PLL_INIT permanently (bypass mux), making pll_stop a silent
+    // no-op: cold-boot calibration then relied on luck-of-the-GSR phase
+    // alignment (the intermittent dead-DDR3 boots), and any rst_n re-init
+    // was guaranteed to fail. Raw PLLA + wired mDRP matches Sipeed's and
+    // nand2mario's shipped designs on this exact part.
+    wire       mdrp_inc_w;
+    wire [1:0] mdrp_op_w;
+    wire [7:0] mdrp_wdata_w;
+    wire [7:0] mdrp_rdata_w;
+
+    pll_ddr3_MOD pll_ddr3_inst (
         .clkin(clk_pixel_w),           // 27 MHz from board PLL
         .clkout0(),                    // unused
         .clkout2(memory_clk_w),        // 324 MHz to DDR3
         .lock(pll_lock_w),
-        .mdopc(2'b00),                 // external MDRP unused
-        .mdainc(1'b0),
-        .mdwdi(8'b0),
-        .mdrdo(),                      // unused output
-        .pll_init_bypass(1'b0),        // PLL_INIT always controls calibration
-        .mdclk(clk),                   // 50 MHz board crystal for MDRP clock
+        .mdclk(clk),                   // 50 MHz board crystal = IP clk domain
+        .mdopc(mdrp_op_w),
+        .mdainc(mdrp_inc_w),
+        .mdwdi(mdrp_wdata_w),
+        .mdrdo(mdrp_rdata_w),
         .reset(~clk_lock_w)
     );
+
+    // pll_stop -> mDRP glue (refdesign pattern): pulse wr on either edge
+    // of pll_stop, gated by PLL lock; pll_mDRP_intf turns each pulse into
+    // the register write that stops/starts CLKOUT2.
+    reg pll_lock_mdrp_sync0, pll_lock_mdrp_sync1;
+    reg pll_stop_d_r, mdrp_wr_r;
+    always @(posedge clk) begin
+        pll_lock_mdrp_sync0 <= pll_lock_w;
+        pll_lock_mdrp_sync1 <= pll_lock_mdrp_sync0;
+        pll_stop_d_r <= pll_stop_w;
+        mdrp_wr_r    <= pll_lock_mdrp_sync1 ? (pll_stop_w ^ pll_stop_d_r) : 1'b0;
+    end
+
+    pll_mDRP_intf u_pll_mDRP_intf (
+        .clk(clk),
+        .rst_n(clk_lock_w),
+        .pll_lock(pll_lock_mdrp_sync1),
+        .wr(mdrp_wr_r),
+        .mdrp_inc(mdrp_inc_w),
+        .mdrp_op(mdrp_op_w),
+        .mdrp_wdata(mdrp_wdata_w),
+        .mdrp_rdata(mdrp_rdata_w)
+    );
+
+    // -----------------------------------------------------------------
+    // DDR3 reset sequencer + calibration watchdog
+    // -----------------------------------------------------------------
+    // The IP's rst_n was tied high: calibration was a single unsequenced
+    // shot racing PLL lock at configuration time, and a miss was permanent
+    // (no retry in the IP) — the intermittent dead-DDR3 cold boots.
+    // Sequence: hold reset until the DDR3 PLL locks, settle 1 ms, release,
+    // then if init_calib_complete fails to assert within 100 ms, pulse
+    // reset 100 us and retry. Retry count in debug reg 0x23; observed on
+    // hardware with power stable ~30 s before config, so failures here are
+    // controller-reset races, not supply ramp.
+    // Clocked on the always-on 50 MHz crystal (same domain as the IP's
+    // clk port); regs power up to 0 so reset starts ASSERTED.
+    localparam DDR3_SETTLE_CYC   = 50_000;     // 1 ms @ 50 MHz
+    localparam DDR3_CALIB_CYC    = 5_000_000;  // 100 ms watchdog
+    localparam DDR3_RSTPULSE_CYC = 5_000;      // 100 us reset pulse
+
+    reg        ddr3_rst_n_r = 1'b0;
+    reg [1:0]  ddr3_seq_state_r = 2'd0;  // 0=wait-lock 1=settle 2=watch 3=pulse
+    reg [22:0] ddr3_seq_timer_r = '0;
+    reg [7:0]  ddr3_retry_cnt_r = '0;    // saturating; nonzero = watchdog fired
+
+    // Forced re-init test hook: ESP32 write to reg 0x25 toggles a line in
+    // clk_logic; edge here fires the watchdog path on demand so the retry
+    // mechanism is testable without waiting for a marginal boot.
+    wire ddr3_reinit_tgl_w;
+    reg  ddr3_reinit_sync0, ddr3_reinit_sync1, ddr3_reinit_sync2;
+    always @(posedge clk) begin
+        ddr3_reinit_sync0 <= ddr3_reinit_tgl_w;
+        ddr3_reinit_sync1 <= ddr3_reinit_sync0;
+        ddr3_reinit_sync2 <= ddr3_reinit_sync1;
+    end
+    wire ddr3_force_reinit_w = ddr3_reinit_sync1 ^ ddr3_reinit_sync2;
+
+    always @(posedge clk) begin
+        if (!pll_lock_w) begin
+            ddr3_rst_n_r     <= 1'b0;
+            ddr3_seq_state_r <= 2'd0;
+            ddr3_seq_timer_r <= '0;
+        end else begin
+            case (ddr3_seq_state_r)
+                2'd0: begin
+                    ddr3_seq_timer_r <= '0;
+                    ddr3_seq_state_r <= 2'd1;
+                end
+                2'd1: begin  // settle with reset held
+                    ddr3_seq_timer_r <= ddr3_seq_timer_r + 1'b1;
+                    if (ddr3_seq_timer_r >= DDR3_SETTLE_CYC) begin
+                        ddr3_rst_n_r     <= 1'b1;
+                        ddr3_seq_timer_r <= '0;
+                        ddr3_seq_state_r <= 2'd2;
+                    end
+                end
+                2'd2: begin  // released — watch calibration
+                    if (ddr3_force_reinit_w ||
+                        (!init_calib_complete_w && ddr3_seq_timer_r >= DDR3_CALIB_CYC)) begin
+                        ddr3_rst_n_r     <= 1'b0;
+                        ddr3_seq_timer_r <= '0;
+                        if (!(&ddr3_retry_cnt_r))
+                            ddr3_retry_cnt_r <= ddr3_retry_cnt_r + 1'b1;
+                        ddr3_seq_state_r <= 2'd3;
+                    end else if (init_calib_complete_w)
+                        ddr3_seq_timer_r <= '0;  // calibrated; park here
+                    else
+                        ddr3_seq_timer_r <= ddr3_seq_timer_r + 1'b1;
+                end
+                2'd3: begin  // reset pulse, then settle+release again
+                    ddr3_seq_timer_r <= ddr3_seq_timer_r + 1'b1;
+                    if (ddr3_seq_timer_r >= DDR3_RSTPULSE_CYC) begin
+                        ddr3_seq_timer_r <= '0;
+                        ddr3_seq_state_r <= 2'd1;
+                    end
+                end
+            endcase
+        end
+    end
 
     // -----------------------------------------------------------------
     // DDR3 Memory Controller (Gowin IP)
@@ -906,7 +1205,7 @@ module top #(
         .memory_clk      (memory_clk_w),
         .pll_stop        (pll_stop_w),
         .clk             (clk),                 // 50 MHz board crystal
-        .rst_n           (1'b1),
+        .rst_n           (ddr3_rst_n_r),        // sequencer above (was 1'b1)
         .cmd_ready       (ddr3_cmd_ready_w),
         .cmd             (ddr3_cmd_w),
         .cmd_en          (ddr3_cmd_en_w),
@@ -948,18 +1247,6 @@ module top #(
     assign ddr_addr[15] = 1'b0;
 
     // -----------------------------------------------------------------
-    // CLKDIV /2: 81 MHz → 40.5 MHz (kept for debug, not used for logic)
-    // Logic clock now comes from independent board PLL (clk_logic_pll_w).
-    // -----------------------------------------------------------------
-    CLKDIV clkdiv2_logic (
-        .HCLKIN(clk_x1_w),         // 81 MHz from DDR3 IP
-        .RESETN(~ddr_rst_w),       // Release when DDR3 PLL stable
-        .CALIB(1'b0),
-        .CLKOUT(clk_logic_ddr_w)   // 40.5 MHz (unused — kept for debug)
-    );
-    defparam clkdiv2_logic.DIV_MODE = "2";
-
-    // -----------------------------------------------------------------
     // DDR3 Multi-Port Arbiter
     // -----------------------------------------------------------------
 
@@ -969,11 +1256,12 @@ module top #(
         .NUM_PORTS(NUM_DDR3_PORTS),
         .DDR_ADDR_WIDTH(29),
         .PORT_BASE_ADDR('{
-            FB_WORD_BASE,       // [0] FB write (highest priority)
-            FB_WORD_BASE,       // [1] FB read
-            SHADOW_WORD_BASE,   // [2] Shadow read
-            SHADOW_WORD_BASE,   // [3] Shadow write
-            ENSONIQ_WORD_BASE,  // [4] DOC read
+            SHADOW_WORD_BASE,   // [0] Shadow read (highest priority)
+            SHADOW_WORD_BASE,   // [1] Shadow write
+            FB_WORD_BASE,       // [2] FB write
+            FB_WORD_BASE,       // [3] FB read
+            21'h000000,         // [4] DDR3 debug reader (absolute addresses;
+                                //     Ensoniq runs from BSRAM, port was idle)
             ENSONIQ_WORD_BASE   // [5] GLU write
         }),
         .WIDE_WR_PORT(FB_WRITE_PORT),
@@ -1004,10 +1292,12 @@ module top #(
 
         .dbg_req_pending  (ddr3_dbg_req_pending_w),
         .dbg_arb_state    (ddr3_dbg_arb_state_w),
+        .dbg_resp_overflow(ddr3_dbg_resp_ovfl_w),
         .dbg_test_result  (ddr3_dbg_test_result_w),
         .dbg_test_done    (ddr3_dbg_test_done_w)
     );
 
+    wire [NUM_DDR3_PORTS-1:0] ddr3_dbg_resp_ovfl_w;
     wire [NUM_DDR3_PORTS-1:0] ddr3_dbg_req_pending_w;
     wire [7:0] ddr3_dbg_arb_state_w;
     wire [31:0] ddr3_dbg_test_result_w;
@@ -1173,6 +1463,281 @@ module top #(
     assign led[1] = !init_calib_complete_w;
 
     // =========================================================================
+    // USB HID host — runs in clk_usb (60 MHz) domain
+    // =========================================================================
+    // Full-speed host for mouse/keyboard/gamepad on the USB-A port. The board
+    // wires D+/D- straight to BANK3 GPIO with external 15k pulldowns (host
+    // topology); no PHY, no series resistors on this board spin, so keep
+    // cables short during bring-up.
+
+    wire usb_reset_w;
+
+    reset_sync usb_reset_sync (
+        .clk (clk_usb_w),
+        .arst(~(device_reset_n_w & usb_pll_lock_w)),
+        .srst(usb_reset_w)
+    );
+
+    wire usb_dp_i_w, usb_dm_i_w;
+    wire usb_dp_o_w, usb_dm_o_w;
+    wire usb_oe_w;
+
+    IOBUF usb_dp_iobuf (
+        .O  (usb_dp_i_w),
+        .IO (usb_dp),
+        .I  (usb_dp_o_w),
+        .OEN(!usb_oe_w)
+    );
+
+    IOBUF usb_dm_iobuf (
+        .O  (usb_dm_i_w),
+        .IO (usb_dm),
+        .I  (usb_dm_o_w),
+        .OEN(!usb_oe_w)
+    );
+
+    wire [63:0] usb_dbg_hid_regs_w;   // enum descriptor scratch (VID/PID/class/...)
+    wire [7:0]  usb_dbg_state_w;      // {connerr,x_input,full_speed,connected,ukpstart,ukprdy,ukpstb,busy}
+
+    // UKP microcode ROM is external to the core in the m1nl fork
+    wire [9:0] usb_rom_addr_w;
+    wire [3:0] usb_rom_dout_w;
+    wire       usb_rom_en_w;
+
+    usb_hid_host_rom usb_rom (
+        .clk (clk_usb_w),
+        .addr(usb_rom_addr_w),
+        .dout(usb_rom_dout_w),
+        .en  (usb_rom_en_w)
+    );
+
+    wire [1:0] usb_typ_w;          // 0: none, 1: keyboard, 2: mouse, 3: gamepad
+    wire       usb_report_w;
+    wire       usb_connerr_w;
+    wire [7:0] usb_key_modifiers_w;
+    wire [7:0] usb_key_w [6];
+    wire [2:0] usb_mouse_btn_w;
+    wire signed [7:0] usb_mouse_dx_w, usb_mouse_dy_w;
+    wire usb_game_l_w, usb_game_r_w, usb_game_u_w, usb_game_d_w;
+    wire usb_game_a_w, usb_game_b_w, usb_game_x_w, usb_game_y_w;
+    wire usb_game_sel_w, usb_game_sta_w;
+    wire [3:0] usb_game_extra_w;
+
+    usb_hid_host #(
+        .FULL_SPEED(1)
+    ) usb_hid_host (
+        .clk          (clk_usb_w),
+        .reset        (usb_reset_w),
+        .cs           (1'b1),
+
+        .usb_dm_i     (usb_dm_i_w),
+        .usb_dp_i     (usb_dp_i_w),
+        .usb_dm_o     (usb_dm_o_w),
+        .usb_dp_o     (usb_dp_o_w),
+        .usb_oe       (usb_oe_w),
+
+        .typ          (usb_typ_w),
+        .full_report  (usb_report_w),
+        .connerr      (usb_connerr_w),
+        .busy         (),
+
+        .key_modifiers(usb_key_modifiers_w),
+        .key_0        (usb_key_w[0]),
+        .key_1        (usb_key_w[1]),
+        .key_2        (usb_key_w[2]),
+        .key_3        (usb_key_w[3]),
+        .key_4        (usb_key_w[4]),
+        .key_5        (usb_key_w[5]),
+
+        .mouse_btn    (usb_mouse_btn_w),
+        .mouse_dx     (usb_mouse_dx_w),
+        .mouse_dy     (usb_mouse_dy_w),
+
+        .game_l       (usb_game_l_w),
+        .game_r       (usb_game_r_w),
+        .game_u       (usb_game_u_w),
+        .game_d       (usb_game_d_w),
+        .game_a       (usb_game_a_w),
+        .game_b       (usb_game_b_w),
+        .game_x       (usb_game_x_w),
+        .game_y       (usb_game_y_w),
+        .game_sel     (usb_game_sel_w),
+        .game_sta     (usb_game_sta_w),
+        .game_extra   (usb_game_extra_w),
+
+        .dbg_hid_report(),
+        .dbg_hid_regs (usb_dbg_hid_regs_w),
+        .dbg_state    (usb_dbg_state_w),
+
+        .rom_addr     (usb_rom_addr_w),
+        .rom_dout     (usb_rom_dout_w),
+        .rom_en       (usb_rom_en_w)
+    );
+
+    // -----------------------------------------------------------------
+    // HID report capture (clk_usb) + CDC into clk_logic for the ESP32
+    // readback registers (0x16-0x1B). Values are latched per full report
+    // and quasi-static between reports, so double-flop synchronizers are
+    // sufficient.
+    // -----------------------------------------------------------------
+    reg [1:0] hid_typ_usb_r;
+    reg [3:0] hid_report_cnt_usb_r;
+    reg [7:0] pad_btns0_usb_r;   // {Y,X,B,A,R,L,D,U}
+    reg [7:0] pad_btns1_usb_r;   // {extra[3:0],2'b0,START,SELECT}
+    reg [7:0] key_mod_usb_r;
+    reg [7:0] key0_usb_r, key1_usb_r;
+
+    always @(posedge clk_usb_w) begin
+        if (usb_reset_w) begin
+            hid_typ_usb_r <= 2'd0;
+            hid_report_cnt_usb_r <= 4'd0;
+            pad_btns0_usb_r <= 8'd0;
+            pad_btns1_usb_r <= 8'd0;
+            key_mod_usb_r <= 8'd0;
+            key0_usb_r <= 8'd0;
+            key1_usb_r <= 8'd0;
+        end else if (usb_report_w) begin
+            hid_typ_usb_r <= usb_typ_w;
+            hid_report_cnt_usb_r <= hid_report_cnt_usb_r + 4'd1;
+            if (usb_typ_w == 2'd3) begin
+                pad_btns0_usb_r <= {usb_game_y_w, usb_game_x_w, usb_game_b_w, usb_game_a_w,
+                                    usb_game_r_w, usb_game_l_w, usb_game_d_w, usb_game_u_w};
+                pad_btns1_usb_r <= {usb_game_extra_w, 2'b00, usb_game_sta_w, usb_game_sel_w};
+            end
+            if (usb_typ_w == 2'd1) begin
+                key_mod_usb_r <= usb_key_modifiers_w;
+                key0_usb_r <= usb_key_w[0];
+                key1_usb_r <= usb_key_w[1];
+            end
+        end
+    end
+
+    reg [1:0] hid_typ_sync0, hid_typ_sync1;
+    reg       hid_connerr_sync0, hid_connerr_sync1;
+    reg [3:0] hid_cnt_sync0, hid_cnt_sync1;
+    reg [7:0] pad_btns0_sync0, pad_btns0_sync1;
+    reg [7:0] pad_btns1_sync0, pad_btns1_sync1;
+    reg [7:0] key_mod_sync0, key_mod_sync1;
+    reg [7:0] key0_sync0, key0_sync1;
+    reg [7:0] key1_sync0, key1_sync1;
+
+    always @(posedge clk_logic_w) begin
+        hid_typ_sync0 <= hid_typ_usb_r;         hid_typ_sync1 <= hid_typ_sync0;
+        hid_connerr_sync0 <= usb_connerr_w;     hid_connerr_sync1 <= hid_connerr_sync0;
+        hid_cnt_sync0 <= hid_report_cnt_usb_r;  hid_cnt_sync1 <= hid_cnt_sync0;
+        pad_btns0_sync0 <= pad_btns0_usb_r;     pad_btns0_sync1 <= pad_btns0_sync0;
+        pad_btns1_sync0 <= pad_btns1_usb_r;     pad_btns1_sync1 <= pad_btns1_sync0;
+        key_mod_sync0 <= key_mod_usb_r;         key_mod_sync1 <= key_mod_sync0;
+        key0_sync0 <= key0_usb_r;               key0_sync1 <= key0_sync0;
+        key1_sync0 <= key1_usb_r;               key1_sync1 <= key1_sync0;
+    end
+
+    // USB bring-up debug (regs 0x79/0x7B). oe_sticky proves the UKP ever
+    // drove the bus (bus reset/SOF); pc bits are an async sample of the
+    // microcode PC — fuzzy per read, but repeated reads distinguish
+    // "stuck in reset" / "waiting for connect" / "enumerating".
+    reg usb_oe_sticky_usb_r;
+    always @(posedge clk_usb_w) begin
+        if (usb_reset_w) usb_oe_sticky_usb_r <= 1'b0;
+        else if (usb_oe_w) usb_oe_sticky_usb_r <= 1'b1;
+    end
+
+    reg [4:0]  usb_dbg_line_sync0, usb_dbg_line_sync1;
+    reg [9:0]  usb_dbg_pc_sync0, usb_dbg_pc_sync1;
+    always @(posedge clk_logic_w) begin
+        usb_dbg_line_sync0 <= {usb_pll_lock_w, usb_reset_w, usb_oe_sticky_usb_r,
+                               usb_dm_i_w, usb_dp_i_w};
+        usb_dbg_line_sync1 <= usb_dbg_line_sync0;
+        usb_dbg_pc_sync0   <= usb_rom_addr_w;
+        usb_dbg_pc_sync1   <= usb_dbg_pc_sync0;
+    end
+
+    wire [7:0] dbg_usb_line_w = {usb_dbg_line_sync1, usb_dbg_pc_sync1[9:7]};
+    wire [7:0] dbg_usb_pc_w   = usb_dbg_pc_sync1[7:0];
+
+    // Enumeration descriptor scratch: {subclass,class,pid,vid}. Quasi-static
+    // once enumeration parses descriptors — 2FF sync per byte is fine.
+    reg [47:0] usb_dbg_desc_sync0, usb_dbg_desc_sync1;
+    always @(posedge clk_logic_w) begin
+        usb_dbg_desc_sync0 <= usb_dbg_hid_regs_w[47:0];
+        usb_dbg_desc_sync1 <= usb_dbg_desc_sync0;
+    end
+
+    // Transaction / received-data-packet counters (clk_usb domain; sampled
+    // async — values are fuzzy per read but "is it ticking" is reliable).
+    reg [7:0] usb_cnt_start_r, usb_cnt_rdy_r;
+    reg usb_dbg_start_d, usb_dbg_rdy_d;
+    always @(posedge clk_usb_w) begin
+        usb_dbg_start_d <= usb_dbg_state_w[3];  // ukpstart
+        usb_dbg_rdy_d   <= usb_dbg_state_w[2];  // ukprdy
+        if (usb_dbg_state_w[3] & ~usb_dbg_start_d) usb_cnt_start_r <= usb_cnt_start_r + 8'd1;
+        if (usb_dbg_state_w[2] & ~usb_dbg_rdy_d)   usb_cnt_rdy_r   <= usb_cnt_rdy_r + 8'd1;
+    end
+
+    reg [7:0] usb_dbg_flags_sync0, usb_dbg_flags_sync1;
+    reg [7:0] usb_cnt_start_sync0, usb_cnt_start_sync1;
+    reg [7:0] usb_cnt_rdy_sync0, usb_cnt_rdy_sync1;
+    always @(posedge clk_logic_w) begin
+        usb_dbg_flags_sync0 <= usb_dbg_state_w;   usb_dbg_flags_sync1 <= usb_dbg_flags_sync0;
+        usb_cnt_start_sync0 <= usb_cnt_start_r;   usb_cnt_start_sync1 <= usb_cnt_start_sync0;
+        usb_cnt_rdy_sync0   <= usb_cnt_rdy_r;     usb_cnt_rdy_sync1   <= usb_cnt_rdy_sync0;
+    end
+
+    // DDR3 sequencer telemetry (clk 50 MHz -> clk_logic; quasi-static)
+    reg [7:0] ddr3_retry_sync0, ddr3_retry_sync1;
+    reg [4:0] ddr3_seq_sync0, ddr3_seq_sync1;
+    always @(posedge clk_logic_w) begin
+        ddr3_retry_sync0 <= ddr3_retry_cnt_r;  ddr3_retry_sync1 <= ddr3_retry_sync0;
+        ddr3_seq_sync0   <= {ddr3_rst_n_r, pll_lock_w, init_calib_complete_w, ddr3_seq_state_r};
+        ddr3_seq_sync1   <= ddr3_seq_sync0;
+    end
+
+    // =========================================================================
+    // OSD text overlay — ESP32 menu/console text page (clk_pixel domain)
+    // =========================================================================
+    // Painted over the framebuffer output (opaque when enabled), upstream of
+    // the DebugOverlay. The text page BSRAM lives in the ESP32 OSPI connector
+    // (XFER SPACE 1); its port B is clocked here in clk_pixel.
+
+    wire [10:0] osd_vram_addr_w;
+    wire [7:0]  osd_vram_data_w;
+    wire [23:0] osd_rgb_w;
+
+    // ESP32-controlled video interface (declared here because the OSD enable
+    // is consumed in this section; driven by esp32_ospi_connector below)
+    video_control_if esp_video_control_if();
+
+    // OSD enable: quasi-static, CDC from clk_logic to clk_pixel
+    reg osd_en_sync0, osd_en_sync1;
+    always @(posedge clk_pixel_w) begin
+        osd_en_sync0 <= esp_video_control_if.enable;
+        osd_en_sync1 <= osd_en_sync0;
+    end
+
+    osd_text_overlay #(
+        .X_OFFSET(80),
+        .Y_OFFSET(48)
+    ) osd_overlay (
+        .clk_i      (clk_pixel_w),
+        .reset_n    (device_reset_n_w),
+        .enable_i   (osd_en_sync1),
+
+        .screen_x_i (hdmi_cx_w),
+        .screen_y_i (hdmi_cy_w),
+
+        .vram_addr_o(osd_vram_addr_w),
+        .vram_data_i(osd_vram_data_w),
+
+        .r_i        (fb_rgb_w[23:16]),
+        .g_i        (fb_rgb_w[15:8]),
+        .b_i        (fb_rgb_w[7:0]),
+
+        .r_o        (osd_rgb_w[23:16]),
+        .g_o        (osd_rgb_w[15:8]),
+        .b_o        (osd_rgb_w[7:0])
+    );
+
+    // =========================================================================
     // Debug Overlay — runs in clk_pixel (27 MHz) domain
     // =========================================================================
     // The 480p framebuffer's overlay interface (hdmi_cx, hdmi_cy, fb_rgb_o,
@@ -1250,9 +1815,9 @@ module top #(
         .screen_x_i     (hdmi_cx_w),
         .screen_y_i     (hdmi_cy_w),
 
-        .r_i            (fb_rgb_w[23:16]),
-        .g_i            (fb_rgb_w[15:8]),
-        .b_i            (fb_rgb_w[7:0]),
+        .r_i            (osd_rgb_w[23:16]),
+        .g_i            (osd_rgb_w[15:8]),
+        .b_i            (osd_rgb_w[7:0]),
 
         .r_o            (overlay_rgb_w[23:16]),
         .g_o            (overlay_rgb_w[15:8]),
@@ -1277,47 +1842,121 @@ module top #(
         .OEN(!esp_data_oe)      // Output enable (active low for IOBUF)
     );
 
-    // Synchronize SCLK to logic clock domain
-    wire esp_sclk_sync;
-    cdc_denoise cdc_esp_sclk (
-        .clk(clk_logic_w),
-        .i(esp_sclk),
-        .o(esp_sclk_sync),
-        .o_n(),
-        .o_posedge(),
-        .o_negedge()
-    );
+    // SCLK goes to the connector RAW: the protocol processor has its own
+    // 2FF synchronizer, and stacking cdc_denoise on top skewed the byte
+    // sample point 55-110 ns past the SCLK edge — beyond the master's
+    // data-change edge at 10+ MHz, which made the FPGA deaf to the link
+    // (live-debugged failure). Matched 2FF-vs-2FF paths sample mid-window.
 
-    // ESP32 control interfaces
-    slotmaker_config_if esp_slotmaker_config_if();
+    // ESP32 control interfaces. The F18A GPU interface is a placeholder (the
+    // SuperSprite has its own tied-off instance); esp_video_control_if.enable
+    // gates the OSD text overlay.
     f18a_gpu_if esp_f18a_gpu_if();
-    video_control_if esp_video_control_if();
-    drive_volume_if esp_volumes[2]();
+
+    // =========================================================================
+    // Video-pipeline debug readback (OSPI regs 0x70-0x77)
+    // =========================================================================
+    // $C029 (NEWVIDEO) write tap — counts every write the FPGA's bus decode
+    // sees and keeps the last data byte. Distinguishes "the SHR-clear write
+    // never reached us" from "captured but the display didn't follow" when
+    // the screen sticks in SHR after the TransWarp GS splash.
+    reg [7:0] dbg_c029_cnt_r  = 8'd0;
+    reg [7:0] dbg_c029_last_r = 8'd0;
+    always @(posedge clk_logic_w) begin
+        if (!a2bus_if.rw_n && a2bus_if.data_in_strobe && (a2bus_if.addr == 16'hC029)) begin
+            dbg_c029_cnt_r  <= dbg_c029_cnt_r + 8'd1;
+            dbg_c029_last_r <= a2bus_if.data;
+        end
+    end
+
+    // Live mode snapshot: captured soft switches + the actual framebuffer mux
+    wire [7:0] dbg_video_ss_w = {use_vgc_r, a2mem_if.SHRG_MODE,
+                                 a2mem_if.LINEARIZE_MODE, a2mem_if.STORE80,
+                                 a2mem_if.PAGE2, a2mem_if.MIXED_MODE,
+                                 a2mem_if.HIRES_MODE, a2mem_if.TEXT_MODE};
+
+    // Per-port CDC response-FIFO overflow stickies (clk_ddr → clk_logic 2FF;
+    // sticky, so multi-bit skew is harmless)
+    reg [7:0] dbg_resp_ovfl_sync0, dbg_resp_ovfl_sync1;
+    always @(posedge clk_logic_w) begin
+        dbg_resp_ovfl_sync0 <= {2'b00, ddr3_dbg_resp_ovfl_w};
+        dbg_resp_ovfl_sync1 <= dbg_resp_ovfl_sync0;
+    end
 
     // Octal SPI connector instance
     esp32_ospi_connector #(
         .USE_SYNC(1),
         .USE_CRC(0),
-        .IDLE_TO_CYC(5_400_000)  // ~100ms at 54MHz
+        .IDLE_TO_CYC(5_400_000),  // ~100ms at 54MHz
+        .CLOCK_SPEED_HZ(CLOCK_SPEED_HZ)
     ) esp32_ospi (
         .clk(clk_logic_w),
         .rst_n(device_reset_n_w),
-        .sclk(esp_sclk_sync),
+        .sclk(esp_sclk),
         .data_i(esp_data_i),
         .data_o(esp_data_o),
         .data_oe(esp_data_oe),
-        .slotmaker_config_if(esp_slotmaker_config_if),
+
+        .slotmaker_config_if(slotmaker_config_if),
         .f18a_gpu_if(esp_f18a_gpu_if),
         .video_control_if(esp_video_control_if),
-        .volumes(esp_volumes)
-    );
+        .volumes(volumes),
+        .hdd_volumes(hdd_volumes),
+        .a2bus_control_if(a2bus_control_if),
 
-    // Note: These interfaces are currently independent of the main system.
-    // Future integration:
-    // - esp_slotmaker_config_if can be muxed with slotmaker_config_if
-    // - esp_f18a_gpu_if can replace f18a_gpu_if when ESP32 controls VDP
-    // - esp_video_control_if can replace video_control_if for OSD
-    // - esp_volumes can be connected to disk drive infrastructure
+        .disk_ram_if(disk_ram_if),
+        .hdd_ram_if(hdd_ram_if),
+
+        .ddr3_ready_i(init_calib_complete_w),
+        .a2_reset_n_i(a2_reset_n),
+
+        .pad_typ_i(hid_typ_sync1),
+        .pad_connerr_i(hid_connerr_sync1),
+        .pad_report_cnt_i(hid_cnt_sync1),
+        .pad_btns0_i(pad_btns0_sync1),
+        .pad_btns1_i(pad_btns1_sync1),
+        .key_mod_i(key_mod_sync1),
+        .key0_i(key0_sync1),
+        .key1_i(key1_sync1),
+
+        .dbg_video_ss_i(dbg_video_ss_w),
+        .dbg_c029_cnt_i(dbg_c029_cnt_r),
+        .dbg_c029_last_i(dbg_c029_last_r),
+        .dbg_vgc_hsync_i(vgc_dbg_missed_hsync_w),
+        .dbg_shadow_drop_i(shadow_dbg_drop_w),
+        .dbg_fb_flags_i(fb_dbg_flags_w),
+        .dbg_resp_ovfl_i(dbg_resp_ovfl_sync1),
+        .dbg_shadow_rd_i(shadow_dbg_rd_state_w),
+        .dbg_vgc_starved_i(vgc_dbg_starved_w),
+        .dbg_usb_line_i(dbg_usb_line_w),
+        .dbg_usb_pc_i(dbg_usb_pc_w),
+        .dbg_usb_desc_i(usb_dbg_desc_sync1),
+        .dbg_usb_flags_i(usb_dbg_flags_sync1),
+        .dbg_usb_cnt_start_i(usb_cnt_start_sync1),
+        .dbg_usb_cnt_rdy_i(usb_cnt_rdy_sync1),
+        .dbg_ddr3_retry_i(ddr3_retry_sync1),
+        .dbg_ddr3_seq_i({3'b0, ddr3_seq_sync1}),
+        .ddr3_reinit_tgl_o(ddr3_reinit_tgl_w),
+
+        .dbg_mem_addr_o(dbg_mem_addr_w),
+        .dbg_mem_go_o(dbg_mem_go_w),
+        .dbg_mem_busy_i(dbg_mem_busy_w),
+        .dbg_mem_data_i(dbg_mem_data_w),
+
+        .w5100_host_wr(u2_host_wr_w),
+        .w5100_host_addr(u2_host_addr_w),
+        .w5100_host_wdata(u2_host_wdata_w),
+        .w5100_host_rdata(u2_host_rdata_w),
+        .w5100_cmd_pending(u2_cmd_pending_w),
+        .w5100_cmd_clr(u2_cmd_clr_w),
+
+        .scratch_o(),
+        .mcu_ready_o(),
+
+        .osd_clk_i(clk_pixel_w),
+        .osd_addr_i(osd_vram_addr_w),
+        .osd_data_o(osd_vram_data_w)
+    );
 
     /*
     // Data bus IOBUF instantiation
