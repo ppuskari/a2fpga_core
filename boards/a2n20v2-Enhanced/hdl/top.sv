@@ -97,7 +97,7 @@ module top #(
     parameter bit DISK_II_ENABLE = 0,
     parameter bit [7:0] DISK_II_ID = 4,
 
-    parameter bit UTHERNET2_ENABLE = 0,
+    parameter bit UTHERNET2_ENABLE = 1,
     parameter bit [7:0] UTHERNET2_ID = 5,
 
     parameter bit HDD_ENABLE = 0,
