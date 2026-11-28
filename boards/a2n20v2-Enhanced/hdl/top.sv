@@ -46,7 +46,7 @@ module top #(
     parameter int MEM_MHZ = CLOCK_SPEED_HZ / 1_000_000,
 
     parameter bit SCANLINES_ENABLE = 0,
-    parameter bit APPLE_SPEAKER_ENABLE = 0,
+    parameter bit APPLE_SPEAKER_ENABLE = 1,
 
     parameter bit SUPERSPRITE_ENABLE = 0,
     parameter bit [7:0] SUPERSPRITE_ID = 1,
@@ -2786,6 +2786,30 @@ wire [15:0] audio_sample_word[1:0];
 
     // Capture the exact native/MOD stereo pair at the original sample strobe.
     // The delayed output strobe is used only by HDMI and its diagnostics.
+    // P3A: sample the C030 speaker independently of audio personality gain.
+    // Two-flop single-bit CDC; one-pole DC removal at the HDMI sample rate.
+    // 4096 PCM step, nominal steady square-wave peak about -24 dBFS.
+    (* async_reg = "true" *) reg speaker_sync1_r, speaker_sync2_r;
+    reg signed [21:0] speaker_dc_q8_r;
+    wire signed [21:0] speaker_input_q8_w = speaker_sync2_r ? 22'sd1048576 : 22'sd0;
+    wire signed [21:0] speaker_hp_q8_w = speaker_input_q8_w - speaker_dc_q8_r;
+    reg signed [15:0] hdmi_speaker_r;
+    always @(posedge clk_pixel_w) begin
+        if (!device_reset_n_w) begin
+            speaker_sync1_r <= 1'b0;
+            speaker_sync2_r <= 1'b0;
+            speaker_dc_q8_r <= 22'sd0;
+            hdmi_speaker_r <= 16'sd0;
+        end else begin
+            speaker_sync1_r <= speaker_audio_w;
+            speaker_sync2_r <= speaker_sync1_r;
+            if (clk_audio_w) begin
+                speaker_dc_q8_r <= speaker_dc_q8_r + (speaker_hp_q8_w >>> 8);
+                hdmi_speaker_r <= 16'((speaker_hp_q8_w + (speaker_hp_q8_w < 0 ? 22'sd255 : 22'sd0)) >>> 8);
+            end
+        end
+    end
+
     reg signed [15:0] hdmi_gain_l_r, hdmi_gain_r_r;
     reg signed [15:0] hdmi_mod_l_r, hdmi_mod_r_r;
     wire signed [15:0] hdmi_mix_l_w, hdmi_mix_r_w;
@@ -2829,15 +2853,28 @@ wire [15:0] audio_sample_word[1:0];
     // the pre-existing HDMI clip-history diagnostic. This is a hard peak
     // guard, NOT a transparent lookahead compressor; overlapping loud
     // sources may require master bus gain management in a later stage.
-    mcu_pcm_hdmi_mix #(.PEAK_CEILING(26028)) pcm_hdmi_mix (
-        .native_l_i(hdmi_gain_l_r),
-        .native_r_i(hdmi_gain_r_r),
-        .mod_l_i(hdmi_mod_l_r),
-        .mod_r_i(hdmi_mod_r_r),
-        .mix_l_o(hdmi_mix_l_w),
-        .mix_r_o(hdmi_mix_r_w),
-        .over_peak_o(pcm_hdmi_mix_over_peak_w)
-    );
+    // P3A: three-source wide signed sum; preserve Beta 1 bypass when
+    // both auxiliary sources are silent. No intermediate 16-bit clipping.
+    wire p3_aux_present_w = (hdmi_mod_l_r != 0) ||
+        (hdmi_mod_r_r != 0) || (hdmi_speaker_r != 0);
+    wire signed [17:0] p3_sum_l_w =
+        $signed({{2{hdmi_gain_l_r[15]}},hdmi_gain_l_r}) +
+        $signed({{2{hdmi_mod_l_r[15]}},hdmi_mod_l_r}) +
+        $signed({{2{hdmi_speaker_r[15]}},hdmi_speaker_r});
+    wire signed [17:0] p3_sum_r_w =
+        $signed({{2{hdmi_gain_r_r[15]}},hdmi_gain_r_r}) +
+        $signed({{2{hdmi_mod_r_r[15]}},hdmi_mod_r_r}) +
+        $signed({{2{hdmi_speaker_r[15]}},hdmi_speaker_r});
+    function automatic signed [15:0] p3_limit_peak(input signed [17:0] sample);
+        if (sample > 18'sd26028) p3_limit_peak = 16'sd26028;
+        else if (sample < -18'sd26028) p3_limit_peak = -16'sd26028;
+        else p3_limit_peak = sample[15:0];
+    endfunction
+    assign hdmi_mix_l_w = p3_aux_present_w ? p3_limit_peak(p3_sum_l_w) : hdmi_gain_l_r;
+    assign hdmi_mix_r_w = p3_aux_present_w ? p3_limit_peak(p3_sum_r_w) : hdmi_gain_r_r;
+    assign pcm_hdmi_mix_over_peak_w = p3_aux_present_w &&
+        ((p3_sum_l_w > 18'sd26028) || (p3_sum_l_w < -18'sd26028) ||
+         (p3_sum_r_w > 18'sd26028) || (p3_sum_r_w < -18'sd26028));
 
 
     // One-second post-mix stereo sample-peak and clip snapshot, transferred
